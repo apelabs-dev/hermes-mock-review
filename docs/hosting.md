@@ -27,15 +27,22 @@ The board stays on `127.0.0.1` and Tailscale carries it to your other devices. O
 link.
 
 1. Check that Tailscale is running (`tailscale status`).
-2. Run `hermes mockreview setup --hosting tailnet`. It reads your address with `tailscale status --json` and saves it as
-   `public_base`. It also prints the `tailscale serve` command to run once. The plugin never starts Tailscale itself.
-3. Run that command. Compare the address that `tailscale serve status` prints with `public_base`. If they differ, set
-   `public_base` to the printed address, with no trailing slash.
+2. Run `hermes mockreview setup --hosting tailnet`. It reads your address with `tailscale status --json` and your
+   existing routes with `tailscale serve status --json`, then saves the board's address as `public_base`:
+   - a route that already sends an HTTPS port to the board's port is used as it is, and there is nothing to run;
+   - otherwise setup prints one `tailscale serve` command to run once. It uses the default HTTPS port (443) only when
+     nothing is served there, and otherwise the board's own port (`--https=8790`), so the routes of your other apps stay
+     as they are.
+
+   The plugin never starts or changes Tailscale itself. On macOS, when the `tailscale` command crashes ("bundleIdentifier
+   is unknown", a known issue with the symlink the app installs), setup runs the app's own binary,
+   `/Applications/Tailscale.app/Contents/MacOS/Tailscale`, and prints the command with that path.
+3. Run the printed command, if any. `tailscale serve status` then lists the address saved as `public_base`.
 4. Restart the gateway (or the `serve` process). The server only accepts requests whose Host header matches
    `public_base`, `local_base`, `lan_address` or a loopback name, and it reads those settings at start.
 
 If you run Tailscale under a different name or port, set `public_base` yourself, for example
-`hermes config set plugins.entries.mock-review.settings.public_base https://<machine>.<tailnet>.ts.net`.
+`hermes config set plugins.entries.mock-review.settings.public_base https://<machine>.<tailnet>.ts.net:8790`.
 
 ## here.now
 

@@ -185,6 +185,13 @@ def fake_create(monkeypatch, result=None, exc=None):
     return calls
 
 
+@pytest.fixture(autouse=True)
+def no_real_tailscale_serve(monkeypatch):
+    """Setup reads `tailscale serve status`; tests never ask the machine's real Tailscale (unknown status)."""
+    monkeypatch.setattr(setup, "serve_status", lambda: None)
+    monkeypatch.setattr(setup.config, "TAILSCALE_WORKING", "tailscale")   # a real Mac may have found the app binary
+
+
 def run_setup(monkeypatch, shim, capsys, args=("--yes",)):
     for k, v in shim.env.items():
         monkeypatch.setenv(k, v)
@@ -346,11 +353,13 @@ def test_hosting_tailnet_sets_public_base_and_falls_back(monkeypatch, tmp_path, 
     shim = make_shim(tmp_path, {"webhook_enabled": True})
     fake_create(monkeypatch)
     monkeypatch.setattr(setup, "tailnet_base", lambda: ("https://box.example.ts.net", ""))
+    monkeypatch.setattr(setup, "serve_status", lambda: {})        # nothing served yet: the default HTTPS port is free
     rc, out, _ = run_setup(monkeypatch, shim, capsys, args=("--yes", "--hosting", "tailnet"))
     assert rc == 0
     assert find(read_log(shim), "config", "set", "plugins.entries.mock-review.settings.public_base",
                 "https://box.example.ts.net")
     assert "tailscale serve --bg 8790" in out
+    assert re.search(r"hosting\s+ok", out)
 
     shim2 = make_shim(tmp_path, {"webhook_enabled": True})
     fake_create(monkeypatch)
@@ -359,6 +368,82 @@ def test_hosting_tailnet_sets_public_base_and_falls_back(monkeypatch, tmp_path, 
     assert rc == 0
     assert not find(read_log(shim2), "config", "set", "plugins.entries.mock-review.settings.public_base")
     assert "tailnet unavailable" in out and "local" in out
+    assert re.search(r"hosting\s+skipped", out) and not re.search(r"hosting\s+ok", out)   # the summary says so too
+
+
+# One node, two routes: the default HTTPS port belongs to another app, and 8790 already reaches the board.
+BUSY_SERVE = {"TCP": {"443": {"HTTPS": True}, "8790": {"HTTPS": True}},
+              "Web": {"box.example.ts.net:443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:3000"}}},
+                      "box.example.ts.net:8790": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8790"}}}}}
+
+
+def test_hosting_tailnet_uses_the_existing_serve_route_and_never_takes_443(monkeypatch, tmp_path, capsys):
+    shim = make_shim(tmp_path, {"webhook_enabled": True})
+    fake_create(monkeypatch)
+    monkeypatch.setattr(setup, "tailnet_base", lambda: ("https://box.example.ts.net", ""))
+    monkeypatch.setattr(setup, "serve_status", lambda: BUSY_SERVE)
+    rc, out, _ = run_setup(monkeypatch, shim, capsys, args=("--yes", "--hosting", "tailnet"))
+    assert rc == 0
+    assert find(read_log(shim), "config", "set", "plugins.entries.mock-review.settings.public_base",
+                "https://box.example.ts.net:8790")
+    assert "already sends https://box.example.ts.net:8790" in out
+    assert "tailscale serve --bg 8790" not in out and "then run once" not in out
+
+
+def test_serve_route_picks_a_route_that_leaves_other_routes_alone():
+    from mockreview.config import serve_route
+    assert serve_route("box.example.ts.net", 8790, BUSY_SERVE) == ("https://box.example.ts.net:8790", None)
+    root_board = {"TCP": {"443": {}}, "Web": {"Box.Example.ts.net:443": {"Handlers": {"/": {"Proxy": "localhost:8790"}}}}}
+    assert serve_route("box.example.ts.net", 8790, root_board) == ("https://box.example.ts.net", None)
+    other_root = {"TCP": {"443": {}}, "Web": {"box.example.ts.net:443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:3000"}}}}}
+    assert serve_route("box.example.ts.net", 8790, other_root) == (
+        "https://box.example.ts.net:8790", "tailscale serve --bg --https=8790 http://127.0.0.1:8790")
+    assert serve_route("box.example.ts.net", 8790, {}) == ("https://box.example.ts.net", "tailscale serve --bg 8790")
+    taken = {"TCP": {"443": {}, "8790": {}}, "Web": {"box.example.ts.net:8790": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:9000"}}}}}
+    assert serve_route("box.example.ts.net", 8790, taken) == (
+        "https://box.example.ts.net:8791", "tailscale serve --bg --https=8791 http://127.0.0.1:8790")
+    # status unknown: never the default HTTPS port, which may already serve another app
+    assert serve_route("box.example.ts.net", 8790, None)[1] == "tailscale serve --bg --https=8790 http://127.0.0.1:8790"
+
+
+def test_printed_serve_command_names_the_tailscale_binary_that_works(monkeypatch, tmp_path, capsys):
+    from mockreview import config
+    shim = make_shim(tmp_path, {"webhook_enabled": True})
+    fake_create(monkeypatch)
+    monkeypatch.setattr(setup, "tailnet_base", lambda: ("https://box.example.ts.net", ""))
+    monkeypatch.setattr(setup, "serve_status", lambda: {})
+    monkeypatch.setattr(config, "TAILSCALE_WORKING", config.TAILSCALE_APP)   # the PATH symlink crashed earlier
+    rc, out, _ = run_setup(monkeypatch, shim, capsys, args=("--yes", "--hosting", "tailnet"))
+    assert rc == 0
+    assert "then run once, manually: /Applications/Tailscale.app/Contents/MacOS/Tailscale serve --bg 8790" in out
+
+
+def test_run_tailscale_falls_back_to_the_macos_app_binary(monkeypatch):
+    from mockreview import config
+    monkeypatch.setattr(config, "TAILSCALE_WORKING", "tailscale")
+    calls = []
+
+    def fake_run(argv, **kw):
+        calls.append(argv[0])
+        if argv[0] == "tailscale":   # the app's symlink crashing, as on a real Mac
+            return SimpleNamespace(returncode=133, stdout="", stderr="Fatal error: The current bundleIdentifier is unknown")
+        return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(os.path, "exists", lambda p: p == config.TAILSCALE_APP)
+    assert config.run_tailscale(["status", "--json"]).returncode == 0
+    assert calls == ["tailscale", config.TAILSCALE_APP]
+    assert config.TAILSCALE_WORKING == config.TAILSCALE_APP          # setup prints commands with the binary that works
+
+    calls.clear()
+    monkeypatch.setattr(sys, "platform", "linux")                    # elsewhere: no second try, the failure is returned
+    assert config.run_tailscale(["status", "--json"]).returncode == 133 and calls == ["tailscale"]
+
+    def missing(argv, **kw):
+        raise FileNotFoundError(argv[0])
+    monkeypatch.setattr(subprocess, "run", missing)
+    with pytest.raises(FileNotFoundError):
+        config.run_tailscale(["status"])
 
 
 def test_hosting_lan_warns_then_writes_host(monkeypatch, tmp_path, capsys):
@@ -496,6 +581,7 @@ def test_interactive_tailnet_recommendation_accepted_writes_public_base(monkeypa
     shim = make_shim(tmp_path, {"webhook_enabled": True})
     fake_create(monkeypatch)
     monkeypatch.setattr(setup, "tailnet_base", lambda: ("https://box.example.ts.net", ""))
+    monkeypatch.setattr(setup, "serve_status", lambda: {})        # nothing served yet: the default HTTPS port is free
     monkeypatch.setattr(sys, "stdin", FakeTTY(["y"]))
     rc, out, _ = run_setup(monkeypatch, shim, capsys, args=("--origin-platform", "telegram"))
     assert rc == 0

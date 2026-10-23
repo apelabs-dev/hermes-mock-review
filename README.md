@@ -126,7 +126,9 @@ Credentials. The plugin reads two secrets through Hermes's secret scope and keep
 `HERENOW_API_KEY` (optional, here.now hosting only). Both are declared as optional secrets in `plugin.yaml`.
 
 Shell commands. `bash <here-now skill>/scripts/publish.sh` publishes a here.now review, with `HERENOW_API_KEY` passed in
-the child environment. `tailscale status --json` finds your tailnet address when you use tailnet hosting. `setup` also
+the child environment. `tailscale status --json` and `tailscale serve status --json` find your tailnet address and existing
+routes when you use tailnet hosting (on macOS, the app's own binary when the `tailscale` symlink crashes); they only
+read, and setup prints any `tailscale serve` command for you to run. `setup` also
 runs `hermes` subcommands: `--version`, `gateway status` and `config get` to read the current state, and `config set`,
 `config unset` for obsolete settings, `webhook subscribe`, `webhook remove` (only for a self-delivering route left by an
 older setup, and only after you confirm) and `plugins validate` to make its changes.

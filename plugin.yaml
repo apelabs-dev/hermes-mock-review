@@ -1,5 +1,5 @@
 name: mock-review
-version: 1.0.0
+version: 1.0.1
 requires_hermes: ">=0.22.0"
 capabilities: []
 requires_env:

@@ -3,6 +3,19 @@
 All notable changes to this project are listed here. The format follows Keep a Changelog, and the project follows
 semantic versioning.
 
+## [1.0.1] - 2026-10-23
+
+### Fixed
+
+- `setup --hosting tailnet` no longer proposes a route that takes over another app. It reads `tailscale serve status`:
+  a route that already reaches the board is used as `public_base` as it is; otherwise the printed `tailscale serve`
+  command uses the default HTTPS port only when nothing is served there, and else the board's own port.
+- On macOS, when the `tailscale` symlink crashes ("bundleIdentifier is unknown"), the board and setup run the Tailscale
+  app's own binary, and setup prints the command with that path. Before, tailnet hosting silently fell back to local
+  links.
+- The setup summary says `hosting skipped` when tailnet hosting was asked for but Tailscale could not be read; it said
+  `ok`.
+
 ## [1.0.0] - 2026-10-23
 
 First public release.

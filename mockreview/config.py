@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import contextvars
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 from . import settings
 from .settings import hermes_home  # noqa: F401  (re-exported; callers use config.hermes_home())
@@ -72,6 +72,68 @@ def route_name() -> str:
     return settings.get("webhook_route")
 
 
+TAILSCALE_APP = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+TAILSCALE_WORKING = "tailscale"   # the CLI that last answered; commands printed for the user name this one
+
+
+def run_tailscale(args: list, timeout: float = 5) -> "subprocess.CompletedProcess":
+    """Run the tailscale CLI with `args`. On macOS the `tailscale` symlink the app installs can crash ("The current
+    bundleIdentifier is unknown to the registry"); when it fails or is missing, the app's own binary is tried. Raises
+    FileNotFoundError when no CLI exists and lets subprocess.TimeoutExpired through; otherwise returns the last result."""
+    import os
+    import subprocess
+    import sys
+    exes = ["tailscale"]
+    if sys.platform == "darwin" and os.path.exists(TAILSCALE_APP):
+        exes.append(TAILSCALE_APP)
+    last = None
+    for exe in exes:
+        try:
+            proc = subprocess.run([exe, *args], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                  timeout=timeout)
+        except FileNotFoundError:
+            continue
+        if proc.returncode == 0:
+            global TAILSCALE_WORKING
+            TAILSCALE_WORKING = exe
+            return proc
+        last = proc
+    if last is None:
+        raise FileNotFoundError("tailscale")
+    return last
+
+
+def serve_route(name: str, board_port: int, serve_status: Optional[dict]) -> Tuple[str, Optional[str]]:
+    """(public URL, command or None) for reaching the board at 127.0.0.1:<board_port> through `tailscale serve`.
+
+    `serve_status` is the parsed `tailscale serve status --json` (None when unknown). An HTTPS port of this node that
+    already proxies to the board wins, and no command is needed. Otherwise the command adds a route without touching
+    the existing ones: the default HTTPS port 443 only when nothing serves on it, else the board's own port (or the next
+    free one). Unknown status: the board's own port, never 443, so an existing root route is never replaced."""
+    from urllib.parse import urlsplit
+    name = name.lower()
+    web = (serve_status or {}).get("Web") or {}
+    tcp = (serve_status or {}).get("TCP") or {}
+    for key in sorted(web) if isinstance(web, dict) else []:
+        host, _, https_port = str(key).rpartition(":")
+        handler = ((web.get(key) or {}).get("Handlers") or {}).get("/") or {}
+        target = str(handler.get("Proxy") or "")
+        if not target or host.lower() != name or not https_port.isdigit():
+            continue
+        t = urlsplit(target if "://" in target else "http://" + target)
+        try:
+            tport = t.port
+        except ValueError:
+            continue
+        if t.hostname in ("127.0.0.1", "localhost") and tport == board_port:
+            return (f"https://{name}" if https_port == "443" else f"https://{name}:{https_port}"), None
+    used = {str(k) for k in tcp} if isinstance(tcp, dict) else set()
+    if serve_status is not None and "443" not in used:
+        return f"https://{name}", f"tailscale serve --bg {board_port}"
+    https_port = next(p for p in range(board_port, board_port + 100) if str(p) not in used)
+    return f"https://{name}:{https_port}", f"tailscale serve --bg --https={https_port} http://127.0.0.1:{board_port}"
+
+
 def public_base() -> str:
     explicit = settings.get("public_base").rstrip("/")
     if explicit:
@@ -80,7 +142,7 @@ def public_base() -> str:
     import re
     import subprocess
     try:
-        proc = subprocess.run(["tailscale", "status", "--json"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
+        proc = run_tailscale(["status", "--json"])
         status = json.loads(proc.stdout) if proc.returncode == 0 else {}
         if not isinstance(status, dict) or not isinstance(status.get("Self"), dict):
             return ""

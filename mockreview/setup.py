@@ -23,6 +23,7 @@ import json
 import os
 import re
 import secrets as stdlib_secrets
+import shlex
 import shutil
 import socket
 import subprocess
@@ -193,7 +194,7 @@ def tailnet_base(runner: Any = None) -> Tuple[Optional[str], str]:
     """The public base URL of this Tailscale node, or (None, why not). Never raises."""
     if runner is None:
         def runner():
-            return subprocess.run(["tailscale", "status", "--json"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
+            return config.run_tailscale(["status", "--json"])
     try:
         proc = runner()
     except FileNotFoundError:
@@ -216,6 +217,16 @@ def tailnet_base(runner: Any = None) -> Tuple[Optional[str], str]:
     if not name or not re.fullmatch(r"[a-zA-Z0-9.-]+", name):
         return None, "tailscale DNSName is unavailable"
     return f"https://{name}", ""
+
+
+def serve_status(runner: Any = None) -> Optional[dict]:
+    """The parsed `tailscale serve status --json`, or None when it cannot be read. Never raises."""
+    try:
+        proc = runner() if runner else config.run_tailscale(["serve", "status", "--json"])
+        status = json.loads(getattr(proc, "stdout", "") or "") if getattr(proc, "returncode", 1) == 0 else None
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+    return status if isinstance(status, dict) else None
 
 
 def webhook_enabled(run: Any = None) -> Tuple[bool, str]:
@@ -809,17 +820,27 @@ def _run(args: argparse.Namespace) -> int:
         elif note:
             print(f"tailnet unavailable ({note}) — staying on local hosting")
 
+    hosting_row = ("hosting", "ok", req.hosting)
     if req.hosting == "tailnet":
         base, note = (tailnet_pre, "") if tailnet_pre else tailnet_base()
         if base:
-            _will_change(f"set public_base to {base}")
+            name = base.split("//", 1)[1]
+            url, serve_cmd = config.serve_route(name, req.port, serve_status())
+            if serve_cmd is None:
+                print(f"tailscale serve already sends {url} to the board (port {req.port})")
+            _will_change(f"set public_base to {url}")
             if not req.dry_run:
-                r = run_hermes(["config", "set", f"{SETTINGS}.public_base", base])
+                r = run_hermes(["config", "set", f"{SETTINGS}.public_base", url])
                 print(redact((r.stdout + r.stderr).strip(), secret))
                 changed_at_start.append("public_base")
-            print(f"then run once, manually: tailscale serve --bg {req.port}")
+            if serve_cmd:
+                if config.TAILSCALE_WORKING != "tailscale":   # the `tailscale` on PATH crashed; name the one that works
+                    serve_cmd = shlex.quote(config.TAILSCALE_WORKING) + serve_cmd[len("tailscale"):]
+                print(f"then run once, manually: {serve_cmd}  (adds one route; your other tailscale serve routes "
+                      "stay as they are)")
         else:
             print(f"tailnet unavailable ({note}) — staying on local hosting")
+            hosting_row = ("hosting", "skipped", f"tailnet unavailable: {note}; links stay local")
     elif req.hosting == "lan":
         print("warning: " + LAN_WARNING)
         _will_change("set host to 0.0.0.0")
@@ -832,7 +853,7 @@ def _run(args: argparse.Namespace) -> int:
         print(f"then set the key: {HERENOW_KEY_CMD}  (setup never installs the skill or writes the key)")
     else:
         print("hosting: local (nothing written)")
-    summary.append(("hosting", "ok", req.hosting))
+    summary.append(hosting_row)
 
     # 4b. a --port that differs from the setting is saved, so the board, the test review and the
     # links all use it (otherwise --port only changed the preflight check)
