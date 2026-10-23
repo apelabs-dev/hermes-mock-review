@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ledger — pricing (utilitarian dense)</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f4f5f7;color:#111827}
+  .bar{display:flex;align-items:center;gap:18px;padding:0 24px;height:48px;background:#111827;color:#e5e7eb;font-size:13px}
+  .bar b{color:#fff;font-size:15px}.bar a{color:#9ca3af;text-decoration:none}.bar .r{margin-left:auto;background:#2563eb;color:#fff;padding:6px 12px;border-radius:6px}
+  main{max-width:1120px;margin:0 auto;padding:28px 24px 60px}
+  .head{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap}
+  h1{font-size:24px;letter-spacing:-.01em}.head p{color:#6b7280}
+  .seg{display:inline-flex;background:#e5e7eb;border-radius:8px;padding:3px}.seg button{border:0;background:none;padding:6px 12px;border-radius:6px;font:600 13px inherit;cursor:pointer;color:#4b5563}
+  .seg button.on{background:#fff;color:#111827;box-shadow:0 1px 2px rgba(0,0,0,.08)}
+  .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:20px 0}
+  .card{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:16px}
+  .card.f{border:2px solid #2563eb}.card .t{display:flex;justify-content:space-between;align-items:center;font-weight:700}
+  .tag{font-size:11px;background:#dbeafe;color:#1d4ed8;padding:2px 7px;border-radius:999px}
+  .amt{font-size:28px;font-weight:800;margin:8px 0 2px;letter-spacing:-.02em}.amt span{font-size:13px;color:#6b7280;font-weight:500}
+  .card button{width:100%;margin-top:12px;height:34px;border-radius:7px;border:1px solid #d1d5db;background:#fff;font-weight:600;cursor:pointer}
+  .card.f button{background:#2563eb;border-color:#2563eb;color:#fff}
+  table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;font-size:13px}
+  th,td{padding:9px 12px;border-bottom:1px solid #f0f1f3;text-align:center}th:first-child,td:first-child{text-align:left;color:#374151}
+  thead th{background:#f9fafb;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#6b7280}
+  td.y{color:#16a34a;font-weight:700}td.n{color:#d1d5db}
+  .faq{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:20px}.faq div{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:12px 14px}
+  .faq b{display:block;margin-bottom:2px}
+  @media(max-width:720px){.bar a{display:none}.cards,.faq{grid-template-columns:1fr}table{font-size:12px}th,td{padding:8px 6px}}
+</style></head><body>
+<div class="bar"><b>Ledger</b><a href="#">Product</a><a href="#">Integrations</a><a href="#">Pricing</a><a class="r" href="#">Start trial</a></div>
+<main>
+<div class="head"><div><h1>Plans &amp; pricing</h1><p>Per seat, billed in USD. Cancel any time.</p></div>
+<div class="seg" id="s"><button class="on" data-m="1">Monthly</button><button data-m="0.8">Yearly −20%</button></div></div>
+<div class="cards">
+  <div class="card"><div class="t">Solo</div><div class="amt" data-p="9">$9<span> /mo</span></div><div>1 seat · 2 banks</div><button>Start free</button></div>
+  <div class="card f"><div class="t">Team <span class="tag">Most popular</span></div><div class="amt" data-p="24">$24<span> /seat/mo</span></div><div>Up to 25 seats · unlimited banks</div><button>Start 14-day trial</button></div>
+  <div class="card"><div class="t">Firm</div><div class="amt" data-p="49">$49<span> /seat/mo</span></div><div>Client workspaces · SSO</div><button>Contact sales</button></div>
+</div>
+<table><thead><tr><th>Feature</th><th>Solo</th><th>Team</th><th>Firm</th></tr></thead><tbody>
+<tr><td>Bank connections</td><td>2</td><td>∞</td><td>∞</td></tr>
+<tr><td>Receipt inbox</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
+<tr><td>Approval flows</td><td class="n">—</td><td class="y">✓</td><td class="y">✓</td></tr>
+<tr><td>Accountant access</td><td class="n">—</td><td class="y">✓</td><td class="y">✓</td></tr>
+<tr><td>Bulk reconciliation</td><td class="n">—</td><td class="n">—</td><td class="y">✓</td></tr>
+<tr><td>SSO &amp; audit log</td><td class="n">—</td><td class="n">—</td><td class="y">✓</td></tr>
+<tr><td>Support</td><td>Email</td><td>Email + chat</td><td>Named manager</td></tr>
+</tbody></table>
+<div class="faq"><div><b>Can I switch plans?</b>Yes, upgrades apply immediately and are prorated.</div><div><b>Is there a free tier?</b>Solo is free for the first 30 days, no card needed.</div></div>
+</main>
+<script>
+document.getElementById('s').addEventListener('click',function(e){var b=e.target.closest('button');if(!b)return;
+this.querySelectorAll('button').forEach(function(x){x.classList.toggle('on',x===b)});
+document.querySelectorAll('.amt').forEach(function(p){p.firstChild.nodeValue='$'+Math.round(p.dataset.p*b.dataset.m);});});
+</script>
+</body></html>

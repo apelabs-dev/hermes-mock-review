@@ -1,0 +1,162 @@
+name: mock-review
+version: 1.0.0
+requires_hermes: ">=0.22.0"
+capabilities: []
+requires_env:
+  - name: HERENOW_API_KEY
+    optional: true
+    secret: true
+    description: Leave empty unless you use here.now hosting.
+  - name: MOCKREVIEW_WEBHOOK_SECRET
+    optional: true
+    secret: true
+    description: "Leave empty: hermes mockreview setup generates and stores it."
+description: "Review boards for UI mockups: four mock_review tools, the mockreview CLI and slash command, the usage skill, and a webhook platform connect handler for optional in-gateway autostart."
+platforms: [webhook]
+provides_hooks: []
+kind: standalone
+manifest_version: 2
+api_version: 1
+license: MIT
+tags: [design, mockup, review, feedback]
+provides_tools:
+  - mock_review_create
+  - mock_review_add_round
+  - mock_review_feedback
+  - mock_review_list
+config_schema:
+  devices:
+    type: list
+    default: [desktop, mobile]
+    description: "Device widths the board offers, any of desktop, tablet, mobile. With one device the switch is hidden. Env: MOCKREVIEW_DEVICES."
+  default_device:
+    type: str
+    default: "auto"
+    enum: ["auto", "desktop", "tablet", "mobile"]
+    description: "Width the board opens at: auto (the viewer's device, clamped to devices), desktop, tablet or mobile. Env: MOCKREVIEW_DEFAULT_DEVICE."
+  default_theme:
+    type: str
+    default: "project"
+    enum: ["project", "dark", "light"]
+    description: "Theme the board opens in: project (the design profile's default), dark or light. Env: MOCKREVIEW_DEFAULT_THEME."
+  show_theme_toggle:
+    type: bool
+    default: true
+    description: "Show the light/dark toggle in the header. Env: MOCKREVIEW_SHOW_THEME_TOGGLE."
+  mobile_width:
+    type: int
+    default: 390
+    description: "Mock width in px for Mobile. Env: MOCKREVIEW_MOBILE_WIDTH."
+  tablet_width:
+    type: int
+    default: 820
+    description: "Mock width in px for Tablet (capped at a decision's desktop_width). Env: MOCKREVIEW_TABLET_WIDTH."
+  desktop_width:
+    type: int
+    default: 1280
+    description: "Desktop mock width in px for a decision that sets no desktop_width. Env: MOCKREVIEW_DESKTOP_WIDTH."
+  pins_enabled:
+    type: bool
+    default: true
+    description: "Let the reviewer drop pins on mocks. Env: MOCKREVIEW_PINS_ENABLED."
+  require_note_on_change:
+    type: bool
+    default: false
+    description: "Block Send until every Change mark has a note. Env: MOCKREVIEW_REQUIRE_NOTE_ON_CHANGE."
+  max_pins:
+    type: int
+    default: 40
+    description: "Most pins per round. Env: MOCKREVIEW_MAX_PINS."
+  webhook_url:
+    type: str
+    default: "http://localhost:8644/webhooks/mock-review"
+    description: "Hermes webhook base URL; the route suffix is selected by origin platform. Env: MOCKREVIEW_WEBHOOK_URL."
+  webhook_route:
+    type: str
+    default: "mock-review"
+    description: "Webhook route prefix; setup creates <prefix>-<platform> for each origin platform. Env: MOCKREVIEW_WEBHOOK_ROUTE."
+  wake_required:
+    type: bool
+    default: true
+    description: "Refuse to create or extend a review unless the owning service can wake Hermes on Send (the scoped signing secret is set; setup creates routes). Off: demo/local-only boards that are viewed but never wake anyone. Env: MOCKREVIEW_WAKE_REQUIRED."
+  retry_seconds:
+    type: float
+    default: 60.0
+    description: "Seconds between retries of an undelivered wake-up. Env: MOCKREVIEW_RETRY_SECONDS."
+  stale_after_minutes:
+    type: float
+    default: 15.0
+    description: "Minutes after a submitted round with no new round before the board server pings the origin chat that the agent may have stalled. 0 = never ping. Env: MOCKREVIEW_STALE_AFTER_MINUTES."
+  poll_seconds:
+    type: float
+    default: 60.0
+    description: "Seconds between here.now Site Data polls. Env: MOCKREVIEW_POLL_SECONDS."
+  default_host:
+    type: str
+    default: "local"
+    enum: ["tailnet", "local", "herenow"]
+    description: "Where a review is hosted when the call doesn't say: tailnet (private, over Tailscale), local (this computer's own address, no Tailscale) or herenow (public link). Env: MOCKREVIEW_DEFAULT_HOST."
+  ask_host_each_time:
+    type: bool
+    default: true
+    description: "Ask the user tailnet, local or here.now before every review (read by the skill and tool text, not enforced in code). Env: MOCKREVIEW_ASK_HOST_EACH_TIME."
+  public_base:
+    type: str
+    default: ""
+    description: "Tailnet URL for review links. Empty: detect MagicDNS with tailscale status --json. Env: MOCKREVIEW_PUBLIC_BASE."
+  host:
+    type: str
+    default: "127.0.0.1"
+    enum: ["127.0.0.1", "localhost", "::1", "0.0.0.0"]
+    description: "Address the board server binds. Loopback (default) keeps it on this computer (tailnet via tailscale serve); 0.0.0.0 shares it with every device on your network, unauthenticated, so local links open on other devices. Env: MOCKREVIEW_HOST."
+  owner:
+    type: str
+    default: "auto"
+    enum: ["auto", "service", "self"]
+    description: "Who owns board storage and wake-ups: the running board server. auto = use this process's own store when the server watches it; inside a Kanban worker whose store is not watched, create in the server's store instead (reported in the result); anywhere else refuse rather than publish an orphan board. service = always the server's store. self = this process's store, no server check (own server, tests). Env: MOCKREVIEW_OWNER."
+  port:
+    type: int
+    default: 8790
+    description: "Port the board server binds. Env: MOCKREVIEW_PORT."
+  local_base:
+    type: str
+    default: ""
+    description: "URL the CLI uses to reach the server. Empty: http://<host>:<port>. Env: MOCKREVIEW_LOCAL_BASE."
+  lan_address:
+    type: str
+    default: ""
+    description: "Address local-mode links use. Empty: this computer's network address, detected (127.0.0.1 while the server binds loopback only). Env: MOCKREVIEW_LAN_ADDRESS."
+  offer_live_demo:
+    type: bool
+    default: false
+    description: "Allow a prototype (\"try it live\") round. Off: create/add-round refuse one unless the call allows it. Env: MOCKREVIEW_OFFER_LIVE_DEMO."
+  data_dir:
+    type: str
+    default: ""
+    description: "Where reviews live. Empty: $HERMES_HOME/workspace/mock-reviews. Env: MOCKREVIEW_HOME."
+  auto_close_idle_days:
+    type: int
+    default: 0
+    description: "Close an open review after this many days without a new round or feedback (here.now: its public site is deleted). 0 = never. Env: MOCKREVIEW_AUTO_CLOSE_IDLE_DAYS."
+  keep_closed_days:
+    type: int
+    default: 0
+    description: "Delete a closed review this many days after it closed. 0 = keep forever. Env: MOCKREVIEW_KEEP_CLOSED_DAYS."
+  housekeeping_seconds:
+    type: int
+    default: 3600
+    description: "Seconds between the server's auto-close/prune passes. Env: MOCKREVIEW_HOUSEKEEPING_SECONDS."
+  autostart:
+    type: bool
+    default: false
+    description: "Start the board server inside the Hermes gateway process (a background thread serving host:port) when the gateway's webhook platform connects. Off (default): nothing runs in the background; run `hermes mockreview serve` yourself. Restart the gateway after changing it, host or port. Env: MOCKREVIEW_AUTOSTART."
+  herenow_api_key:
+    type: secret
+    env: HERENOW_API_KEY
+    required: false
+    description: "Optional here.now key; required only for public hosting."
+  webhook_secret:
+    type: secret
+    env: MOCKREVIEW_WEBHOOK_SECRET
+    required: false
+    description: "Optional signing secret; required only for wake delivery."

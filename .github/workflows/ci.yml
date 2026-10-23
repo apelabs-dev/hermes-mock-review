@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # The Hermes release the plugin is validated against (tag v0.22.0, the requires_hermes floor).
+  HERMES_REF: e06df9c2eae6901f4c88f464e0ae6e753c0428b8
+
+jobs:
+  tests:
+    name: tests (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.9", "3.11", "3.12", "3.14"]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.11.14"
+          enable-cache: false
+
+      # uv's standalone CPython builds cover every version in the matrix on all three systems.
+      - name: Run the test suite
+        run: >-
+          uv run --no-project --managed-python --python "${{ matrix.python }}"
+          --with pytest --with pyyaml
+          python -m pytest -q -p no:cacheprovider -rs
+
+  validate:
+    name: hermes plugins validate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Hermes's own reusable gate: builds Hermes from source at hermes-ref under RUNNER_TEMP and runs
+      # `plugins validate .` there. It passes no --install-deps; the plugin declares no Python
+      # dependencies (no pyproject.toml, no python_dependencies), so that flag would install nothing.
+      - uses: NousResearch/hermes-agent/.github/actions/plugin-validate@e06df9c2eae6901f4c88f464e0ae6e753c0428b8 # v0.22.0
+        with:
+          path: .
+          hermes-ref: ${{ env.HERMES_REF }}
+
+  sweep:
+    name: identifier and secret sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check that the history is complete
+        run: test "$(git rev-parse --is-shallow-repository)" = false
+
+      # MOCKREVIEW_SWEEP_TOKENS (one private token per line) comes from the repository secret of the same
+      # name. Forks do not receive it; the script then runs the generic denylist only and says so.
+      - name: Sweep the tree
+        env:
+          MOCKREVIEW_SWEEP_TOKENS: ${{ secrets.MOCKREVIEW_SWEEP_TOKENS }}
+        run: python3 scripts/check_identifiers.py
+
+      - name: Sweep the history
+        env:
+          MOCKREVIEW_SWEEP_TOKENS: ${{ secrets.MOCKREVIEW_SWEEP_TOKENS }}
+        run: python3 scripts/check_identifiers.py --history

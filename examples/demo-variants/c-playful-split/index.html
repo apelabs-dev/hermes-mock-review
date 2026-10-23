@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ledger — pricing (playful split)</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#fff7ec;color:#1b1340}
+  .wrap{display:grid;grid-template-columns:1.05fr 1fr;min-height:100vh}
+  .left{background:#2b1b7a;color:#fff;padding:40px 6vw;position:relative;overflow:hidden}
+  .left b{font-size:20px}.left h1{font-size:clamp(36px,5vw,60px);line-height:1.02;margin:70px 0 18px;letter-spacing:-.03em}
+  .left h1 em{font-style:normal;color:#ffcf4a}.left p{color:#d6cffb;max-width:420px;font-size:18px}
+  .blob{position:absolute;border-radius:50%;filter:blur(2px)}.b1{width:260px;height:260px;background:#ff7a59;right:-80px;bottom:-60px}
+  .b2{width:120px;height:120px;background:#ffcf4a;right:120px;bottom:150px}.b3{width:60px;height:60px;background:#7ee2c4;left:40%;bottom:60px}
+  .right{padding:40px 5vw;display:flex;flex-direction:column;gap:14px;justify-content:center}
+  .sw{align-self:flex-start;display:flex;align-items:center;gap:10px;font-weight:700;cursor:pointer;user-select:none}
+  .sw i{width:46px;height:26px;border-radius:99px;background:#d9d2f5;position:relative;transition:.2s}.sw i:after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:.2s;box-shadow:0 1px 3px rgba(0,0,0,.2)}
+  .sw.on i{background:#2b1b7a}.sw.on i:after{left:23px}.sw small{background:#ffcf4a;border-radius:99px;padding:2px 8px;font-size:12px}
+  .p{display:flex;align-items:center;gap:16px;background:#fff;border-radius:22px;padding:18px 20px;box-shadow:0 8px 0 #1b134012,0 2px 0 #1b134020;border:2px solid #1b1340;transition:transform .15s;cursor:pointer}
+  .p:hover{transform:translateY(-3px)}.p.hot{background:#ffcf4a}
+  .emo{font-size:34px;width:56px;height:56px;border-radius:16px;background:#fff7ec;display:grid;place-items:center;flex:none}
+  .p h2{font-size:20px}.p div.d{font-size:14px;color:#4b4373}.p .pr{margin-left:auto;font-size:30px;font-weight:900;letter-spacing:-.03em}.p .pr span{font-size:13px;font-weight:600}
+  .go{margin-top:8px;align-self:flex-start;background:#ff7a59;color:#fff;border:2px solid #1b1340;border-radius:99px;padding:14px 26px;font-weight:800;font-size:16px;box-shadow:0 5px 0 #1b1340;cursor:pointer}
+  @media(max-width:760px){.wrap{grid-template-columns:1fr}.left{padding:28px 24px 120px}.left h1{margin-top:36px}.right{padding:24px}.p .pr{font-size:24px}}
+</style></head><body>
+<div class="wrap">
+<section class="left"><b>Ledger ✦</b><h1>Books that <em>balance</em> themselves.</h1><p>Pick a plan, connect your bank, and get your Fridays back. Seriously.</p>
+<div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div></section>
+<section class="right">
+<div class="sw" id="sw"><i></i>Pay yearly <small>save 20%</small></div>
+<div class="p"><div class="emo">🌱</div><div><h2>Solo</h2><div class="d">Just you and your side hustle</div></div><div class="pr" data-p="9">$9<span>/mo</span></div></div>
+<div class="p hot"><div class="emo">🚀</div><div><h2>Team</h2><div class="d">Up to 25 people, unlimited banks</div></div><div class="pr" data-p="24">$24<span>/seat</span></div></div>
+<div class="p"><div class="emo">🏛️</div><div><h2>Firm</h2><div class="d">Many clients, one calm dashboard</div></div><div class="pr" data-p="49">$49<span>/seat</span></div></div>
+<button class="go">Start my free month →</button>
+</section></div>
+<script>
+var sw=document.getElementById('sw');sw.addEventListener('click',function(){sw.classList.toggle('on');var m=sw.classList.contains('on')?0.8:1;
+document.querySelectorAll('.pr').forEach(function(p){p.firstChild.nodeValue='$'+Math.round(p.dataset.p*m);});});
+</script>
+</body></html>

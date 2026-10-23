@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ledger — pricing (calm editorial)</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Georgia,"Iowan Old Style",serif;background:#fbf8f3;color:#2a2620;line-height:1.6}
+  header{display:flex;justify-content:space-between;align-items:center;padding:28px 8vw;font-family:-apple-system,system-ui,sans-serif;font-size:14px}
+  header b{font-family:Georgia,serif;font-size:20px;letter-spacing:-.01em}
+  header nav a{color:#6d6457;text-decoration:none;margin-left:22px}
+  .hero{padding:72px 8vw 40px;max-width:900px}
+  .hero p.k{font:600 12px/1 -apple-system,system-ui,sans-serif;letter-spacing:.18em;text-transform:uppercase;color:#a3672f}
+  .hero h1{font-size:clamp(34px,5vw,58px);line-height:1.08;font-weight:400;margin:18px 0 18px;letter-spacing:-.02em}
+  .hero p.s{font-size:19px;color:#5d5549;max-width:560px}
+  .toggle{display:inline-flex;margin:34px 8vw 0;border:1px solid #d9cfbf;border-radius:999px;padding:3px;font:600 13px -apple-system,system-ui,sans-serif}
+  .toggle button{border:0;background:none;padding:8px 16px;border-radius:999px;color:#6d6457;cursor:pointer}
+  .toggle button.on{background:#2a2620;color:#fbf8f3}
+  .plans{display:grid;grid-template-columns:repeat(3,1fr);gap:0;margin:28px 8vw 80px;border-top:1px solid #d9cfbf}
+  .plan{padding:34px 28px 34px 0;border-right:1px solid #e6ddcf}
+  .plan+.plan{padding-left:28px}.plan:last-child{border-right:0}
+  .plan h2{font-weight:400;font-size:24px}
+  .price{font-size:44px;margin:14px 0 4px;letter-spacing:-.02em}.price small{font-size:15px;color:#8a8073}
+  .plan p{color:#5d5549;font-size:16px;min-height:76px}
+  .plan ul{list-style:none;margin:18px 0 26px;font:15px/1.9 -apple-system,system-ui,sans-serif;color:#4a443b}
+  .plan li:before{content:"— ";color:#a3672f}
+  .cta{display:inline-block;font:600 14px -apple-system,system-ui,sans-serif;color:#2a2620;border-bottom:1.5px solid #2a2620;padding-bottom:2px;text-decoration:none}
+  .plan.feat .cta{color:#a3672f;border-color:#a3672f}
+  .quote{margin:0 8vw 90px;padding-top:40px;border-top:1px solid #d9cfbf;font-size:24px;max-width:760px;font-style:italic}
+  .quote span{display:block;margin-top:12px;font:14px -apple-system,system-ui,sans-serif;font-style:normal;color:#8a8073}
+  @media(max-width:720px){header nav{display:none}.plans{grid-template-columns:1fr}.plan,.plan+.plan{padding:28px 0;border-right:0;border-bottom:1px solid #e6ddcf}.hero{padding-top:36px}}
+</style></head><body>
+<header><b>Ledger</b><nav><a href="#">Product</a><a href="#">Customers</a><a href="#">Pricing</a><a href="#">Sign in</a></nav></header>
+<section class="hero"><p class="k">Pricing</p><h1>Quiet bookkeeping for teams that would rather be building.</h1>
+<p class="s">One honest price per seat. Every plan includes bank sync, receipts and a human who answers email.</p></section>
+<div class="toggle" id="t"><button class="on" data-m="1">Monthly</button><button data-m="0.8">Yearly · save 20%</button></div>
+<section class="plans">
+  <div class="plan"><h2>Solo</h2><div class="price" data-p="9">$9<small> / month</small></div><p>For freelancers keeping one business tidy.</p>
+    <ul><li>1 seat</li><li>2 bank connections</li><li>Receipt inbox</li></ul><a class="cta" href="#">Start free →</a></div>
+  <div class="plan feat"><h2>Team</h2><div class="price" data-p="24">$24<small> / seat</small></div><p>For small companies closing the books every month.</p>
+    <ul><li>Up to 25 seats</li><li>Unlimited banks</li><li>Approval flows</li><li>Accountant access</li></ul><a class="cta" href="#">Start a trial →</a></div>
+  <div class="plan"><h2>Firm</h2><div class="price" data-p="49">$49<small> / seat</small></div><p>For accounting firms running many clients at once.</p>
+    <ul><li>Client workspaces</li><li>Bulk reconciliation</li><li>SSO &amp; audit log</li></ul><a class="cta" href="#">Talk to us →</a></div>
+</section>
+<p class="quote">“We closed March in two afternoons instead of two weeks.”<span>Maya Ortiz, finance lead at Northwind Studio</span></p>
+<script>
+document.getElementById('t').addEventListener('click',function(e){var b=e.target.closest('button');if(!b)return;
+this.querySelectorAll('button').forEach(function(x){x.classList.toggle('on',x===b)});
+document.querySelectorAll('.price').forEach(function(p){var v=Math.round(p.dataset.p*b.dataset.m);p.firstChild.nodeValue='$'+v;});});
+</script>
+</body></html>
