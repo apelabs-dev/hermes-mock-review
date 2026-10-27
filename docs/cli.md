@@ -8,12 +8,12 @@ Every command is available as `hermes mockreview <command>`. Without the Hermes 
 
 ```text
 usage: hermes mockreview [-h]
-                         {setup,create,add-round,design,feedback,list,close,settings,housekeeping,owner,adopt,notify-test,publish,poll,serve} ...
+                         {setup,create,add-round,design,feedback,list,close,settings,housekeeping,owner,adopt,notify-test,publish,password,poll,serve} ...
 
 mock-review CLI. First time? Run: hermes mockreview setup. `hermes mockreview settings` prints each setting and its source.
 
 positional arguments:
-  {setup,create,add-round,design,feedback,list,close,settings,housekeeping,owner,adopt,notify-test,publish,poll,serve}
+  {setup,create,add-round,design,feedback,list,close,settings,housekeeping,owner,adopt,notify-test,publish,password,poll,serve}
     setup               onboard mock-review: secret, wake and notice routes,
                         hosting, autostart, a test review
     create              create a review (round 1 = --decisions or --prototype)
@@ -34,6 +34,7 @@ positional arguments:
                         store (backup, collision checks, nothing lost)
     notify-test         send the wake-up payload to --to (testing only)
     publish             re-publish a herenow review
+    password            set or remove an open here.now review's password gate
     poll                poll here.now Site Data once (what the server does
                         every poll_seconds)
     serve               run the board server in the foreground until Ctrl+C
@@ -92,7 +93,7 @@ usage: hermes mockreview create [-h] --title TITLE [--brief BRIEF]
                                 [--mobile-width PX] [--tablet-width PX]
                                 [--pins] [--no-pins] [--require-note]
                                 [--no-require-note] [--max-pins N] [--wake]
-                                [--no-wake]
+                                [--no-wake] [--password] [--no-password]
 
 options:
   -h, --help            show this help message and exit
@@ -118,6 +119,9 @@ options:
                         (the default)
   --no-wake             a board nobody is woken by: no wake-route check, Send
                         stores feedback and notifies no one
+  --password            password protect this here.now review (default: saved
+                        setting)
+  --no-password         publish this here.now review without a password
 
 per-review look (default: saved settings; stored in the review):
   --devices desktop,tablet,mobile
@@ -344,6 +348,19 @@ usage: hermes mockreview publish [-h] review_id
 
 positional arguments:
   review_id
+
+options:
+  -h, --help  show this help message and exit
+```
+
+## `hermes mockreview password --help`
+
+```text
+usage: hermes mockreview password [-h] review_id {on,off}
+
+positional arguments:
+  review_id
+  {on,off}
 
 options:
   -h, --help  show this help message and exit

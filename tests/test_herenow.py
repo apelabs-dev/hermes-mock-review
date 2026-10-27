@@ -9,12 +9,14 @@ from mockreview import config, herenow, service, store
 
 
 @pytest.fixture
-def hn_review(env, variants):
+def hn_review(env, variants, monkeypatch):
+    monkeypatch.setattr(herenow, "_api", lambda *a, **kw: {})
     specs = [store.parse_variant_spec(v) for v in variants]
     data = store.create_review("Public review", "", {"platform": "discord", "chat_id": "1490000000000000002", "thread_id": "1490000000000000002"}, "herenow", specs)
     with store.locked(data["id"]):
         d = store.load(data["id"])
-        d["herenow"].update(slug="fake-slug-ab12", site_url="https://fake-slug-ab12.here.now/")
+        d["herenow"].update(slug="fake-slug-ab12", site_url="https://fake-slug-ab12.here.now/",
+                             password_status="applied", password_applied=True)
         store.save(data["id"], d)
     return store.load(data["id"])
 
@@ -141,7 +143,7 @@ def test_publish_failure_is_reported(hn_review, tmp_path, monkeypatch):
     script = config.hermes_home() / "skills" / "productivity" / "here-now" / "scripts" / "publish.sh"
     script.parent.mkdir(parents=True)
     script.write_text("#!/bin/bash\necho 'error: unauthorized' >&2\nexit 1\n", encoding="utf-8")
-    with pytest.raises(herenow.HereNowError, match="unauthorized"):
+    with pytest.raises(herenow.HereNowError, match="publish failed"):
         herenow.publish(hn_review["id"])
 
 
@@ -174,7 +176,7 @@ def test_publish_protocol_without_bash(hn_review, tmp_path, monkeypatch, success
         result = herenow.publish(hn_review["id"])
         assert result["herenow"]["site_url"] == "https://new-slug-zz99.here.now/"
     else:
-        with pytest.raises(herenow.HereNowError, match="unauthorized"):
+        with pytest.raises(herenow.HereNowError, match="publish failed"):
             herenow.publish(hn_review["id"])
     argv, kwargs = calls[0]
     assert argv[:3] == ["bash", str(script), str(store.review_dir(hn_review["id"]) / "site")]

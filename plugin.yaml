@@ -1,5 +1,5 @@
 name: mock-review
-version: 1.0.1
+version: 1.1.0
 requires_hermes: ">=0.22.0"
 capabilities: []
 requires_env:
@@ -95,7 +95,11 @@ config_schema:
     type: str
     default: "local"
     enum: ["tailnet", "local", "herenow"]
-    description: "Where a review is hosted when the call doesn't say: tailnet (private, over Tailscale), local (this computer's own address, no Tailscale) or herenow (public link). Env: MOCKREVIEW_DEFAULT_HOST."
+    description: "Where a review is hosted when the call doesn't say: tailnet (private, over Tailscale), local (this computer's own address, no Tailscale) or herenow (internet link, password protected by default). Env: MOCKREVIEW_DEFAULT_HOST."
+  herenow_password:
+    type: bool
+    default: true
+    description: "Password protect new here.now reviews. Stored per review; change an existing review with mockreview password <id> on|off. Env: MOCKREVIEW_HERENOW_PASSWORD."
   ask_host_each_time:
     type: bool
     default: true

@@ -3,6 +3,22 @@
 All notable changes to this project are listed here. The format follows Keep a Changelog, and the project follows
 semantic versioning.
 
+## [1.1.0] - 2026-10-27
+
+### Added
+
+- New here.now boards default to a server-side password gate. Four random words are stored per review and returned
+  with create/add-round/publish results for sharing beside the link. Global, per-create and live password controls
+  include CLI flags, the create tool argument and a slash subcommand.
+- Password intent/application status, sanitized failures, preserved slugs and serialized publish/toggle/close support
+  recovery without claiming unconfirmed protection. Legacy reviews retain their public behavior until explicitly enabled.
+
+### Fixed
+
+- Absolute HTTP(S) links in mock/option HTML remain clickable with safe new-tab attributes, without creating pins.
+  Bare HTTP(S) URLs in table cells become DOM-created links, including multiple URLs embedded in prose;
+  surrounding text, sentence punctuation and literal HTML stay unchanged.
+
 ## [1.0.1] - 2026-10-23
 
 ### Fixed

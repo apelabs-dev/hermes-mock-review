@@ -69,8 +69,10 @@ A review is hosted in one of three ways. Set the default with `default_host`, or
   computer only. Setting `host` to `0.0.0.0` makes local links open on other devices on your network, with no login.
 - `tailnet`: the board stays on loopback and you expose it with `tailscale serve`. The link is your Tailscale address, so
   only your tailnet can open it. `setup` offers this when Tailscale is running, and `setup --hosting tailnet` selects it.
-- `herenow`: the board is published as a public site on here.now and feedback comes back through its Site Data. This
-  needs the official here-now Hermes skill and a `HERENOW_API_KEY`.
+- `herenow`: the board is published on here.now with a password gate by default; feedback comes back through its Site Data. This
+  needs the official here-now Hermes skill and a `HERENOW_API_KEY`. Create/add-round/publish return a `password`
+  beside the URL: send both to the reviewer. Use `--no-password` on create only for an intentionally public board.
+  Change an open board with `hermes mockreview password <id> on|off` or `/mockreview password <id> <on|off>`.
 
 [docs/hosting.md](docs/hosting.md) covers each mode step by step.
 
@@ -85,7 +87,7 @@ here.now reviews; local hosting does not need Bash. See [hosting requirements](d
 
 ## Commands and reference
 
-`hermes mockreview <command>` and the `/mockreview` slash command (list, open, close, settings). The agent uses four
+`hermes mockreview <command>` and the `/mockreview` slash command (list, open, close, password, settings). The agent uses four
 tools: `mock_review_create`, `mock_review_add_round`, `mock_review_feedback` and `mock_review_list`.
 
 - [docs/cli.md](docs/cli.md): every command with its flags
@@ -146,3 +148,8 @@ The suite needs `pytest` and `pyyaml`. [AGENTS.md](AGENTS.md) describes the layo
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+Safe absolute HTTP(S) links in mock/option HTML open in a new tab with `noopener noreferrer`. Table cells remain
+text, with bare absolute HTTP(S) URLs linked even inside prose or alongside other URLs. Surrounding punctuation
+and literal HTML stay text. Relative URLs and other link protocols are not linked.
+See [password hosting and recovery](docs/hosting.md#herenow) and [security](docs/security.md).

@@ -35,7 +35,8 @@ Look settings and the first three feedback settings are copied into each review 
 
 ## Hosting and network
 
-- `default_host` (str, default `local`, one of `tailnet`, `local`, `herenow`). Env: `MOCKREVIEW_DEFAULT_HOST`. Where a review is hosted when the call doesn't say: tailnet (private, over Tailscale), local (this computer's own address, no Tailscale) or herenow (public link).
+- `default_host` (str, default `local`, one of `tailnet`, `local`, `herenow`). Env: `MOCKREVIEW_DEFAULT_HOST`. Where a review is hosted when the call doesn't say: tailnet (private, over Tailscale), local (this computer's own address, no Tailscale) or herenow (internet link, password protected by default).
+- `herenow_password` (bool, default `true`). Env: `MOCKREVIEW_HERENOW_PASSWORD`. Password protect new here.now reviews. Stored per review; change an existing review with mockreview password `<id>` on|off.
 - `ask_host_each_time` (bool, default `true`). Env: `MOCKREVIEW_ASK_HOST_EACH_TIME`. Ask the user tailnet, local or here.now before every review (read by the skill and tool text, not enforced in code).
 - `public_base` (str, default `(empty)`). Env: `MOCKREVIEW_PUBLIC_BASE`. Tailnet URL for review links. Empty: detect MagicDNS with tailscale status --json.
 - `host` (str, default `127.0.0.1`, one of `127.0.0.1`, `localhost`, `::1`, `0.0.0.0`). Env: `MOCKREVIEW_HOST`. Address the board server binds. Loopback (default) keeps it on this computer (tailnet via tailscale serve); 0.0.0.0 shares it with every device on your network, unauthenticated, so local links open on other devices.
@@ -92,6 +93,7 @@ mock-review settings (config: Hermes ctx.get_config, read with Hermes)
   poll_seconds = 60.0  (default)
 [hosting]
   default_host = local  (default)
+  herenow_password = true  (default)
   ask_host_each_time = true  (default)
   public_base = (empty)  (default)
   host = 127.0.0.1  (default)

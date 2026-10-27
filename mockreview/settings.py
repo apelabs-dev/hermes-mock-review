@@ -88,9 +88,11 @@ SPEC: List[Setting] = [
     Setting("poll_seconds", "float", 60.0, "Seconds between here.now Site Data polls.", "feedback", lo=5, hi=86400),
     # hosting
     Setting("default_host", "str", "local", "Where a review is hosted when the call doesn't say: tailnet "
-            "(private, over Tailscale), local (this computer's own address, no Tailscale) or herenow (public link).",
+            "(private, over Tailscale), local (this computer's own address, no Tailscale) or herenow (internet link, password protected by default).",
             "hosting", choices=("tailnet", "local", "herenow"),
             aliases={"tailscale": "tailnet", "here.now": "herenow", "lan": "local"}),
+    Setting("herenow_password", "bool", True, "Password protect new here.now reviews. Stored per review; "
+            "change an existing review with mockreview password <id> on|off.", "hosting"),
     Setting("ask_host_each_time", "bool", True, "Ask the user tailnet, local or here.now before every review "
             "(read by the skill and tool text, not enforced in code).", "hosting"),
     Setting("public_base", "str", "", "Tailnet URL for review links. Empty: detect MagicDNS with tailscale status --json.", "hosting"),

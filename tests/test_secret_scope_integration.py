@@ -74,6 +74,9 @@ def test_real_accessor_does_not_fall_back_between_profile_scopes(real_scope, mon
 
 
 def test_real_scoped_publish_keys_are_passed_only_to_children(real_scope, review, monkeypatch, tmp_path):
+    data = store.load(review["id"])
+    data["mode"] = "herenow"  # Legacy record: only exercise scoped helper keys here.
+    store.save(data["id"], data)
     script = config.hermes_home() / "skills" / "productivity" / "here-now" / "scripts" / "publish.sh"
     script.parent.mkdir(parents=True)
     script.write_text("#!/bin/sh\nexit 9\n", encoding="utf-8")

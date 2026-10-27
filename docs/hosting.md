@@ -51,8 +51,8 @@ On Windows, use Git Bash on `PATH` with paths that its tools can read, or run He
 Native Windows without that environment cannot publish here.now reviews. The Bash integration tests are skipped
 on Windows; site building, feedback validation and polling are still tested there. Local hosting does not need Bash.
 
-The board is published as a public static site on here.now. Anyone who has the link can open it, so keep secrets and
-private values out of mocks you host this way. Feedback is collected through the site's Site Data and read back by your
+New here.now boards have a server-side password gate by default. Send the returned `password` next to the URL;
+the reviewer unlocks the site before viewing the board and sending feedback. Keep secrets and private values out of mocks. Feedback is collected through the site's Site Data and read back by your
 board server, which polls every `poll_seconds`.
 
 1. Install the official skill: `hermes skills install official/productivity/here-now -y`. The plugin looks for its
@@ -104,3 +104,31 @@ the board server logs one warning, marks that notice `no_route` and never retrie
 
 If you only want a board that is viewed and never wakes anyone, set `wake_required` to false or pass `--no-wake` on
 `create`.
+
+### Password controls and recovery
+
+`herenow_password` defaults to `true` in `plugins.entries.mock-review.settings` (environment override:
+`MOCKREVIEW_HERENOW_PASSWORD`). Create stores the choice in `review.json`; later global changes do not affect an
+existing review. Override it with `--password` / `--no-password` on create, or the `mock_review_create` tool's boolean
+`password` argument. Create, add-round and publish JSON return `password`, `password_enabled` and `password_status`.
+The password is four independent words from the bundled [EFF large wordlist](https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt)
+(7,776 choices each, about 51.7 bits of entropy; [CC BY 3.0 US](https://creativecommons.org/licenses/by/3.0/us/)).
+It lives only in the local review record and explicit owner results, never the site files, browser state or list output.
+
+Use `hermes mockreview password <review id> on` to enable the gate (reuses an existing password), or
+`hermes mockreview password <review id> off` to remove it and clear the local password after success.
+The same commands are available as `/mockreview password <review id> <on|off>`. Turning it on again after removal generates
+a new password. Closed reviews reject password changes and publication.
+
+Publishing first obtains a slug, saves it, then PATCHes `/api/v1/publish/<slug>/metadata` with `{"password":"..."}`.
+Removal PATCHes `{"password":null}`. The gate survives republishing; protected reviews reassert it on each publish.
+Owner Bearer-key Site Data reads are unaffected, and same-origin browser inserts work after unlock.
+There is a brief interval between first publication and the password PATCH when the site can be reached without the gate.
+A failed PATCH returns an error, records `password_status: error` and `password_applied: null`, and suppresses the URL in
+list/open results. The remote gate is then **unconfirmed**; do not share the board. The slug and password are preserved:
+retry `hermes mockreview publish <review id>` or the password command, or close the review to delete the site.
+Retries also reconcile interrupted removals. Publish, toggle and close share a per-review operation lock.
+An unpublished toggle saves the choice but returns an error until publication can apply it.
+
+Legacy reviews without a stored password choice stay public on republish. Enable their gate explicitly with the
+password command. Closing still archives feedback and deletes the site; housekeeping behavior is unchanged.

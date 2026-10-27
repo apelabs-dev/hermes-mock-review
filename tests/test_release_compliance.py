@@ -88,7 +88,7 @@ def test_tailnet_runtime_resolution_and_neutral_defaults(monkeypatch):
 
 def test_manifest_secrets_are_optional_and_capabilities_truthful():
     manifest = yaml.safe_load((ROOT / "plugin.yaml").read_text(encoding="utf-8"))
-    assert manifest["version"] == "1.0.1" and manifest["requires_hermes"] == ">=0.22.0"
+    assert manifest["version"] == "1.1.0" and manifest["requires_hermes"] == ">=0.22.0"
     assert manifest["capabilities"] == []
     assert manifest["platforms"] == ["webhook"] and manifest["provides_hooks"] == []
     assert {s["name"] for s in manifest["requires_env"]} == {"HERENOW_API_KEY", "MOCKREVIEW_WEBHOOK_SECRET"}
@@ -203,6 +203,18 @@ def test_no_credential_store_reads_across_public_operations(env, variants, tmp_p
         return SimpleNamespace(returncode=0, stderr="publish_result.slug=guard-review-ab12\n"
             "publish_result.site_url=https://guard-review-ab12.here.now/\npublish_result.auth_mode=authenticated\n")
     monkeypatch.setattr(subprocess, "run", publish)
+    # Exercise account API reads and deletes without network providers.
+    class Reply:
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def read(self, *a): return b'{"records": []}'
+    original_urlopen = herenow.urllib.request.urlopen
+    def urlopen(request, **kw):
+        if not request.full_url.startswith(config.HERENOW_API):
+            return original_urlopen(request, **kw)
+        assert request.get_header("Authorization") == "Bearer " + secret_values["HERENOW_API_KEY"]
+        return Reply()
+    monkeypatch.setattr(herenow.urllib.request, "urlopen", urlopen)
     herenow.publish(data["id"])
     assert owner.describe()["wake"]["secret"] == "set"
     assert SECRET not in json.dumps(owner.describe())
@@ -219,15 +231,6 @@ def test_no_credential_store_reads_across_public_operations(env, variants, tmp_p
     assert created["review_id"]
     assert cli.main(["create", "--title", "CLI guard", "--platform", "telegram", "--chat-id", "test-group",
                      "--mode", "local", "--prototype", variants[0].split("|")[2], "--allow-live-demo"]) == 0
-    # Exercise account API reads and deletes without network providers.
-    class Reply:
-        def __enter__(self): return self
-        def __exit__(self, *a): pass
-        def read(self, *a): return b'{"records": []}'
-    def urlopen(request, **kw):
-        assert request.get_header("Authorization") == "Bearer " + secret_values["HERENOW_API_KEY"]
-        return Reply()
-    monkeypatch.setattr(herenow.urllib.request, "urlopen", urlopen)
     assert herenow.fetch_records("guard-review-ab12") == []
     assert herenow.delete_site("guard-review-ab12") is True
     secret_values.clear()

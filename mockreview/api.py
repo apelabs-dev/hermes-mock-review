@@ -15,7 +15,7 @@ import time
 import urllib.request
 from typing import Any, Dict, List, Optional
 
-from . import config, feedback, herenow, owner, service, settings, store
+from . import config, feedback, herenow, locks, owner, service, settings, store
 from .store import ReviewError
 
 log = logging.getLogger("mockreview.api")
@@ -74,7 +74,7 @@ def _owned(fn):
 def create(title: str, origin: Optional[Dict[str, str]] = None, brief: str = "", mode: Optional[str] = None,
            decisions: Optional[str] = None,
            prototype: Optional[str] = None, design: Optional[str] = None, allow_live_demo: Optional[bool] = None,
-           wake: Optional[bool] = None, **look: Any) -> Dict[str, Any]:
+           wake: Optional[bool] = None, password: Optional[bool] = None, **look: Any) -> Dict[str, Any]:
     """Create a review; `look` = per-review overrides (devices, default_device, default_theme, ...).
 
     Preflight, all before anything is published: the owning board server is found (or this process's store is the
@@ -88,6 +88,7 @@ def create(title: str, origin: Optional[Dict[str, str]] = None, brief: str = "",
     try:
         stored = settings.review_settings(look)
         want_wake = bool(settings.get("wake_required", wake))
+        want_password = settings.get("herenow_password", password)
     except settings.SettingsError as e:
         raise _settings_error(e)
     origin = store.normalize_origin(origin, wake=want_wake)
@@ -98,7 +99,7 @@ def create(title: str, origin: Optional[Dict[str, str]] = None, brief: str = "",
     if mode == "herenow" and ctx.state == "unreachable":
         raise owner.OwnerError(f"refusing to publish a public board: {ctx.why}. Nothing would poll its feedback.", 503)
     with owner.bound(ctx):
-        data = store.create_review(title, brief, origin, mode, spec, look=stored, wake=want_wake)
+        data = store.create_review(title, brief, origin, mode, spec, look=stored, wake=want_wake, password=want_password)
         if not owner.confirm_visible(data["id"], ctx):
             owner.discard_created(data["id"])
             raise owner.OwnerError(
@@ -123,6 +124,7 @@ def create(title: str, origin: Optional[Dict[str, str]] = None, brief: str = "",
                 res["note"] = ("local link opens on this computer only: the server listens on loopback. Set "
                                "plugins.entries.mock-review.settings.host to 0.0.0.0 (and restart it) to open it from "
                                "other devices on your network.")
+        res.update(herenow.password_result(data))
         res["url"] = store.review_url(data)
     return res
 
@@ -151,7 +153,7 @@ def add_round(review_id: str, decisions: Optional[str] = None, prototype: Option
         if data["mode"] == "herenow":
             data = herenow.publish(review_id)
         return {"review_id": review_id, "round": data["rounds"][-1]["n"], "url": store.review_url(data),
-                "mode": data["mode"], "owner": ctx.as_dict()}
+                "mode": data["mode"], "owner": ctx.as_dict(), **herenow.password_result(data)}
 
 
 @_owned
@@ -180,7 +182,9 @@ def list_reviews(include_closed: bool = False) -> List[Dict[str, Any]]:
                      "rounds": len(d["rounds"]), "origin": d.get("origin", {}),
                      "thread_id": (d.get("origin") or {}).get("thread_id"),
                      "current_round_feedback": (cur.get("submission") or {}).get("status", "waiting"),
-                     "url": store.review_url(d), "updated_at": d.get("updated_at")})
+                     "url": store.review_url(d),
+                     "password_status": (d.get("herenow") or {}).get("password_status", "legacy"),
+                     "updated_at": d.get("updated_at")})
     return rows
 
 
@@ -192,8 +196,20 @@ def review_link(review_id: str) -> Dict[str, Any]:
 
 
 @_owned
+def password(review_id: str, enabled: bool) -> Dict[str, Any]:
+    data = herenow.set_password(review_id, enabled)
+    return {"review_id": review_id, "url": store.review_url(data), **herenow.password_result(data)}
+
+
+@_owned
 def close(review_id: str) -> Dict[str, Any]:
     """Close a review. here.now: final poll, archive the Site Data records, delete the public site."""
+    store.load(review_id)
+    with locks.exclusive(store.review_dir(review_id) / ".publish.lock"):
+        return _close(review_id)
+
+
+def _close(review_id: str) -> Dict[str, Any]:
     data = store.load(review_id)
     res: Dict[str, Any] = {"review_id": review_id, "mode": data["mode"]}
     if data["mode"] == "herenow" and (data.get("herenow") or {}).get("slug") and data["status"] == "open":

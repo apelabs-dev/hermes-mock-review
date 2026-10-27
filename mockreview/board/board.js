@@ -341,7 +341,7 @@
   function renderHeader() {
     var st = R();
     var modeBadge = st.mode === 'herenow'
-      ? h('span', { class: 'badge badge-public', title: 'Published on here.now — anyone with the link can view' }, icon('globe'), 'Public link')
+      ? h('span', { class: 'badge badge-public', title: 'Hosted on here.now' }, icon('globe'), 'here.now')
       : st.mode === 'local'
         ? h('span', { class: 'badge badge-private', title: 'Served from this computer at its local address, no Tailscale' }, icon('home'), 'Local')
         : h('span', { class: 'badge badge-private', title: 'Served from the board server, reachable on the tailnet only' }, icon('lock'), 'Tailnet only');
@@ -934,6 +934,19 @@
   }
 
   // Mock HTML is my own static markup, but treat it as untrusted anyway: parsed inert, no scripts, no handlers.
+  function safeLink(value) {
+    // URL() alone normalizes whitespace and relative addresses. Reject those first.
+    if (typeof value !== 'string' || /[\s\u0000-\u001f\u007f-\u009f]/.test(value) || !/^https?:\/\//i.test(value)) return null;
+    try {
+      var url = new URL(value);
+      return (url.protocol === 'https:' || url.protocol === 'http:') && url.hostname ? url.href : null;
+    } catch (e) { return null; }
+  }
+  function secureLink(el, url) {
+    el.setAttribute('href', url);
+    el.setAttribute('target', '_blank');
+    el.setAttribute('rel', 'noopener noreferrer');
+  }
   function cleanFragment(html) {
     var t = document.createElement('template');
     t.innerHTML = html;
@@ -943,9 +956,15 @@
     t.content.querySelectorAll('*').forEach(function (el) {
       [].slice.call(el.attributes).forEach(function (a) {
         var n = a.name.toLowerCase(), v = a.value.trim().toLowerCase();
-        if (n.slice(0, 2) === 'on' || ((n === 'href' || n === 'src' || n === 'xlink:href' || n === 'action' || n === 'formaction') && v.slice(0, 11) === 'javascript:')) el.removeAttribute(a.name);
+        if (n.slice(0, 2) === 'on' || n === 'xlink:href' ||
+            (n === 'href' && el.tagName.toUpperCase() !== 'A') ||
+            ((n === 'href' || n === 'src' || n === 'action' || n === 'formaction') && v.slice(0, 11) === 'javascript:')) el.removeAttribute(a.name);
       });
-      if (el.tagName === 'A') el.removeAttribute('href');
+      if (el.tagName.toUpperCase() === 'A') {
+        var url = safeLink(el.getAttribute('href'));
+        ['href', 'target', 'rel', 'ping', 'download', 'referrerpolicy'].forEach(function (n) { el.removeAttribute(n); });
+        if (url) secureLink(el, url);
+      }
     });
     return t.content;
   }
@@ -984,7 +1003,7 @@
       widthSeg.classList.add('wseg');
     }
     var chip = st.mode === 'herenow'
-      ? h('span', { class: 'badge badge-public', title: 'Published on here.now: anyone with the link can view' }, icon('globe'), h('span', { class: 'bl', text: 'here.now' }))
+      ? h('span', { class: 'badge badge-public', title: 'Hosted on here.now' }, icon('globe'), h('span', { class: 'bl', text: 'here.now' }))
       : st.mode === 'local'
       ? h('span', { class: 'badge badge-private', title: 'Served from this computer at its local address, no Tailscale' }, icon('home'), h('span', { class: 'bl', text: 'Local' }))
       : h('span', { class: 'badge badge-private', title: 'Served from the board server, reachable on the tailnet only' }, icon('lock'), h('span', { class: 'bl', text: 'Tailnet' }));
@@ -1145,12 +1164,38 @@
   function renderTable(b) {   // scrolls sideways inside its own card on a phone; the first column stays put
     var hl = b.highlight_col;
     function cls(j) { return [j === 0 ? 'c0' : '', j === hl ? 'hl' : ''].join(' ').trim() || null; }
+    function cellText(cell, value) {
+      var text = String(value), re = /https?:\/\/[^\s<>"'\u0000-\u001f\u007f-\u009f]+/gi, match, end = 0;
+      while ((match = re.exec(text))) {
+        // Do not extract a URL from another scheme or a protocol-relative address.
+        if (match.index && /[\w\/:@%+.-]/.test(text[match.index - 1])) continue;
+        var label = match[0], pairs = { ')': '(', ']': '[', '}': '{' };
+        // Leave sentence punctuation and unmatched closing brackets outside the link.
+        while (label) {
+          var last = label.slice(-1), open = pairs[last];
+          if (/[.,!?;:]/.test(last) || (open && label.split(last).length > label.split(open).length)) label = label.slice(0, -1);
+          else break;
+        }
+        var url = safeLink(label);
+        if (!url) continue;
+        cell.appendChild(document.createTextNode(text.slice(end, match.index)));
+        var a = h('a', { text: label });
+        secureLink(a, url);
+        cell.appendChild(a);
+        end = match.index + label.length;
+      }
+      cell.appendChild(document.createTextNode(text.slice(end)));
+    }
     return h('section', { class: 'blk blk-table' }, b.title ? h('h2', { text: b.title }) : null,
       h('div', { class: 'tbl-wrap', tabindex: '0', role: 'region', 'aria-label': b.title || 'Table' },
         h('table', { class: 'tbl' },
           h('thead', null, h('tr', null, b.columns.map(function (c, j) { return h('th', { scope: 'col', class: cls(j), text: c }); }))),
           h('tbody', null, b.rows.map(function (row) {
-            return h('tr', null, row.map(function (c, j) { return h(j ? 'td' : 'th', { scope: j ? null : 'row', class: cls(j), text: c }); }));
+            return h('tr', null, row.map(function (c, j) {
+              var cell = h(j ? 'td' : 'th', { scope: j ? null : 'row', class: cls(j) });
+              cellText(cell, c);
+              return cell;
+            }));
           })))));
   }
   function renderContextMock(r, a, b) {   // a real app mock for context ("today"): pins yes, vote no
@@ -1233,7 +1278,7 @@
     cq.appendChild(root); sr.appendChild(cq);
     var m = { r: r, b: b, o: o, w: w, outer: outer, inner: inner, pins: pins, scale: 1 };
     MOCKS.push(m);
-    inner.addEventListener('click', function (e) { if (!e.target.closest('.mpin')) tapMock(m, e); });
+    inner.addEventListener('click', function (e) { mockClick(m, e); });
     if (window.ResizeObserver) { var ro = new ResizeObserver(function () { fit(m); }); ro.observe(outer); ro.observe(inner); }
     requestAnimationFrame(function () { fit(m); drawPins(m); });
     return outer;
@@ -1280,6 +1325,12 @@
     var pin = m.pins.querySelectorAll('.mpin')[[].slice.call(S.draft.pins).filter(function (q, j) { return j < i && q.block === p.block && q.option === p.option && q.w === p.w; }).length];
     (pin || m.outer).scrollIntoView({ behavior: 'smooth', block: 'center' });
     if (pin) setTimeout(function () { pin.classList.add('flash'); setTimeout(function () { pin.classList.remove('flash'); }, 900); }, 350);
+  }
+  function mockClick(m, e) {
+    // Events crossing the shadow root retarget to the host; inspect the actual path.
+    var path = e.composedPath ? e.composedPath() : [e.target];
+    if (path.some(function (el) { return el.closest && el.closest('a[href],.mpin'); })) return;
+    tapMock(m, e);
   }
   function tapMock(m, e) {
     if (!isEditable() || !pinsOn()) return;

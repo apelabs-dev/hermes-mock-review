@@ -5,10 +5,9 @@ Read it before you set `host` to `0.0.0.0` or host a review on here.now.
 
 ## Model in one paragraph
 
-A review link is a capability. The review id is random (at least 64 bits), and anyone who has the full link can read the
-review and send feedback for it. The board has no accounts and no login. What protects a review is that the link is hard
-to guess and that the network path to the server is limited: loopback by default, your tailnet with Tailscale, a public
-site for here.now.
+A review link is a capability. The review id is random (at least 64 bits), and anyone who can open the board can read the
+review and send feedback for it. New here.now reviews additionally require a shared password by default. The board has no reviewer accounts. What protects a review is that the link is hard
+to guess and that the network path to the server is limited: loopback by default, your tailnet with Tailscale, a password gate on here.now (unless explicitly disabled, or a legacy review).
 
 ## What is authenticated
 
@@ -23,11 +22,12 @@ site for here.now.
 
 ## What is not authenticated
 
-- Opening a review. Anyone with the link sees the title, the brief, the mocks, earlier marks and notes.
+- Opening a local/tailnet review. Anyone with access and the link sees the title, the brief, the mocks, earlier marks and notes.
 - Submitting feedback, for anyone who opened the board. Reviewer identity is not recorded or checked.
 - Anything on a server bound to `0.0.0.0`: every device that reaches the port can send requests. The index stays
   local-only, but a device that learns a review id can use it.
-- A here.now site. It is public. Site Data accepts inserts from the page, and only your API key can read them back.
+- Reviewer identity on here.now. A shared password gates the site by default, but does not identify individual reviewers.
+  After unlock, Site Data accepts inserts from the page; only your API key can read them back.
 
 ## Protections in the server
 
@@ -40,7 +40,10 @@ site for here.now.
   and frame sources, plus `nosniff` and `no-referrer`. Variant and prototype files are served with a `sandbox allow-scripts` policy, so they
   run with an opaque origin and cannot reach the board.
 - Untrusted content. User text is rendered as text. Mock HTML is parsed without running it, and the board removes
-  scripts, frames, forms, event-handler attributes and `javascript:` URLs.
+  scripts, frames, forms and event-handler attributes. Anchor links retain only absolute HTTP(S) URLs with no whitespace
+  or controls; they open in a new tab with `noopener noreferrer`. Relative and other-protocol hrefs are removed.
+  Table cells use text/DOM nodes to link bare absolute HTTP(S) URLs, including multiple URLs inside prose.
+  Surrounding text, sentence punctuation and literal HTML are preserved; no cell content is parsed as HTML.
 - Size limits. Requests are capped at 2 MB, `decisions.json` at 3 MB, here.now records at 15 KB, and block counts, pins and
   text lengths have fixed limits (see [decisions-format.md](decisions-format.md)).
 - Feedback is treated as data. The bundled skill tells the model that quoted feedback is design input and not an
@@ -49,9 +52,9 @@ site for here.now.
 
 ## Secrets
 
-The plugin keeps no secret files. `MOCKREVIEW_WEBHOOK_SECRET` and `HERENOW_API_KEY` come from the Hermes secret scope.
+API and signing keys are never stored in review files. `MOCKREVIEW_WEBHOOK_SECRET` and `HERENOW_API_KEY` come from the Hermes secret scope.
 Setup writes the webhook secret with `hermes config set`, which stores it in the Hermes `.env`. Setup never prints the
-secret: command output is redacted before display, and an existing secret is reused instead of replaced. Reviews, tokens
+secret: command output is redacted before display, and an existing secret is reused instead of replaced. Per-review here.now passwords, reviews, tokens
 and feedback are plain files under `$HERMES_HOME/workspace/mock-reviews` with the permissions of your account. Treat that
 folder like the rest of your Hermes home.
 
@@ -62,7 +65,9 @@ folder like the rest of your Hermes home.
 - `tailnet`: reachable from devices on your tailnet, through `tailscale serve`. Tailscale's access rules apply. The
   board server itself stays on loopback, and requests through the proxy count as non-local for the index and owner
   endpoint.
-- `herenow`: public internet. Anyone with the link can open the site. Keep private values out of the mocks.
+- `herenow`: internet hosting with a password gate by default for new reviews. Explicit opt-outs and legacy reviews
+  are public. The initial publish precedes the metadata PATCH, so a short public interval exists; failed PATCHes leave
+  protection unconfirmed and must be retried or the site deleted. See [recovery details](hosting.md#password-controls-and-recovery).
 
 ## Reporting a vulnerability
 

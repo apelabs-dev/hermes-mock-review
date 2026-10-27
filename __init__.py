@@ -65,7 +65,7 @@ def _live_demo_prop(on: bool) -> Dict[str, Any]:
 
 def _mode_prop(ask: bool, host: str) -> Dict[str, Any]:
     return {"type": "string", "enum": ["tailnet", "local", "herenow"], "description": (
-        "Hosting. Ask the user first: tailnet (private), local (this computer's address) or herenow (public link)."
+        "Hosting. Ask the user first: tailnet (private), local (this computer's address) or herenow (password protected by default)."
         if ask else
         f"Hosting; omit for the saved default ({host}).")}
 
@@ -87,6 +87,7 @@ def schemas(ask_host: bool, default_host: str, live_demo: bool) -> Dict[str, Dic
                     "description": "Copy the thread ID from your session context in the system prompt if present; otherwise omit."},
                 "brief": {"type": "string"},
                 "mode": _mode_prop(ask_host, default_host),
+                "password": {"type": "boolean", "description": "Password protect here.now (default true); return password next to URL."},
                 **ROUND_PROPS, "allow_live_demo": _live_demo_prop(live_demo), **LOOK_PROPS,
                 "wake": {"type": "boolean", "description": "False: demo board nobody is woken by (skips the wake-route check)."}},
                 "required": ["title"]},
@@ -157,7 +158,7 @@ class MockReview:
                     out: Any = api.create(a["title"], origin or None, brief=a.get("brief") or "",
                                           mode=a.get("mode"), decisions=a.get("decisions"),
                                           prototype=a.get("prototype"), design=a.get("design"),
-                                          allow_live_demo=a.get("allow_live_demo"), wake=a.get("wake"), **look)
+                                          allow_live_demo=a.get("allow_live_demo"), wake=a.get("wake"), password=a.get("password"), **look)
                 elif name == "mock_review_add_round":
                     if not a.get("review_id"):
                         return json.dumps({"error": "review_id is required"})
@@ -191,7 +192,7 @@ class MockReview:
         _, cli, _, _ = self._bind()
         return cli.run(args)
 
-    # `/mockreview list | open <id> | close <id> | settings`
+    # `/mockreview list | open <id> | close <id> | password <id> on|off | settings`
     def slash(self, raw: str = "") -> str:
         try:
             api, cli, settings, ReviewError = self._bind()
@@ -213,6 +214,8 @@ class MockReview:
                 res = api.close(parts[1])
                 extra = " Its here.now site was deleted." if res.get("site_deleted") else ""
                 return f"Closed {parts[1]}.{extra}"
+            if cmd == "password" and len(parts) == 3 and parts[2] in ("on", "off"):
+                return json.dumps(api.password(parts[1], parts[2] == "on"), ensure_ascii=False)
             if cmd == "settings":
                 return cli.settings_text(settings.resolve_all(), settings.describe())
         except ReviewError as e:
@@ -220,7 +223,7 @@ class MockReview:
         except Exception as e:
             log.exception("/mockreview %s failed", raw)
             return f"Error: {type(e).__name__}: {e}"
-        return "Usage: /mockreview list | open <review_id> | close <review_id> | settings"
+        return "Usage: /mockreview list | open <review_id> | close <review_id> | password <review_id> on|off | settings"
 
 
     # ctx.register_platform_handler("webhook", ...): the gateway calls this when its webhook platform connects.
@@ -250,8 +253,8 @@ def register(ctx: Any) -> None:
                           description=schema["description"], emoji="🖼️")
     ctx.register_skill("usage", PLUGIN_DIR / "skills" / "usage" / "SKILL.md",
                        description="When and how to use the mock_review_* tools and settings")
-    ctx.register_command("mockreview", handler=mr.slash, description="Mock reviews: list, open, close, settings",
-                         args_hint="list | open <id> | close <id> | settings")
+    ctx.register_command("mockreview", handler=mr.slash, description="Mock reviews: list, open, close, password, settings",
+                         args_hint="list | open <id> | close <id> | password <id> on|off | settings")
     register_cli = getattr(ctx, "register_cli_command", None)
     if callable(register_cli):
         register_cli(name="mockreview", help="Mock review boards and settings",
