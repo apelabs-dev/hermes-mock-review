@@ -3,6 +3,13 @@
 All notable changes to this project are listed here. The format follows Keep a Changelog, and the project follows
 semantic versioning.
 
+## [1.1.1](https://github.com/arspesk/hermes-mock-review/compare/v1.1.0...v1.1.1) (2026-10-27)
+
+
+### Miscellaneous Chores
+
+* release 1.1.1 ([682388a](https://github.com/arspesk/hermes-mock-review/commit/682388a4d2e78c3d7409ca9bb87c130553f1d242))
+
 ## [1.1.0] - 2026-10-27
 
 ### Added
