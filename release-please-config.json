@@ -16,7 +16,9 @@
           "type": "generic",
           "path": "mockreview/__init__.py"
         }
-      ]
+      ],
+      "include-component-in-tag": false
     }
-  }
+  },
+  "include-component-in-tag": false
 }
