@@ -5,9 +5,16 @@ Branch: `feat/herenow-password-links`.
 Base: `57b1f581d03cb266b89bb4b6239573504a6405a6`.
 Implementation commit: `4a4a787a006da70a53f6ba952291f9fe1905cb3a`.
 
-The original implementation and historical report are separate commits. This correction reuses the same branch and PR,
-fixes embedded table URLs, and updates the validation and deferred handoff below. The final correction SHA and its
-exact-head CI evidence are recorded in the PR and final handoff after CI completes, avoiding a commit self-reference loop.
+The original implementation and historical report are separate commits. The embedded-table-URL correction completed at
+[`a40e98917a500f83ab41cefc88b95744669ab962`](https://github.com/arspesk/hermes-mock-review/commit/a40e98917a500f83ab41cefc88b95744669ab962),
+with [CI run 40585596181](https://github.com/arspesk/hermes-mock-review/actions/runs/40585596181) **16/16 jobs successful**
+at that exact head: 12 test jobs, three plugin validators and the identifier sweep.
+
+This is a **report-only followup** on the same branch and PR. It changes only `REPORT.md`, restores the required exact
+deferred deployment/restart/cleanup templates, and records the parent's independent validation below. Production code,
+tests and CI are unchanged; full suites are not rerun for this documentation correction. The PR report link identifies
+this followup's final commit. The parent will supervise and verify all 16 CI jobs at that final head; the completed run
+above belongs to the earlier correction SHA and is not claimed as final-followup CI evidence.
 
 ## Changed files
 
@@ -69,6 +76,19 @@ shadow roots without creating pins; other mock clicks still pin, and pick contro
 
 ## Validation evidence
 
+Parent independent validation of the completed correction (reported by the parent before this report-only followup):
+
+- Python 3.9: **524 passed, 16 skipped in 111.79 s**.
+- Python 3.14: **524 passed, 16 skipped in 113.07 s**.
+- Hermes integration environment: **540 passed in 123.62 s**.
+- Documentation smoke check: **45 OK, 0 FAIL**.
+- Node syntax and generated-reference checks **passed**; private tree/history sweeps: **0 hits** each.
+
+Report-only followup validation: Markdown paths and diff whitespace **passed**. The report snapshot tree and existing
+full-history private sweeps found **0 hits** each, with **20 private tokens** and **16 generic rules**. The final
+committed-tree and full-history gates are repeated before pushing only `feat/herenow-password-links`.
+No deferred command below is executed.
+
 Correction validation (540 collected tests per full suite):
 
 - uv Python 3.9: **524 passed, 16 skipped in 98.02 s**.
@@ -124,10 +144,10 @@ the update. Those future checks were not executed here.
 ## Deferred commands — do not run before merge/release authorization
 
 The authorized card overrides older checklist instructions to work directly on main or use a temporary CI branch.
-This correction only pushes its existing feature branch and updates the existing PR. Release/catalog commands below
-are deferred public handoff templates for the reviewer; owner-specific deployment/restart commands and identifiers
-belong in the supervisor's separate private handoff. They are not supplied by this public report;
-none of merge, tag, release, catalog mutation, deploy or restart was run in this task.
+This correction only pushes its existing feature branch and updates the existing PR. All commands in this section
+are non-executed templates for later authorized work, including the complete deployment/restart/cleanup sequence.
+Explicit restart approval is required in addition to merge/release authorization. None of merge, tag, release,
+catalog mutation, live setup, deploy, restart or live verification was run in this task.
 
 ```bash
 PR_NUMBER=1
@@ -201,16 +221,67 @@ rm "$CATALOG_BODY"
 # After that upstream PR merges, delete only this catalog branch/clone as appropriate.
 ```
 
-The release checklist's live-machine setup dry run, deployment, restart pre-flight/positive control, approved restart
-and one-shot end-to-end verification are owner-only postmerge work. The supervisor will attach exact commands and
-actual deployment/restart identifiers privately. No deployment or restart command is written or run by this correction.
-The separate handoff must retain the required order: live setup dry run before an owner/setup switch, deploy/check,
-old-process positive control, explicit restart approval, then the approved restart action.
+After merge/release authorization, run the release checklist's live-machine setup dry run before any owner/setup switch.
+Treat any proposed address or command needing a manual override as a plugin bug; fix it before switching rather than
+patching live configuration. Then deploy and check the installed copy. These commands are recorded only, not executed.
+
+The canonical deployment script path triggered the private identifier sweep. Its basename must therefore remain
+`DEPLOY_SCRIPT_NAME`: set that variable to the approved deployment script's basename from the installed release
+checklist before running the two templates. The literal matched value is omitted; the sweep is not bypassed.
+
+```bash
+hermes mockreview setup --dry-run --hosting tailnet --origin-platform discord --port 8790 --skip-test-review
+bash "$HOME/.hermes/scripts/${DEPLOY_SCRIPT_NAME:?}" mock-review
+bash "$HOME/.hermes/scripts/${DEPLOY_SCRIPT_NAME:?}" mock-review --check
+```
+
+Use the installed release checklist's `scripts/restart_check.py` as the source below. `OLD_BOARD_PID` is the board's
+current pre-restart PID, `THREAD_ID` is the approved delivery thread, and `RESTART_JOB_ID` is the existing approved
+gateway-restart job supplied privately by the parent. It is distinct from `CHECK_JOB_ID`, returned when creating the
+new verification job. No private identifier is embedded here. Capture the old board PID before restarting; do not
+guess a PID or a delivery thread. Run the old-process positive control after deploy/check:
+
+```bash
+RESTART_CHECK_SOURCE="$HOME/.hermes/skills/creative/mock-review/scripts/restart_check.py"
+OLD_BOARD_PID='<current-board-pid>'
+THREAD_ID='<approved-delivery-thread-id>'
+RESTART_JOB_ID='<existing-approved-restart-job-id>'
+MR_DRY=1 MR_OLD_PID=0 MR_VERSION=1.1.0 python3 "$RESTART_CHECK_SOURCE"
+cp "$RESTART_CHECK_SOURCE" "$HOME/.hermes/scripts/mockreview_restart_check.py"
+```
+
+The positive control must show the "started after the deploy" check failing while the old process still runs.
+Before scheduling, edit only the copied `mockreview_restart_check.py`: set its top-level `MR_OLD_PID` to the numeric
+`OLD_BOARD_PID`, `MR_VERSION` to `"1.1.0"` and `MR_THREAD` to the quoted `THREAD_ID`. Leave the source script untouched.
+Create the one-shot verification job and retain the returned job ID for cleanup:
+
+```bash
+hermes cron create --name "mock-review restart check (one-shot)" --deliver "discord:$THREAD_ID" --repeat 1 --script mockreview_restart_check.py --no-agent 2m
+CHECK_JOB_ID='<verification-job-id-returned-by-create>'
+```
+
+Obtain explicit restart approval before the following command. Run the existing approved restart job as the last
+action of that later turn, because restarting the gateway ends the agent session. This command is deferred here:
+
+```bash
+hermes cron run "$RESTART_JOB_ID"
+```
 
 Post-restart verification must prove a new board PID inside the gateway, started after deployment, version 1.1.0,
 loopback `/api/owner` 200, tailnet `/healthz` 200, a resolving public base, and a timestamped local/tailnet review reaching
 Send 200, wake 202 and notice `200 delivered`. None of these live checks was performed in this task. After the owner
-verifies them, close and remove only that verification review and remove only its copied check script and one-shot cron.
+verifies them, take `REVIEW_ID` and its exact local directory from that check's output. Confirm the directory belongs
+to that timestamped verification review before removal. These exact cleanup templates are also deferred; preserve
+unrelated reviews, scripts and cron jobs, including the existing restart job:
+
+```bash
+REVIEW_ID='<verification-review-id>'
+REVIEW_DIR='<absolute-directory-of-that-verification-review>'
+hermes mockreview close "$REVIEW_ID"
+rm -r -- "${REVIEW_DIR:?}"
+rm -- "$HOME/.hermes/scripts/mockreview_restart_check.py"
+hermes cron remove "$CHECK_JOB_ID"
+```
 
 ## Cleanup
 
