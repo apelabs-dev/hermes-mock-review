@@ -1164,6 +1164,28 @@
   function renderTable(b) {   // scrolls sideways inside its own card on a phone; the first column stays put
     var hl = b.highlight_col;
     function cls(j) { return [j === 0 ? 'c0' : '', j === hl ? 'hl' : ''].join(' ').trim() || null; }
+    function cellText(cell, value) {
+      var text = String(value), re = /https?:\/\/[^\s<>"'\u0000-\u001f\u007f-\u009f]+/gi, match, end = 0;
+      while ((match = re.exec(text))) {
+        // Do not extract a URL from another scheme or a protocol-relative address.
+        if (match.index && /[\w\/:@%+.-]/.test(text[match.index - 1])) continue;
+        var label = match[0], pairs = { ')': '(', ']': '[', '}': '{' };
+        // Leave sentence punctuation and unmatched closing brackets outside the link.
+        while (label) {
+          var last = label.slice(-1), open = pairs[last];
+          if (/[.,!?;:]/.test(last) || (open && label.split(last).length > label.split(open).length)) label = label.slice(0, -1);
+          else break;
+        }
+        var url = safeLink(label);
+        if (!url) continue;
+        cell.appendChild(document.createTextNode(text.slice(end, match.index)));
+        var a = h('a', { text: label });
+        secureLink(a, url);
+        cell.appendChild(a);
+        end = match.index + label.length;
+      }
+      cell.appendChild(document.createTextNode(text.slice(end)));
+    }
     return h('section', { class: 'blk blk-table' }, b.title ? h('h2', { text: b.title }) : null,
       h('div', { class: 'tbl-wrap', tabindex: '0', role: 'region', 'aria-label': b.title || 'Table' },
         h('table', { class: 'tbl' },
@@ -1171,9 +1193,7 @@
           h('tbody', null, b.rows.map(function (row) {
             return h('tr', null, row.map(function (c, j) {
               var cell = h(j ? 'td' : 'th', { scope: j ? null : 'row', class: cls(j) });
-              var url = safeLink(c);
-              if (url) { var a = h('a', { text: c }); secureLink(a, url); cell.appendChild(a); }
-              else cell.textContent = c;
+              cellText(cell, c);
               return cell;
             }));
           })))));

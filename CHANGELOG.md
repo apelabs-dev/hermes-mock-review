@@ -16,7 +16,8 @@ semantic versioning.
 ### Fixed
 
 - Absolute HTTP(S) links in mock/option HTML remain clickable with safe new-tab attributes, without creating pins.
-  Table cells containing bare HTTP(S) URLs become DOM-created links; other text stays literal.
+  Bare HTTP(S) URLs in table cells become DOM-created links, including multiple URLs embedded in prose;
+  surrounding text, sentence punctuation and literal HTML stay unchanged.
 
 ## [1.0.1] - 2026-10-23
 

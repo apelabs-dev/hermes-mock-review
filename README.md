@@ -150,5 +150,6 @@ The suite needs `pytest` and `pyyaml`. [AGENTS.md](AGENTS.md) describes the layo
 MIT. See [LICENSE](LICENSE).
 
 Safe absolute HTTP(S) links in mock/option HTML open in a new tab with `noopener noreferrer`. Table cells remain
-text, except a cell containing just an absolute HTTP(S) URL becomes a link. Relative URLs and other link protocols
-are removed. See [password hosting and recovery](docs/hosting.md#herenow) and [security](docs/security.md).
+text, with bare absolute HTTP(S) URLs linked even inside prose or alongside other URLs. Surrounding punctuation
+and literal HTML stay text. Relative URLs and other link protocols are not linked.
+See [password hosting and recovery](docs/hosting.md#herenow) and [security](docs/security.md).

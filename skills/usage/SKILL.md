@@ -35,7 +35,8 @@ tally or the marks.
 
 Example: `{"type":"callout","tone":"warn","title":"Constraint","text":"Must fit one phone screen."}`.
 Safe absolute HTTP(S) links in mock/option HTML open in a new tab without creating pins; other hrefs are removed.
-Table cells are text except bare HTTP(S) URLs, which become links.
+Bare HTTP(S) URLs in table cells become links, including multiple URLs embedded in prose; surrounding text and
+literal HTML are preserved.
 Build decisions.json as a local file and pass its absolute path to create or add-round. The full format is in
 `docs/decisions-format.md` in the plugin repository.
 

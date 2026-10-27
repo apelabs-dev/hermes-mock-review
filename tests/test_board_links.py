@@ -84,16 +84,86 @@ def test_table_bare_urls_are_links_and_script_stays_text():
     run_dom('''
 const table = renderTable({columns: ['Name', 'Value'], rows: [
  ['Site', 'http://example.test/path'], ['HTML', '<script>alert(1)</script>'],
- ['Prose', 'See https://example.test/'], ['Relative', '//example.test/']
+ ['Prose', 'See https://example.test/'], ['Relative', '//example.test/'], ['Number', 42]
 ]});
 const links = table.querySelectorAll('a');
-assert.equal(links.length, 1);
+assert.equal(links.length, 2);
 assert.equal(links[0].getAttribute('href'), 'http://example.test/path');
-assert.equal(links[0].getAttribute('target'), '_blank');
-assert.equal(links[0].getAttribute('rel'), 'noopener noreferrer');
 assert.equal(links[0].textContent, 'http://example.test/path');
+assert.equal(links[1].getAttribute('href'), 'https://example.test/');
+for (const a of links) {
+ assert.equal(a.getAttribute('target'), '_blank');
+ assert.equal(a.getAttribute('rel'), 'noopener noreferrer');
+}
 assert.equal(table.querySelectorAll('script').length, 0);
-assert.ok(table.textContent.includes('<script>alert(1)</script>'));
+assert.deepEqual(table.querySelectorAll('td').map(c => c.textContent), [
+ 'http://example.test/path', '<script>alert(1)</script>', 'See https://example.test/', '//example.test/', '42'
+]);
+''')
+
+
+def test_table_multiple_embedded_urls_preserve_all_text():
+    run_dom('''
+const text = 'Read https://example.test/a and http://example.test/b';
+const html = '<script>"https://example.test/a"</script> & <b>literal</b>';
+const table = renderTable({columns: ['Notes', 'HTML'], rows: [[text, html]]});
+const cells = table.querySelectorAll('tbody')[0].querySelectorAll('th,td');
+assert.equal(cells[0].textContent, text);
+assert.deepEqual(cells[0].querySelectorAll('a').map(a => a.getAttribute('href')),
+ ['https://example.test/a', 'http://example.test/b']);
+assert.equal(cells[1].textContent, html);
+assert.equal(table.querySelectorAll('script,b').length, 0);
+assert.equal(cells[1].querySelectorAll('a')[0].getAttribute('href'), 'https://example.test/a');
+for (const a of table.querySelectorAll('a')) {
+ assert.equal(a.getAttribute('target'), '_blank');
+ assert.equal(a.getAttribute('rel'), 'noopener noreferrer');
+}
+''')
+
+
+@pytest.mark.parametrize('text, label', [
+    ('See https://example.test/a.', 'https://example.test/a'),
+    ('See (https://example.test/a), please.', 'https://example.test/a'),
+    ('See [https://example.test/a]; please.', 'https://example.test/a'),
+    ('See {https://example.test/a}!', 'https://example.test/a'),
+    ('See <https://example.test/a>.', 'https://example.test/a'),
+    ('See "https://example.test/a".', 'https://example.test/a'),
+    ("See 'https://example.test/a'.", 'https://example.test/a'),
+    ('See https://example.test/a?!', 'https://example.test/a'),
+    ('See (https://example.test/a_(b)).', 'https://example.test/a_(b)'),
+    ('See https://example.test/a[b].', 'https://example.test/a[b]'),
+    ('See HTTPS://example.test/a?q=1&b=2#part: done.', 'HTTPS://example.test/a?q=1&b=2#part'),
+    ('First https://example.test/a, then http://example.test/b.', 'https://example.test/a'),
+])
+def test_table_url_punctuation_preserves_text(text, label):
+    run_dom('''
+const text = ''' + json.dumps(text) + ''';
+const label = ''' + json.dumps(label) + ''';
+const table = renderTable({columns: ['Notes'], rows: [[text]]});
+const cell = table.querySelectorAll('tbody')[0].querySelectorAll('th')[0];
+const a = cell.querySelectorAll('a')[0];
+assert.equal(a.textContent, label);
+assert.equal(a.getAttribute('href'), safeLink(label));
+assert.equal(a.getAttribute('target'), '_blank');
+assert.equal(a.getAttribute('rel'), 'noopener noreferrer');
+assert.equal(cell.textContent, text);
+''')
+
+
+@pytest.mark.parametrize('text', [
+    'See //example.test/a or /relative.',
+    'See javascript:alert(1), data:text/plain,example or mailto:test@example.test.',
+    'See javascript:https://example.test/a or data:https://example.test/b.',
+    'See //https://example.test/a or ftp://example.test/b.',
+    'See https:example.test/a or http://.',
+])
+def test_table_other_schemes_and_relative_urls_stay_text(text):
+    run_dom('''
+const text = ''' + json.dumps(text) + ''';
+const table = renderTable({columns: ['Notes'], rows: [[text]]});
+const cell = table.querySelectorAll('tbody')[0].querySelectorAll('th')[0];
+assert.equal(cell.querySelectorAll('a').length, 0);
+assert.equal(cell.textContent, text);
 ''')
 
 

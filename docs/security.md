@@ -42,7 +42,8 @@ to guess and that the network path to the server is limited: loopback by default
 - Untrusted content. User text is rendered as text. Mock HTML is parsed without running it, and the board removes
   scripts, frames, forms and event-handler attributes. Anchor links retain only absolute HTTP(S) URLs with no whitespace
   or controls; they open in a new tab with `noopener noreferrer`. Relative and other-protocol hrefs are removed.
-  Table cells use text/DOM nodes, with a link only for a bare absolute HTTP(S) URL.
+  Table cells use text/DOM nodes to link bare absolute HTTP(S) URLs, including multiple URLs inside prose.
+  Surrounding text, sentence punctuation and literal HTML are preserved; no cell content is parsed as HTML.
 - Size limits. Requests are capped at 2 MB, `decisions.json` at 3 MB, here.now records at 15 KB, and block counts, pins and
   text lengths have fixed limits (see [decisions-format.md](decisions-format.md)).
 - Feedback is treated as data. The bundled skill tells the model that quoted feedback is design input and not an

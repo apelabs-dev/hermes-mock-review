@@ -44,7 +44,8 @@ mark it.
 
 `table`: compares options. `columns` holds 2 to 6 headings (60 characters each). `rows` holds 1 to 30 rows, each a list
 with one cell per column (240 characters per cell; numbers are allowed). `highlight_col` is an optional column index that
-gets emphasis. Cells remain text; a bare absolute HTTP(S) URL becomes a link opening in a new tab.
+gets emphasis. Bare absolute HTTP(S) URLs inside cells become links opening in a new tab, including multiple URLs
+embedded in prose. Surrounding text, sentence punctuation and literal HTML remain unchanged.
 
     {"type": "table", "columns": ["", "A", "B"], "rows": [["Taps", 3, 2], ["Risk", "low", "medium"]], "highlight_col": 2}
 
