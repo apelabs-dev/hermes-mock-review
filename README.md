@@ -145,6 +145,22 @@ Files. Reviews are stored under `$HERMES_HOME/workspace/mock-reviews` (setting `
 The suite needs `pytest` and `pyyaml`. [AGENTS.md](AGENTS.md) describes the layout and the rules a change has to keep.
 [CHANGELOG.md](CHANGELOG.md) lists releases.
 
+### Releasing
+
+Commits on `main` drive the version, through `.github/workflows/release-please.yml` (Release Please, pinned to a commit).
+Every push opens or updates one release pull request; merging it bumps the version, prepends the changelog entry, tags
+`vX.Y.Z` and publishes the GitHub release.
+
+- `fix:` and `perf:` commits cut a patch release, `feat:` a minor, `feat!:` or a `BREAKING CHANGE:` footer a major.
+- `docs:`, `test:`, `ci:` and `chore:` commits cut no release on their own.
+- Do not edit the version by hand. `release-please-config.json` names the files that carry it: `plugin.yaml` and
+  `mockreview/__init__.py`, each marked `x-release-please-version`, plus `.release-please-manifest.json`. A test fails
+  when they disagree.
+- After a release the catalog pin stays manual: a pull request against `NousResearch/hermes-agent` that points its
+  catalog at the new tag.
+- The action needs one repository setting, once: Settings > Actions > General > Workflow permissions, "Allow GitHub
+  Actions to create and approve pull requests".
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
