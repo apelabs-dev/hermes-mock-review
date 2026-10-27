@@ -88,7 +88,9 @@ def test_tailnet_runtime_resolution_and_neutral_defaults(monkeypatch):
 
 def test_manifest_secrets_are_optional_and_capabilities_truthful():
     manifest = yaml.safe_load((ROOT / "plugin.yaml").read_text(encoding="utf-8"))
-    assert manifest["version"] == "1.1.0" and manifest["requires_hermes"] == ">=0.22.0"
+    # The version itself is not asserted here: test_release_config.py owns it, so Release Please can bump it.
+    assert re.fullmatch(r"\d+\.\d+\.\d+", str(manifest["version"]))
+    assert manifest["requires_hermes"] == ">=0.22.0"
     assert manifest["capabilities"] == []
     assert manifest["platforms"] == ["webhook"] and manifest["provides_hooks"] == []
     assert {s["name"] for s in manifest["requires_env"]} == {"HERENOW_API_KEY", "MOCKREVIEW_WEBHOOK_SECRET"}
