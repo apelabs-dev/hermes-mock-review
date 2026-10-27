@@ -33,7 +33,7 @@ def cmd_create(a) -> int:
         origin["thread_id"] = a.thread
     out(api.create(a.title, origin,
                    brief=a.brief, mode=a.mode, decisions=a.decisions, prototype=a.prototype,
-                   design=a.design, allow_live_demo=a.allow_live_demo, wake=a.wake, **_look(a)))
+                   design=a.design, allow_live_demo=a.allow_live_demo, wake=a.wake, password=a.password, **_look(a)))
     return 0
 
 
@@ -98,7 +98,12 @@ def cmd_publish(a) -> int:
         if data["mode"] != "herenow":
             raise ReviewError("only herenow reviews are published")
         data = herenow.publish(a.review_id)
-        out({"review_id": a.review_id, "url": store.review_url(data)})
+        out({"review_id": a.review_id, "url": store.review_url(data), **herenow.password_result(data)})
+    return 0
+
+
+def cmd_password(a) -> int:
+    out(api.password(a.review_id, a.state == "on"))
     return 0
 
 
@@ -226,6 +231,8 @@ def add_commands(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
     _round_args(c)
     _bool_flag(c, "wake", "wake", "require a working wake route and wake Hermes on Send (the default)",
                "a board nobody is woken by: no wake-route check, Send stores feedback and notifies no one")
+    _bool_flag(c, "password", "password", "password protect this here.now review (default: saved setting)",
+               "publish this here.now review without a password")
     c.set_defaults(**{FN: cmd_create})
 
     c = sub.add_parser("add-round", help="add the next round (--decisions or --prototype)")
@@ -287,6 +294,11 @@ def add_commands(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
     c = sub.add_parser("publish", help="re-publish a herenow review")
     c.add_argument("review_id")
     c.set_defaults(**{FN: cmd_publish})
+
+    c = sub.add_parser("password", help="set or remove an open here.now review's password gate")
+    c.add_argument("review_id")
+    c.add_argument("state", choices=("on", "off"))
+    c.set_defaults(**{FN: cmd_password})
 
     c = sub.add_parser("poll", help="poll here.now Site Data once (what the server does every poll_seconds)")
     c.add_argument("review_id", nargs="?")

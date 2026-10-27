@@ -220,3 +220,15 @@ def secret_values(monkeypatch):
     values = {"MOCKREVIEW_WEBHOOK_SECRET": SECRET, "HERENOW_API_KEY": "test-public-key"}
     monkeypatch.setattr(secrets, "get_secret", lambda name: (values.get(name) or "").strip())
     return values
+
+
+@pytest.fixture(autouse=True)
+def block_real_herenow(monkeypatch):
+    """Every here.now HTTP interaction must have an explicit test double."""
+    original = urllib.request.urlopen
+    def guarded(request, *args, **kwargs):
+        url = request.full_url if isinstance(request, urllib.request.Request) else str(request)
+        if url.startswith("https://here.now/") or ".here.now/" in url:
+            raise AssertionError("real here.now HTTP is forbidden in tests")
+        return original(request, *args, **kwargs)
+    monkeypatch.setattr(urllib.request, "urlopen", guarded)

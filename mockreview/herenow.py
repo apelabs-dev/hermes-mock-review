@@ -21,7 +21,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from . import config, locks, service, store
+from . import config, locks, passwords, service, store
 from . import secrets
 from .store import ReviewError
 
@@ -59,22 +59,86 @@ def api_key() -> str:
     return key
 
 
-def _api(method: str, path: str, timeout: float = 20.0) -> Dict[str, Any]:
+def _api(method: str, path: str, timeout: float = 20.0,
+         body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     req = urllib.request.Request(
         config.HERENOW_API + path,
         method=method,
+        data=json.dumps(body).encode("utf-8") if body is not None else None,
         headers={"Authorization": f"Bearer {api_key()}", "X-HereNow-Client": config.HERENOW_CLIENT,
-                 "Accept": "application/json", "User-Agent": "mock-review/1.0 (hermes)"},
+                 "Accept": "application/json", "Content-Type": "application/json",
+                 "User-Agent": "mock-review/1.1 (hermes)"},
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read(4 * 1024 * 1024)
             return json.loads(raw or b"{}")
     except urllib.error.HTTPError as e:
-        body = e.read(1000).decode("utf-8", "replace") if e.fp else ""
-        raise HereNowError(f"here.now {method} {path} -> HTTP {e.code}: {body[:300]}", e.code)
+        # Remote responses may echo credentials, including a password PATCH body.
+        raise HereNowError(f"here.now {method} failed (HTTP {e.code})", e.code) from None
     except (urllib.error.URLError, OSError, ValueError) as e:
-        raise HereNowError(f"here.now {method} {path} failed: {e}", 502)
+        raise HereNowError(f"here.now {method} failed", 502) from None
+
+
+def password_result(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Only explicit owner operations return the password, after confirmed application."""
+    if data.get("mode") != "herenow":
+        return {}
+    hn = data.get("herenow") or {}
+    return {"password": hn.get("password") if hn.get("password_enabled") and
+            hn.get("password_status") == "applied" and hn.get("password_applied") is True else None,
+            "password_enabled": hn.get("password_enabled", False),
+            "password_status": hn.get("password_status", "legacy")}
+
+
+def _apply_password(review_id: str) -> Dict[str, Any]:
+    """Caller holds .publish.lock. Persist intent before the request; reconcile on retry."""
+    with store.locked(review_id):
+        data = store.load(review_id)
+        hn = data["herenow"]
+        if not SLUG_RE.fullmatch(hn.get("slug") or ""):
+            raise HereNowError("password choice saved; publish the review before sharing it", 409)
+        enabled = hn.get("password_enabled", False)
+        if enabled and not hn.get("password"):
+            hn["password"] = passwords.generate()
+        hn.update(password_status="pending", password_applied=None)
+        store.save(review_id, data)
+        value, slug = hn.get("password") if enabled else None, hn["slug"]
+    try:
+        _api("PATCH", f"/publish/{slug}/metadata", body={"password": value})
+    except Exception:
+        with store.locked(review_id):
+            data = store.load(review_id)
+            data["herenow"].update(password_status="error", password_applied=None)
+            store.save(review_id, data)
+        raise HereNowError("here.now password update failed; protection is unconfirmed. "
+                           "Retry password on|off or publish, or close to delete the site.", 502) from None
+    with store.locked(review_id):
+        data = store.load(review_id)
+        hn = data["herenow"]
+        hn.update(password_status="applied", password_applied=enabled)
+        if not enabled:
+            hn["password"] = None
+        store.save(review_id, data)
+    return data
+
+
+def set_password(review_id: str, enabled: bool) -> Dict[str, Any]:
+    if not isinstance(enabled, bool):
+        raise ReviewError("password must be a boolean")
+    store.load(review_id)
+    rdir = store.review_dir(review_id)
+    with locks.exclusive(rdir / ".publish.lock"):
+        with store.locked(review_id):
+            data = store.load(review_id)
+            if data["mode"] != "herenow" or data["status"] != "open":
+                raise ReviewError("password changes require an open herenow review", 409)
+            hn = data["herenow"]
+            hn.update(password_enabled=enabled, password_status="pending", password_applied=None)
+            if enabled and not hn.get("password"):
+                hn["password"] = passwords.generate()
+            store.save(review_id, data)
+        return _apply_password(review_id)
 
 
 def build_site(data: Dict[str, Any], dest: Path) -> Path:
@@ -100,9 +164,12 @@ def publish(review_id: str) -> Dict[str, Any]:
         raise HereNowError(str(e), 409)
     key = api_key()  # Must be nonempty before the helper can run.
     child_env = dict(os.environ, HERENOW_API_KEY=key)
+    store.load(review_id)
     rdir = store.review_dir(review_id)
     with locks.exclusive(rdir / ".publish.lock"):
         data = store.load(review_id)
+        if data["mode"] != "herenow" or data["status"] != "open":
+            raise ReviewError("only open herenow reviews can be published", 409)
         hn = data.get("herenow") or {}
         site = build_site(data, rdir / "site")
         cmd = ["bash", str(script), str(site), "--client", "hermes", "--title", f"Mock review: {data['title']}"[:80]]
@@ -119,15 +186,20 @@ def publish(review_id: str) -> Dict[str, Any]:
                 results[k] = v.strip()
         slug, url = results.get("slug", ""), results.get("site_url", "")
         if proc.returncode != 0 or not SLUG_RE.match(slug or "") or not url.startswith("https://"):
-            tail = "\n".join(proc.stderr.strip().splitlines()[-4:])
-            raise HereNowError(f"here.now publish failed (exit {proc.returncode}): {tail}", 502)
+            raise HereNowError(f"here.now publish failed (exit {proc.returncode}); check the publish helper", 502)
         if results.get("auth_mode") != "authenticated":
             log.warning("here.now publish was not authenticated — Site Data will return 403 account_required")
-    with store.locked(review_id):
-        data = store.load(review_id)
-        data.setdefault("herenow", {}).update(slug=slug, site_url=url, published_at=store.now_iso(),
-                                              auth_mode=results.get("auth_mode"))
-        store.save(review_id, data)
+        with store.locked(review_id):
+            data = store.load(review_id)
+            data.setdefault("herenow", {}).update(slug=slug, site_url=url, published_at=store.now_iso(),
+                                                  auth_mode=results.get("auth_mode"))
+            store.save(review_id, data)
+        # Legacy reviews stay public until explicitly toggled. Never remove a gate on a
+        # normal unprotected republish; retry an interrupted/failed removal, however.
+        hn = data["herenow"]
+        if hn.get("password_enabled") or ("password_enabled" in hn and
+                                          hn.get("password_status") != "applied"):
+            data = _apply_password(review_id)
     return data
 
 

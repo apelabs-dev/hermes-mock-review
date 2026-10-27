@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
-from . import config, locks, settings
+from . import config, locks, passwords, settings
 
 ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 VARIANT_IDS = "abcd"
@@ -584,7 +584,8 @@ def normalize_origin(origin: Any, wake: bool = True) -> Dict[str, str]:
 
 
 def create_review(title: str, brief: str, origin: Any, mode: str, spec: Any,
-                  look: Optional[Dict[str, Any]] = None, wake: bool = True) -> Dict[str, Any]:
+                  look: Optional[Dict[str, Any]] = None, wake: bool = True,
+                  password: Optional[bool] = None) -> Dict[str, Any]:
     """`look`: the per-review settings (settings.review_settings()); stored so the review never changes under the
     reviewer when config changes. None = old behaviour (the board's built-in defaults)."""
     spec = _as_spec(spec)
@@ -618,7 +619,10 @@ def create_review(title: str, brief: str, origin: Any, mode: str, spec: Any,
         if not wake:
             data["wake"] = False       # a board nobody is woken by: Send stores feedback, sends nothing
         if mode == "herenow":
-            data["herenow"] = {"slug": None, "site_url": None, "processed_records": [], "last_poll": None}
+            enabled = settings.get("herenow_password", password)
+            data["herenow"] = {"slug": None, "site_url": None, "processed_records": [], "last_poll": None,
+                               "password_enabled": enabled, "password": passwords.generate() if enabled else None,
+                               "password_applied": None, "password_status": "pending"}
         save(rid, data)
     return data
 
@@ -661,7 +665,10 @@ def get_round(data: Dict[str, Any], n: Optional[int]) -> Dict[str, Any]:
 
 def review_url(data: Dict[str, Any]) -> str:
     if data["mode"] == "herenow":
-        return (data.get("herenow") or {}).get("site_url") or ""
+        hn = data.get("herenow") or {}
+        if "password_enabled" in hn and hn.get("password_status") != "applied":
+            return ""
+        return hn.get("site_url") or ""
     if data["mode"] == "local":
         return f"{config.local_link_base()}/r/{data['id']}"
     base = config.public_base()
