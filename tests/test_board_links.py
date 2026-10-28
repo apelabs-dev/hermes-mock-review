@@ -193,3 +193,16 @@ assert.equal(root.querySelectorAll('a')[0].getAttribute('href'), 'https://exampl
 assert.equal(root.querySelectorAll('a')[0].getAttribute('xlink:href'), null);
 assert.equal(root.querySelectorAll('area')[0].getAttribute('href'), null);
 ''', [html])
+
+
+def test_mock_links_receive_pointer_events():
+    """`.cq` turns pointer events off for the whole mock (taps go to the pin layer). A link inside it
+    inherits that and can't be clicked, even though its href/target/rel are right, so MOCK_BASE must
+    switch pointer events back on for links."""
+    src = (ROOT / 'mockreview' / 'board' / 'board.js').read_text(encoding='utf-8')
+    base = re.search(r"var MOCK_BASE = ((?:'[^']*'\s*\+?\s*)+);", src)
+    assert base, 'MOCK_BASE not found'
+    css = ''.join(re.findall(r"'([^']*)'", base.group(1)))
+    assert re.search(r'\.cq\{[^}]*pointer-events:\s*none', css), 'expected the mock to block pointer events'
+    rule = re.search(r'([^{}]*a\[href\][^{}]*)\{([^}]*)\}', css)
+    assert rule and re.search(r'pointer-events:\s*auto', rule.group(2)), 'links in mocks must get pointer-events:auto'
