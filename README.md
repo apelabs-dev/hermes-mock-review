@@ -17,7 +17,7 @@ Once the plugin is in the Hermes catalog:
 
 Until then, install it from GitHub:
 
-    hermes plugins install arspesk/hermes-mock-review
+    hermes plugins install apelabs-dev/hermes-mock-review
 
 Enable it if the installer did not: `hermes plugins enable mock-review`.
 
