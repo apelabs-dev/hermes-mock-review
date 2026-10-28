@@ -911,8 +911,10 @@
       return /^(\(\s*(min|max)-width\s*:\s*[\d.]+px\s*\)\s*(and\s*)?)+$/i.test(c) ? '@container mock ' + c + ' {' : m;
     });
   }
+  // .cq turns pointer events off for the whole mock (taps become pins); links are switched back on.
   var MOCK_BASE = ':host{display:block}.cq{container:mock/inline-size;pointer-events:none}' +
-    '.cq,.cq *{-webkit-user-select:none;user-select:none}';
+    '.cq,.cq *{-webkit-user-select:none;user-select:none}' +
+    '.cq a[href]{pointer-events:auto;cursor:pointer}';
   function loadAssets(r) {
     if (ASSETS[r.n]) return ASSETS[r.n];
     var base = roundBase(r), d = r.design, out = { dec: null, css: '' }, jobs = [];
