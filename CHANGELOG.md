@@ -3,6 +3,13 @@
 All notable changes to this project are listed here. The format follows Keep a Changelog, and the project follows
 semantic versioning.
 
+## [1.1.2](https://github.com/arspesk/hermes-mock-review/compare/v1.1.1...v1.1.2) (2026-10-28)
+
+
+### Bug Fixes
+
+* make links inside mocks clickable ([#4](https://github.com/arspesk/hermes-mock-review/issues/4)) ([f25c6e9](https://github.com/arspesk/hermes-mock-review/commit/f25c6e916fea74016d0ac1c06a610a71af606ccf))
+
 ## [1.1.1](https://github.com/arspesk/hermes-mock-review/compare/v1.1.0...v1.1.1) (2026-10-27)
 
 
