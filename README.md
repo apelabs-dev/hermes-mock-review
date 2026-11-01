@@ -5,7 +5,7 @@ serves it as a review board, and you open the link, mark each decision Approve, 
 the mocks and press Send. Send wakes the agent in the chat the review came from, with your marks attached. Boards render
 inline mocks at desktop, tablet and phone widths, in light and dark, and wear a per-project design profile.
 
-![A review board: one decision with a before and after option, marked from the footer](docs/img/review-board.png)
+<img src="docs/img/showcase.jpg" alt="mock-review: a Discord thread next to a review board showing a Cash Flow decision" width="100%">
 
 ## Install
 
