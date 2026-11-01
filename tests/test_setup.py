@@ -116,6 +116,29 @@ elif cmd == "webhook" and args[1] == "subscribe":
         out("error: cannot write the route")
         sys.exit(1)
     if has_webhook():
+        if scenario.get("subs"):
+            # Like Hermes: the route is stored in $HERMES_HOME/webhook_subscriptions.json and an update replaces the whole
+            # record, so a manual key such as toolsets does not survive a re-subscribe.
+            home = os.environ["HERMES_HOME"]
+            os.makedirs(home, exist_ok=True)
+            path = os.path.join(home, "webhook_subscriptions.json")
+            try:
+                with open(path, encoding="utf-8") as f:
+                    subs = json.load(f)
+            except Exception:
+                subs = {}
+            opt = dict(zip(args, args[1:]))
+            route = {"description": opt.get("--description", ""), "events": [], "secret": secret,
+                     "prompt": opt.get("--prompt", ""), "skills": [], "deliver": opt.get("--deliver", "log"),
+                     "profile": "default", "deliver_extra": {"chat_id": opt.get("--deliver-chat-id", "")}}
+            if "--deliver-only" in args:
+                route["deliver_only"] = True
+            if "--mirror-to-session" in args:
+                route["mirror_to_session"] = True
+            subs[name] = route
+            with open(path + ".tmp", "w", encoding="utf-8") as f:
+                json.dump(subs, f, indent=2)
+            os.replace(path + ".tmp", path)
         out("Updated webhook subscription: " + name)
         out("Secret: " + secret)
     else:

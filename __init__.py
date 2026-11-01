@@ -107,6 +107,13 @@ def schemas(ask_host: bool, default_host: str, live_demo: bool) -> Dict[str, Dic
                 "review_id": {"type": "string"}, "round": {"type": "integer", "description": "Default: current."}},
                 "required": ["review_id"]},
         },
+        "mock_review_ack": {
+            "name": "mock_review_ack",
+            "description": "Mark a round's feedback as handled (answered here, or no round coming): no stalled ping.",
+            "parameters": {"type": "object", "properties": {
+                "review_id": {"type": "string"}, "round": {"type": "integer", "description": "Default: current."}},
+                "required": ["review_id"]},
+        },
         "mock_review_list": {
             "name": "mock_review_list",
             "description": "List mock reviews (open only unless include_closed).",
@@ -169,6 +176,11 @@ class MockReview:
                         return json.dumps({"error": "review_id is required"})
                     rnd = a.get("round")
                     out = api.get_feedback(a["review_id"], int(rnd) if rnd is not None else None)
+                elif name == "mock_review_ack":
+                    if not a.get("review_id"):
+                        return json.dumps({"error": "review_id is required"})
+                    rnd = a.get("round")
+                    out = api.ack(a["review_id"], int(rnd) if rnd is not None else None)
                 else:
                     out = {"reviews": api.list_reviews(include_closed=bool(a.get("include_closed")))}
                 return json.dumps(out, ensure_ascii=False)

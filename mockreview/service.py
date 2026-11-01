@@ -57,10 +57,28 @@ def notice_text(data: Dict[str, Any], round_: Dict[str, Any]) -> str:
             f"Hermes is working on round {n + 1}; the link lands here when it's ready.")
 
 
-def stalled_text(data: Dict[str, Any], round_: Dict[str, Any], minutes: float) -> str:
+def stalled_text(data: Dict[str, Any], round_: Dict[str, Any], minutes: float,
+                 read_minutes: Optional[float] = None) -> str:
+    """The stalled ping. read_minutes set: the session read the feedback that long ago and still posted no round."""
     n = round_["n"]
+    if read_minutes is not None:
+        return (f"⏳ No round {n + 1} yet for {data['title']}: Hermes read your feedback {read_minutes:g} min ago "
+                f"and has not posted the next round. Ask in this chat or resend from the board.")
     return (f"⏳ No round {n + 1} yet for {data['title']}, {minutes:g} min after you sent it. "
             f"The agent may have stalled; ask in this chat or resend from the board.")
+
+
+def nothing_to_build(round_: Dict[str, Any]) -> bool:
+    """True when a submitted decisions round asks for no further work: every decision is Approved or Skipped (a note
+    on an approve or skip is fine), with no pins and no general notes. The agent is only expected to close then, so
+    no round N+1 will come and a stalled ping would be wrong."""
+    from .store import round_index
+    fb = round_.get("feedback") or {}
+    if fb.get("kind") != "decisions" or fb.get("pins") or (fb.get("guidelines") or "").strip():
+        return False
+    index = round_index(round_)
+    c = feedback.decision_counts(fb, index)
+    return bool(index) and c["change"] == 0 and c["open"] == 0
 
 
 def feedback_path(review_id: str, n: int) -> str:
@@ -223,7 +241,7 @@ def notify_round(review_id: str, round_n: int, url: Optional[str] = None) -> "tu
     return ok, msg
 
 
-TERMINAL_NOTICE = ("notified", "dropped", "no_route")
+TERMINAL_NOTICE = ("notified", "dropped", "no_route", "skipped")
 
 
 def _notice_payload(data: Dict[str, Any], round_: Dict[str, Any], key: str, text: str) -> Dict[str, Any]:
@@ -239,8 +257,10 @@ def _deliver_notice(review_id: str, round_n: int, key: str, url: Optional[str] =
     """POST one notice (key "notice" = the ack, "stalled_notice" = the ping) and persist its state at
     submission[key]. Only the owning server delivers; a failure is logged and retried, never raised. A retry
     after a gateway answer (502, ...) uses a new delivery id, because Hermes keeps the first one as seen even though it
-    was not delivered; a retry after no answer keeps the id. Terminal states: notified; dropped (moot: newer round or closed review); no_route (the gateway has no
-    such route, 404: re-run `hermes mockreview setup`). The ack also waits for the wake to be accepted, because
+    was not delivered; a retry after no answer keeps the id. Terminal states: notified; dropped (moot: newer round or closed review; or
+    permanent: the payload cannot be built, or the gateway rejected it with 400/413/422); no_route (the gateway has no
+    such route, 404: re-run `hermes mockreview setup`); skipped (the stalled ping only: nothing to build, or the
+    session acknowledged the submission). The ack also waits for the wake to be accepted, because
     "Hermes is working on it" is only true then."""
     if owner.is_bound():
         return False, "not the owner service: only the board server delivers notices"
@@ -264,24 +284,47 @@ def _deliver_notice(review_id: str, round_n: int, key: str, url: Optional[str] =
             store.save(review_id, data)
             return False, "dropped: a newer round exists or the review is closed"
         minutes = settings.get("stale_after_minutes")
+        read_minutes = None
         if key == "stalled_notice":
-            ts = _parse_iso(sub.get("submitted_at"))
             if not minutes:
                 return False, "stale-after pings are off"
-            if ts is None or now - ts < minutes * 60.0:
-                return False, "not stale yet"
+            # The ping is for a likely stall only: not for a round that asks for no more work, not once the session
+            # acknowledged it, and after a read only once the longer read window passed.
+            skip = ("nothing to build: every decision approved or skipped" if nothing_to_build(r)
+                    else "acknowledged" if sub.get("acked_at") else None)
+            if skip:
+                state.update(status="skipped", reason=skip)
+                sub[key] = state
+                store.save(review_id, data)
+                return False, f"skipped: {skip}"
+            read = _parse_iso(sub.get("read_at"))
+            if read is not None:
+                read_minutes = settings.get("stale_after_read_minutes")
+                if not read_minutes:
+                    return False, "the feedback was read; read pings are off"
+                if now - read < read_minutes * 60.0:
+                    return False, "read, not stale yet"
+            else:
+                ts = _parse_iso(sub.get("submitted_at"))
+                if ts is None or now - ts < minutes * 60.0:
+                    return False, "not stale yet"
         elif sub.get("status") != "notified":
             return False, "the wake-up is not accepted yet; the ack follows it"
         if state.get("sending_until", 0) > now:
             return False, "a notice for this submission is already in flight"
         seq = sub["seq"]
         try:
-            text = stalled_text(data, r, minutes) if key == "stalled_notice" else notice_text(data, r)
+            text = (stalled_text(data, r, minutes, read_minutes) if key == "stalled_notice"
+                    else notice_text(data, r))
             payload = _notice_payload(data, r, key, text)
         except ReviewError as e:
-            state.update(status="pending_notify", last_error=e.message, next_attempt=now + config.retry_seconds())
+            # A payload that cannot be built (a legacy origin without chat_id) never can be: retrying it only
+            # rewrote review.json every retry_seconds. One line, then terminal.
+            state.update(status="dropped", last_error=e.message)
             sub[key] = state
             store.save(review_id, data)
+            log.warning("%s for %s round %s cannot be built and is not retried: %s",
+                        key, review_id, round_n, e.message)
             return False, e.message
         suffix = "stalled" if key == "stalled_notice" else "notice"
         base_id = f"mockreview-{review_id}-r{round_n}-s{seq}-{suffix}"
@@ -313,6 +356,9 @@ def _deliver_notice(review_id: str, round_n: int, key: str, url: Optional[str] =
             log.warning("the gateway has no notice route for %s: run `hermes mockreview setup` to create %s "
                         "(the wake-up is unaffected; this notice will not be retried)",
                         platform, config.notice_route_name(platform))
+        elif notify.is_permanent(msg):
+            state.update(status="dropped", last_error=msg)
+            log.warning("the gateway rejected %s for %s round %s; not retried: %s", key, review_id, round_n, msg)
         else:
             state.update(status="pending_notify", last_error=msg, next_attempt=time.time() + config.retry_seconds())
             if msg.startswith("HTTP "):

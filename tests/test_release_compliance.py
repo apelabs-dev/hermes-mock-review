@@ -127,7 +127,7 @@ class Context:
     def register_platform_handler(self, platform, factory): self.calls.append(("platform", platform))
 ctx = Context()
 plugin.register(ctx)
-assert len(ctx.calls) == len(set(ctx.calls)) == 8
+assert len(ctx.calls) == len(set(ctx.calls)) == 9
 assert pathlib.Path(plugin._mockreview()[0].__file__).is_relative_to(root)
 '''
     proc = subprocess.run([sys.executable, "-I", "-c", script, str(installed)], cwd=tmp_path,

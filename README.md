@@ -49,6 +49,20 @@ itself once the board runs, and setup prints no link until a board answers. The 
 3. Ask your agent for a design review. It calls `mock_review_create` and posts the link. This is the real test of the
    wake-up: press Send on the board and the agent answers in the chat.
 
+### Let the woken session build (opt-in)
+
+Hermes runs the session Send wakes with its safe webhook tools only, so by default that session replies "Round N
+feedback is saved; the build continues in this thread's chat session." and the chat's own session builds the round. To
+let the woken session build right away, grant it toolsets and re-run setup. Include `mock-review` so it can call the
+mock_review tools; the list replaces Hermes's webhook default rather than adding to it:
+
+    hermes config set plugins.entries.mock-review.settings.wake_toolsets "mock-review,terminal,file"
+    hermes mockreview setup
+
+Setup writes them into the wake route only (`--dry-run` shows the change), and removes them when you empty the setting
+and run it again. It refuses while here.now hosting is in use, because feedback typed on a public link would reach those
+tools. Read [security](docs/security.md#tools-for-the-woken-session-wake_toolsets) first.
+
 ### Try a board without an agent
 
 With a board running (step 1), create a review from a terminal. `examples/demo-variants` holds three full-page variants of
@@ -87,8 +101,8 @@ here.now reviews; local hosting does not need Bash. See [hosting requirements](d
 
 ## Commands and reference
 
-`hermes mockreview <command>` and the `/mockreview` slash command (list, open, close, password, settings). The agent uses four
-tools: `mock_review_create`, `mock_review_add_round`, `mock_review_feedback` and `mock_review_list`.
+`hermes mockreview <command>` and the `/mockreview` slash command (list, open, close, password, settings). The agent uses five
+tools: `mock_review_create`, `mock_review_add_round`, `mock_review_feedback`, `mock_review_ack` and `mock_review_list`.
 
 - [docs/cli.md](docs/cli.md): every command with its flags
 - [docs/settings.md](docs/settings.md): every setting, its default and its environment variable
@@ -117,7 +131,8 @@ Outbound network calls:
 - The same local webhook again, on a second route (`<webhook_route>-<platform>-notice`): up to two more signed POSTs,
   still loopback only. One right after the wake-up is accepted (an instant "got it, working on round N" in the origin
   chat, also mirrored into that chat's session), and one later, only when a sent round gets no new round within
-  `stale_after_minutes`, to say the agent may have stalled. Both carry the review title and counts, never your notes, and
+  `stale_after_minutes` (or `stale_after_read_minutes` after the agent read it), to say the agent may have stalled. No
+  ping for a round with nothing left to build, one the agent acknowledged, or a closed review. Both carry the review title and counts, never your notes, and
   use the same signing secret as the wake-up.
 - here.now (`https://here.now/api/v1`), only for reviews you host with `herenow`: the plugin publishes the board and
   reads submitted feedback using your key. It publishes through the official here-now skill's `publish.sh`.

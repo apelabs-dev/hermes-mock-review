@@ -66,6 +66,11 @@ def cmd_close(a) -> int:
     return 0
 
 
+def cmd_ack(a) -> int:
+    out(api.ack(a.review_id, a.round))
+    return 0
+
+
 def cmd_notify_test(a) -> int:
     data = store.load(a.review_id)
     r = store.get_round(data, a.round)
@@ -255,6 +260,11 @@ def add_commands(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
     c.add_argument("--round", type=int)
     c.add_argument("--json", action="store_true", help="one JSON object (markdown inside)")
     c.set_defaults(**{FN: cmd_feedback})
+
+    c = sub.add_parser("ack", help="mark a round's submission as handled: no stalled ping for it")
+    c.add_argument("review_id")
+    c.add_argument("--round", type=int, help="default: the newest round")
+    c.set_defaults(**{FN: cmd_ack})
 
     c = sub.add_parser("list", help="list open reviews")
     c.add_argument("--all", action="store_true", help="include closed reviews")

@@ -64,7 +64,8 @@ def test_register_registers_everything_and_writes_nothing(env, plugin, tmp_path)
     ctx = FakeCtx({"ask_host_each_time": False, "default_host": "herenow"})
     plugin.register(ctx)
     assert snapshot(tmp_path) == before                       # no writes at register time
-    assert set(ctx.tools) == {"mock_review_create", "mock_review_add_round", "mock_review_feedback", "mock_review_list"}
+    assert set(ctx.tools) == {"mock_review_create", "mock_review_add_round", "mock_review_feedback", "mock_review_ack",
+                              "mock_review_list"}
     assert {t["toolset"] for t in ctx.tools.values()} == {"mock-review"}
     assert set(ctx.skills) == {"usage"} and ctx.skills["usage"]["path"].is_file()
     assert set(ctx.commands) == {"mockreview"} and set(ctx.cli) == {"mockreview"}
@@ -161,5 +162,6 @@ def test_manifest_schema_matches_settings_spec():
     assert settings.render_config_schema() in text
     for line in ("name: mock-review", "manifest_version: 2", "api_version: 1", "kind: standalone"):
         assert line in text.splitlines()
-    for tool in ("mock_review_create", "mock_review_add_round", "mock_review_feedback", "mock_review_list"):
+    for tool in ("mock_review_create", "mock_review_add_round", "mock_review_feedback", "mock_review_ack",
+                 "mock_review_list"):
         assert f"  - {tool}" in text

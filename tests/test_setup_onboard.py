@@ -685,7 +685,7 @@ def test_help_lists_setup_first_and_says_who_should_run_it():
     p = argparse.ArgumentParser(prog="mockreview")
     cli.add_commands(p)
     names = list(p._subparsers._group_actions[0].choices)
-    assert names[0] == "setup" and len(names) == 16 and "password" in names
+    assert names[0] == "setup" and len(names) == 17 and "password" in names and "ack" in names
 
     class Ctx:
         cli = {}

@@ -83,6 +83,13 @@ def is_no_route(detail: str) -> bool:
     return detail.startswith("HTTP 404")
 
 
+def is_permanent(detail: str) -> bool:
+    """True when a classify_delivered detail says the gateway rejected this payload itself (400 bad request, 413 too
+    large, 422 unprocessable): the same notice would be rejected again, so retrying it is pointless. 401/403 (secret
+    or signature), 429 and 5xx stay retryable: re-running setup or waiting can fix those."""
+    return detail.startswith(("HTTP 400", "HTTP 413", "HTTP 422"))
+
+
 def _request(url: str, payload: Dict[str, Any], secret: str, delivery_id: str,
              timeout: float) -> Tuple[int, str]:
     body = json.dumps(payload, ensure_ascii=False).encode()

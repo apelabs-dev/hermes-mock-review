@@ -23,6 +23,7 @@ provides_tools:
   - mock_review_create
   - mock_review_add_round
   - mock_review_feedback
+  - mock_review_ack
   - mock_review_list
 config_schema:
   devices:
@@ -86,7 +87,15 @@ config_schema:
   stale_after_minutes:
     type: float
     default: 15.0
-    description: "Minutes after a submitted round with no new round before the board server pings the origin chat that the agent may have stalled. 0 = never ping. Env: MOCKREVIEW_STALE_AFTER_MINUTES."
+    description: "Minutes after a submitted round with no new round before the board server pings the origin chat that the agent may have stalled. No ping for a round with nothing to build (every decision approved or skipped, no pins, no general notes) or one the agent acknowledged (mockreview ack). 0 = never ping. Env: MOCKREVIEW_STALE_AFTER_MINUTES."
+  stale_after_read_minutes:
+    type: float
+    default: 60.0
+    description: "Once the agent has read a submission's feedback (mock_review_feedback or mockreview feedback), minutes after that read with no new round before the stalled ping. 0 = no ping once the feedback was read. Env: MOCKREVIEW_STALE_AFTER_READ_MINUTES."
+  wake_toolsets:
+    type: list
+    default: []
+    description: "Hermes toolsets the session woken by Send may use, for example mock-review, terminal, file (the list replaces Hermes's webhook default). hermes mockreview setup writes them into the wake route's toolsets key in webhook_subscriptions.json; re-run setup after a change. Empty: Hermes's safe webhook tools only, and the build continues in the origin chat's session. Refused while here.now hosting is in use, because board text from a public link would reach these tools. Env: MOCKREVIEW_WAKE_TOOLSETS."
   poll_seconds:
     type: float
     default: 60.0

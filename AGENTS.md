@@ -7,7 +7,7 @@ boards for UI mockups and wakes the agent when the reviewer presses Send. User d
 ## Layout
 
 - `plugin.yaml`: the Hermes manifest. `config_schema:` is generated from `mockreview/settings.py`.
-- `__init__.py`: the plugin entry point, `register(ctx)`. It registers four tools, the `hermes mockreview` command, the
+- `__init__.py`: the plugin entry point, `register(ctx)`. It registers five tools, the `hermes mockreview` command, the
   `/mockreview` slash command, the `usage` skill and the webhook platform handler. It starts nothing itself.
 - `skills/usage/SKILL.md`: the skill bundled with the plugin (`mock-review:usage`). It is written for the agent that
   calls the tools and must stay generic.
@@ -69,7 +69,10 @@ delete it afterwards. Hermes refuses a `HERMES_HOME` outside its data directory,
 - Review look settings are stored in the review when it is created, so a later config change never alters an open review.
 - One settings table. Add a setting by adding a `Setting` to `SPEC`, then regenerate `plugin.yaml` and the docs. A test
   fails when `plugin.yaml` is out of sync.
-- `setup.py` changes Hermes state only by running `hermes` subcommands. It never edits Hermes files directly.
+- `setup.py` changes Hermes state only by running `hermes` subcommands. The one exception is the wake route's manual
+  `toolsets` key in `webhook_subscriptions.json` (setting `wake_toolsets`), which `hermes webhook subscribe` deliberately
+  cannot set: setup edits only that key, under Hermes's own lock file, and refuses it while here.now is in use. It never
+  touches any other Hermes file (`config.yaml`, `.env`, `auth.json`).
 - Python 3.9 or newer, standard library only (PyYAML is optional). Code must run on macOS, Linux and Windows; use
   `locks.py` for file locks and avoid POSIX-only calls outside it.
 - No identifiers of a person, machine, network or other project in code, docs, tests or fixtures. Use example domains such
