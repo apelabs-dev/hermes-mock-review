@@ -3,6 +3,13 @@
 All notable changes to this project are listed here. The format follows Keep a Changelog, and the project follows
 semantic versioning.
 
+## [1.1.3](https://github.com/apelabs-dev/hermes-mock-review/compare/v1.1.2...v1.1.3) (2026-11-02)
+
+
+### Bug Fixes
+
+* let the woken session build on opt-in, and stop spurious stalled pings ([#8](https://github.com/apelabs-dev/hermes-mock-review/issues/8)) ([0ed205e](https://github.com/apelabs-dev/hermes-mock-review/commit/0ed205ecaa3758475fe7f8c9c20fad9df1e8b83a))
+
 ## [1.1.2](https://github.com/arspesk/hermes-mock-review/compare/v1.1.1...v1.1.2) (2026-10-28)
 
 
