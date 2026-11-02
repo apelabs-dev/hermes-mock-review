@@ -3,6 +3,13 @@
 All notable changes to this project are listed here. The format follows Keep a Changelog, and the project follows
 semantic versioning.
 
+## [1.1.4](https://github.com/apelabs-dev/hermes-mock-review/compare/v1.1.3...v1.1.4) (2026-11-02)
+
+
+### Bug Fixes
+
+* let password-gated here.now boards wake with wake_toolsets; guard LAN boards and password-off ([#10](https://github.com/apelabs-dev/hermes-mock-review/issues/10)) ([b6a561a](https://github.com/apelabs-dev/hermes-mock-review/commit/b6a561a26233f7dcc35a620dcac41bb8efa3ed97))
+
 ## [1.1.3](https://github.com/apelabs-dev/hermes-mock-review/compare/v1.1.2...v1.1.3) (2026-11-02)
 
 
