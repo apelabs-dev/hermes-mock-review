@@ -15,7 +15,7 @@ import time
 import urllib.request
 from typing import Any, Dict, List, Optional
 
-from . import config, feedback, herenow, locks, owner, service, settings, store
+from . import config, feedback, herenow, locks, owner, service, settings, store, wakeguard
 from .store import ReviewError
 
 log = logging.getLogger("mockreview.api")
@@ -62,15 +62,13 @@ def _spec(decisions: Optional[str], prototype: Optional[str], design: Optional[s
     return spec
 
 
-def check_wake_toolsets(mode: str, wake: bool) -> None:
-    """Refuse a here.now board that wakes Hermes while wake_toolsets grants the woken session tools. A here.now board
-    is a public link: anyone holding it (and its password, if any) types the feedback the woken session reads, and
-    every board of a platform wakes the same route, so its toolsets would apply to that text too."""
-    if mode == "herenow" and wake and settings.get("wake_toolsets"):
-        raise ReviewError(
-            "refusing a here.now board while wake_toolsets is set: feedback from a public link would reach the woken "
-            "session's tools (" + ", ".join(settings.get("wake_toolsets")) + "). Use tailnet or local hosting, pass "
-            "wake off for this board, or empty wake_toolsets and re-run `hermes mockreview setup`.", 409)
+def check_wake_toolsets(mode: str, wake: bool, password: bool = False) -> None:
+    """Refuse a board that wakes Hermes while wake_toolsets grants the woken session tools and the way to its Send button
+    is not gated: a here.now board without its password, or any board while the server listens beyond loopback. Every
+    board of a platform wakes the same route, so its toolsets apply to that text too. See wakeguard."""
+    reason = wakeguard.exposure(mode, wake, password)
+    if reason:
+        raise ReviewError(wakeguard.message(reason), 409)
 
 
 def _owned(fn):
@@ -102,7 +100,7 @@ def create(title: str, origin: Optional[Dict[str, str]] = None, brief: str = "",
         want_password = settings.get("herenow_password", password)
     except settings.SettingsError as e:
         raise _settings_error(e)
-    check_wake_toolsets(mode, want_wake)
+    check_wake_toolsets(mode, want_wake, mode == "herenow" and want_password is True)
     origin = store.normalize_origin(origin, wake=want_wake)
     spec = _spec(decisions, prototype, design, allow_live_demo)
     ctx = owner.resolve()
@@ -150,7 +148,7 @@ def add_round(review_id: str, decisions: Optional[str] = None, prototype: Option
     ctx = owner.resolve_soft()
     with owner.bound(ctx):
         existing = store.load(review_id)
-        check_wake_toolsets(existing["mode"], existing.get("wake", True) is not False)
+        check_wake_toolsets(existing["mode"], existing.get("wake", True) is not False, wakeguard.password_on(existing))
         if settings.get("wake_required") and existing.get("wake", True) is not False:
             ctx.require_wake()
         if existing["mode"] == "herenow" and ctx.state == "unreachable":
@@ -245,14 +243,16 @@ def list_reviews(include_closed: bool = False) -> List[Dict[str, Any]]:
 
 @_owned
 def open_herenow_wake_reviews() -> List[str]:
-    """Ids of open here.now reviews that wake Hermes: the boards check_wake_toolsets is about."""
+    """Ids of open here.now reviews that wake Hermes with their password off: the here.now boards check_wake_toolsets
+    refuses. A password-gated waking board is allowed."""
     ids = []
     for rid in store.list_ids():
         try:
             d = store.load(rid)
         except (ReviewError, ValueError, OSError):
             continue
-        if d["status"] == "open" and d["mode"] == "herenow" and d.get("wake") is not False:
+        if (d["status"] == "open" and d["mode"] == "herenow" and d.get("wake") is not False
+                and not wakeguard.password_on(d)):
             ids.append(rid)
     return ids
 
@@ -266,6 +266,10 @@ def review_link(review_id: str) -> Dict[str, Any]:
 
 @_owned
 def password(review_id: str, enabled: bool) -> Dict[str, Any]:
+    if enabled is False:
+        d = store.load(review_id)
+        if d.get("mode") == "herenow" and d.get("status") == "open":
+            check_wake_toolsets("herenow", d.get("wake", True) is not False, False)
     data = herenow.set_password(review_id, enabled)
     return {"review_id": review_id, "url": store.review_url(data), **herenow.password_result(data)}
 

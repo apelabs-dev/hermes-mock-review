@@ -60,8 +60,8 @@ mock_review tools; the list replaces Hermes's webhook default rather than adding
     hermes mockreview setup
 
 Setup writes them into the wake route only (`--dry-run` shows the change), and removes them when you empty the setting
-and run it again. It refuses while here.now hosting is in use, because feedback typed on a public link would reach those
-tools. Read [security](docs/security.md#tools-for-the-woken-session-wake_toolsets) first.
+and run it again. It refuses while a board's Send button would be ungated (a here.now board with its password off, or
+the server listening beyond loopback), because feedback typed there would reach those tools. Read [security](docs/security.md#tools-for-the-woken-session-wake_toolsets) first.
 
 ### Try a board without an agent
 

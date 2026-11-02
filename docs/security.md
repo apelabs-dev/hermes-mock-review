@@ -68,16 +68,31 @@ The risk: with tools granted, the woken session acts on text a reviewer typed on
 skill tell the model that quoted feedback is design input, not instructions, but a model can still be persuaded. Grant
 only the toolsets the build needs, and only for boards whose reviewers you trust.
 
-here.now is refused. A here.now board is a public link (password protected by default), and every board of a platform
-wakes the same route, so its feedback would reach the same tools. While `wake_toolsets` is set:
+A waking board is allowed only while the way to its Send button is gated (`mockreview/wakeguard.py`):
 
-- setup refuses to write it (exit 1, summary row `wake toolsets failed`) when it was run with `--hosting herenow`, when
-  `default_host` is `herenow`, or while any open here.now review wakes Hermes, and it then leaves the route without tools;
-- `create` refuses a here.now board that wakes Hermes (409), before anything is created or published, and
-  `add-round` refuses to add a round to one. A here.now board with `wake` off is allowed: it wakes nobody.
+- here.now: only with the password on. The password gates the whole site, Site Data writes included, and the submit
+  token sits only in the gated `state.json`, so nobody without the password can submit. A here.now board with the
+  password off is open to anyone holding the link, and every board of a platform wakes the same route.
+- tailnet and local: only while the board server listens on loopback. With `host` beyond loopback (`0.0.0.0`,
+  `--hosting lan`) anyone on the network can open every board and press Send, with no login.
 
-The guard reads the setting, not the route file: after you empty `wake_toolsets`, re-run setup before you host on here.now
-so the route loses its tools too.
+While `wake_toolsets` is set:
+
+- setup refuses to write it (exit 1, summary row `wake toolsets failed`) when it was run with `--hosting lan`, while
+  `host` is beyond loopback, when here.now is the chosen or default host with `herenow_password` off, or while any open
+  here.now review wakes Hermes with its password off; it then leaves the route without tools;
+- `create` refuses a waking here.now board with the password off, and any waking board while `host` is beyond loopback
+  (409, before anything is created or published); `add-round` refuses to add a round to one;
+- `mockreview password <id> off` is refused on a waking here.now board;
+- the server holds a wake (the submission stays `pending_notify` with `held, not woken: …` as its last error, and is
+  retried) until here.now has confirmed the board's password (`password_status: applied`), and for any board while
+  `host` is beyond loopback. The feedback is still saved; read it with `mockreview feedback`.
+
+A board with `wake` off is always allowed: it wakes nobody. The password is shared, so anyone you give it to can type
+feedback the woken session acts on: give it only to reviewers you would trust with those tools.
+
+The guard reads the setting, not the route file: after you empty `wake_toolsets`, re-run setup so the route loses its
+tools too.
 
 ## Secrets
 

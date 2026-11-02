@@ -9,7 +9,7 @@ import logging
 import time
 from typing import Any, Dict, Optional
 
-from . import config, feedback, notify, owner, settings, store
+from . import config, feedback, notify, owner, settings, store, wakeguard
 from .store import ReviewError
 
 log = logging.getLogger("mockreview.service")
@@ -200,6 +200,12 @@ def notify_round(review_id: str, round_n: int, url: Optional[str] = None) -> "tu
             return False, "no submission"
         if sub.get("status") == "notified":
             return True, "already notified"
+        held = wakeguard.review_exposure(data, live=True)
+        if held:   # create/add-round/password refuse this; the setting or host may have changed since
+            sub.update(last_error=f"held, not woken: {held}", next_attempt=time.time() + config.retry_seconds())
+            store.save(review_id, data)
+            log.warning("mock-review: wake for %s round %s held: %s", review_id, round_n, held)
+            return False, f"held, not woken: {held}"
         if sub.get("sending_until", 0) > time.time():
             return False, "a send for this submission is already in flight"
         seq = sub["seq"]

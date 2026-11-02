@@ -71,7 +71,7 @@ delete it afterwards. Hermes refuses a `HERMES_HOME` outside its data directory,
   fails when `plugin.yaml` is out of sync.
 - `setup.py` changes Hermes state only by running `hermes` subcommands. The one exception is the wake route's manual
   `toolsets` key in `webhook_subscriptions.json` (setting `wake_toolsets`), which `hermes webhook subscribe` deliberately
-  cannot set: setup edits only that key, under Hermes's own lock file, and refuses it while here.now is in use. It never
+  cannot set: setup edits only that key, under Hermes's own lock file, and refuses it while a waking board would be ungated (see `wakeguard.py`). It never
   touches any other Hermes file (`config.yaml`, `.env`, `auth.json`).
 - Python 3.9 or newer, standard library only (PyYAML is optional). Code must run on macOS, Linux and Windows; use
   `locks.py` for file locks and avoid POSIX-only calls outside it.

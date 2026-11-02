@@ -112,7 +112,7 @@ the origin chat's own session builds the round (ask in that chat if it has not s
 by itself, set `wake_toolsets` (for example `hermes config set plugins.entries.mock-review.settings.wake_toolsets
 "mock-review,terminal,file"`; include `mock-review` so it can call the mock_review tools) and run `hermes mockreview setup` again; setup prints `will change: set toolsets ... on webhook route
 ...` and the summary shows `wake toolsets ok`. The gateway reads the route file again on its next request. Setup refuses
-while here.now hosting is in use: see [security](security.md#tools-for-the-woken-session-wake_toolsets).
+while a waking board would be ungated (a here.now password off, or `host` beyond loopback): see [security](security.md#tools-for-the-woken-session-wake_toolsets).
 
 ## Sent but nothing happened
 
