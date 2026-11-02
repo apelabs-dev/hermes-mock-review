@@ -74,6 +74,15 @@ Create/add-round/publish return the password only after successful application; 
 `install-here-now-skill`, tell the user to run `hermes skills install official/productivity/here-now -y` and to set
 `HERENOW_API_KEY`.
 
+A prototype round on a password-gated here.now board is bundled into one HTML file (local CSS, scripts, images and fonts
+inlined) and then loaded in a real browser behind the password, in the board's sandboxed iframe. That frame has an opaque
+origin, so the `SameSite=Lax` unlock cookie is not sent for its requests and any file left on the site returns 401;
+`curl` with the cookie returning 200 is not a check. A missing asset or an unsupported reference (a local frame, another
+page, a worker, a `<base href>`) fails create/add-round and the error names it: fix it and retry. If the error says
+`browser check of the password-gated prototype failed`, the link and password are withheld: do not share them; fix
+the prototype and add a round, or retry `mockreview publish <id>`. With no Chrome, Chromium or Edge installed the check
+fails closed; tell the user to install one or set `MOCKREVIEW_BROWSER`.
+
 ## Settings
 
 Settings live in `plugins.entries.mock-review.settings` in the Hermes config. `/mockreview settings` and

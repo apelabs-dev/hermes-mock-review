@@ -15,7 +15,7 @@ import time
 import urllib.request
 from typing import Any, Dict, List, Optional
 
-from . import config, feedback, herenow, locks, owner, service, settings, store, wakeguard
+from . import bundle, config, feedback, herenow, locks, owner, service, settings, store, wakeguard
 from .store import ReviewError
 
 log = logging.getLogger("mockreview.api")
@@ -103,6 +103,8 @@ def create(title: str, origin: Optional[Dict[str, str]] = None, brief: str = "",
     check_wake_toolsets(mode, want_wake, mode == "herenow" and want_password is True)
     origin = store.normalize_origin(origin, wake=want_wake)
     spec = _spec(decisions, prototype, design, allow_live_demo)
+    if mode == "herenow" and want_password is True:
+        spec = bundle.bundle_spec(spec)   # a gated prototype's assets would 401 in the sandboxed frame: inline them
     ctx = owner.resolve()
     if want_wake:
         ctx.require_wake()
@@ -160,6 +162,8 @@ def add_round(review_id: str, decisions: Optional[str] = None, prototype: Option
                 new_look = settings.review_settings(look, base=base or settings.review_settings())
             except settings.SettingsError as e:
                 raise _settings_error(e)
+        if existing["mode"] == "herenow" and wakeguard.password_on(existing):
+            spec = bundle.bundle_spec(spec)   # see create(): only gated here.now prototype rounds are bundled
         data = store.add_round(review_id, spec, look=new_look)
         if data["mode"] == "herenow":
             data = herenow.publish(review_id)
