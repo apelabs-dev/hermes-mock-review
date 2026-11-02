@@ -3,6 +3,13 @@
 All notable changes to this project are listed here. The format follows Keep a Changelog, and the project follows
 semantic versioning.
 
+## [1.1.5](https://github.com/apelabs-dev/hermes-mock-review/compare/v1.1.4...v1.1.5) (2026-11-02)
+
+
+### Bug Fixes
+
+* print the wake route's toolsets line instead of editing webhook_subscriptions.json ([#12](https://github.com/apelabs-dev/hermes-mock-review/issues/12)) ([26285a0](https://github.com/apelabs-dev/hermes-mock-review/commit/26285a0ddbb3b5364e8e81fdf38b6d1236bcd669))
+
 ## [1.1.4](https://github.com/apelabs-dev/hermes-mock-review/compare/v1.1.3...v1.1.4) (2026-11-02)
 
 
