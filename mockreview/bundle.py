@@ -249,7 +249,7 @@ class Bundler:
         return p.read_bytes()
 
     def text(self, rel: str) -> str:
-        return self.read(rel).decode("utf-8", errors="replace").lstrip("﻿")
+        return self.read(rel).decode("utf-8", errors="replace").lstrip("\ufeff")
 
     def uri_for(self, rel: str) -> Optional[str]:
         """The data: URI of a file (CSS and JS are processed first). Cached; None after a recorded problem."""

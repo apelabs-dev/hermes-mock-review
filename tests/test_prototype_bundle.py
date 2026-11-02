@@ -376,6 +376,18 @@ def test_script_attributes_survive_and_integrity_is_dropped(proj):
     assert "</script><b>" not in html                      # the dangerous text lives only inside base64
 
 
+def test_a_leading_utf8_bom_is_stripped_from_inlined_css_and_js(proj):
+    bom = b"\xef\xbb\xbf"
+    write(proj, "a.css", bom + b".a{color:red}", binary=True)
+    write(proj, "a.js", bom + b"window.a=1;", binary=True)
+    page(proj, '<script src="a.js"></script>', '<link rel="stylesheet" href="a.css">')
+    html = bundle.bundle_html(proj / "index.html")
+    style = re.search(r"<style[^>]*>(.*?)</style>", html, re.S).group(1)
+    assert ".a{color:red}" in style and "﻿" not in style
+    js = decode(re.search(r'<script[^>]*src="(data:[^"]+)"', html).group(1)).decode("utf-8")
+    assert js == "window.a=1;"                                   # intact, and no BOM left at the start
+
+
 def test_inline_script_cannot_close_itself_and_style_text_is_safe(proj):
     write(proj, "x.css", 'a::after{content:"</style><b>"}')
     page(proj, "", '<link rel="stylesheet" href="x.css">')
