@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
-from . import api, config, locks, owner, settings, store
+from . import api, config, locks, owner, settings, store, wakeguard
 from .store import ReviewError
 
 # The installed plugin directory is the tree that holds plugin.yaml and mockreview/ (bin/mockreview lives under it).
@@ -171,24 +171,36 @@ def sync_wake_toolsets(names: List[str], toolsets: List[str], dry_run: bool) -> 
 
 
 def wake_toolsets_blockers(hosting: str) -> List[str]:
-    """Why wake_toolsets must not be granted now: here.now feedback is typed on a public link, and every board of a
-    platform wakes the same route. Fails closed when the reviews cannot be listed."""
+    """Why wake_toolsets must not be granted now: some board's Send button would be ungated (a here.now board without
+    its password, or a server reachable beyond loopback), and every board of a platform wakes the same route. A
+    password-gated here.now board is fine (see wakeguard). Fails closed when a setting or the reviews cannot be read."""
     why = []
-    if hosting == "herenow":
-        why.append("this setup chose here.now hosting")
+    if hosting == "lan":
+        why.append("this setup chose lan hosting (no login on the network)")
     else:
-        try:
-            if settings.get("default_host") == "herenow":
-                why.append("default_host is herenow (here.now hosting)")
-        except settings.SettingsError:
-            pass
+        lan = wakeguard.lan_reason()
+        if lan:
+            why.append(lan)
+    try:
+        password_default = settings.get("herenow_password") is True
+    except settings.SettingsError:
+        password_default = False
+    if not password_default:
+        if hosting == "herenow":
+            why.append("this setup chose here.now hosting with herenow_password off")
+        else:
+            try:
+                if settings.get("default_host") == "herenow":
+                    why.append("default_host is herenow and herenow_password is off")
+            except settings.SettingsError:
+                pass
     try:
         ids = api.open_herenow_wake_reviews()
     except Exception as e:
         why.append(f"could not check for open here.now reviews ({getattr(e, 'message', None) or e})")
     else:
         if ids:
-            why.append("open here.now review(s): " + ", ".join(ids))
+            why.append("open here.now review(s) without a password: " + ", ".join(ids))
     return why
 
 
@@ -954,8 +966,9 @@ def _run(args: argparse.Namespace) -> int:
     wake_names = [wake_route_name(req.webhook_route, p) for p in platforms]
     blockers = wake_toolsets_blockers(req.hosting) if toolsets else []
     if blockers:
-        print("refusing to set wake_toolsets: " + "; ".join(blockers) + ". Feedback typed on a here.now link would "
-              "reach the woken session's tools. Close those reviews or host on tailnet/local, then re-run setup.")
+        print("refusing to set wake_toolsets: " + "; ".join(blockers) + ". Feedback typed on an ungated board would "
+              "reach the woken session's tools. Turn the here.now password on (or close those reviews) and keep the "
+              "server on loopback, then re-run setup.")
         toolsets = []
     granted = [n for n, o in zip(wake_names, results["routes"]) if o == "ok"] if toolsets else wake_names
     try:
@@ -967,7 +980,7 @@ def _run(args: argparse.Namespace) -> int:
     else:
         if blockers:
             failed = True
-            summary.append(("wake toolsets", "failed", "here.now in use"))
+            summary.append(("wake toolsets", "failed", "ungated boards"))
         elif toolsets and not granted:
             summary.append(("wake toolsets", "skipped", "no wake route was created"))
         elif toolsets:

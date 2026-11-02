@@ -92,8 +92,9 @@ SPEC: List[Setting] = [
     Setting("wake_toolsets", "list", [], "Hermes toolsets the session woken by Send may use, for example mock-review, "
             "terminal, file (the list replaces Hermes's webhook default). hermes mockreview setup writes them into the wake route's toolsets key in "
             "webhook_subscriptions.json; re-run setup after a change. Empty: Hermes's safe webhook tools only, and "
-            "the build continues in the origin chat's session. Refused while here.now hosting is in use, because "
-            "board text from a public link would reach these tools.", "feedback"),
+            "the build continues in the origin chat's session. Refused for a waking board whose Send is ungated "
+            "(a here.now board with its password off, or any board while host listens beyond loopback), because "
+            "that board text would reach these tools.", "feedback"),
     Setting("poll_seconds", "float", 60.0, "Seconds between here.now Site Data polls.", "feedback", lo=5, hi=86400),
     # hosting
     Setting("default_host", "str", "local", "Where a review is hosted when the call doesn't say: tailnet "

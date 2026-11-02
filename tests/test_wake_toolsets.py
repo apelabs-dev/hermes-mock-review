@@ -92,9 +92,9 @@ def test_setup_without_wake_toolsets_never_mentions_or_writes_them(monkeypatch, 
     assert all("toolsets" not in r for r in _subs().values())
 
 
-def test_setup_refuses_wake_toolsets_while_a_herenow_review_is_open(env, monkeypatch, tmp_path, capsys):
+def test_setup_refuses_wake_toolsets_while_an_unpassworded_herenow_review_is_open(env, monkeypatch, tmp_path, capsys):
     spec = store.parse_round_spec(decisions=str(_decisions_file(tmp_path)))
-    public = store.create_review("Public", "", ORIGIN, "herenow", spec)
+    public = store.create_review("Public", "", ORIGIN, "herenow", spec, password=False)
     monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
     shim = _shim(tmp_path)
     fake_create(monkeypatch)
@@ -105,13 +105,36 @@ def test_setup_refuses_wake_toolsets_while_a_herenow_review_is_open(env, monkeyp
     assert all("toolsets" not in r for r in _subs().values())
 
 
-def test_setup_refuses_wake_toolsets_with_herenow_hosting(monkeypatch, tmp_path, capsys):
+def test_setup_grants_wake_toolsets_with_a_passworded_herenow_review_open(env, monkeypatch, tmp_path, capsys):
+    spec = store.parse_round_spec(decisions=str(_decisions_file(tmp_path)))
+    store.create_review("Gated", "", ORIGIN, "herenow", spec, password=True)
+    monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
+    shim = _shim(tmp_path)
+    fake_create(monkeypatch)
+    rc, out, _ = run_setup(monkeypatch, shim, capsys)
+    assert rc == 0, out
+    assert "refusing to set wake_toolsets" not in out
+    assert _subs()[WAKE]["toolsets"] == ["terminal"]
+
+
+def test_setup_refuses_wake_toolsets_with_lan_hosting(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
+    shim = _shim(tmp_path)
+    fake_create(monkeypatch)
+    rc, out, _ = run_setup(monkeypatch, shim, capsys, args=("--yes", "--hosting", "lan"))
+    assert rc == 1
+    assert "refusing to set wake_toolsets" in out and "lan hosting" in out
+    assert all("toolsets" not in r for r in _subs().values())
+
+
+def test_setup_refuses_wake_toolsets_with_herenow_hosting_and_password_off(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("MOCKREVIEW_HERENOW_PASSWORD", "false")
     monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
     shim = _shim(tmp_path)
     fake_create(monkeypatch)
     rc, out, _ = run_setup(monkeypatch, shim, capsys, args=("--yes", "--hosting", "herenow"))
     assert rc == 1
-    assert "refusing to set wake_toolsets" in out and "here.now" in out
+    assert "refusing to set wake_toolsets" in out and "herenow_password off" in out
     assert all("toolsets" not in r for r in _subs().values())
 
 
@@ -160,30 +183,89 @@ def test_hermes_reads_the_toolsets_setup_wrote(monkeypatch, tmp_path, capsys):
 
 # ---------------------------------------------------------------- the here.now guard on create / add-round
 
-def test_create_refuses_a_herenow_board_while_wake_toolsets_is_set(env, monkeypatch, tmp_path):
+def test_create_refuses_an_unpassworded_herenow_board_while_wake_toolsets_is_set(env, monkeypatch, tmp_path):
     monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
     with pytest.raises(ReviewError) as e:
-        api.create("Public", ORIGIN, mode="herenow", decisions=str(_decisions_file(tmp_path)))
-    assert e.value.status == 409 and "wake_toolsets" in e.value.message
+        api.create("Public", ORIGIN, mode="herenow", decisions=str(_decisions_file(tmp_path)), password=False)
+    assert e.value.status == 409 and "wake_toolsets" in e.value.message and "no password" in e.value.message
     assert store.list_ids() == []                                # nothing was created
 
 
-def test_herenow_guard_allows_wake_off_and_other_hosts(env, monkeypatch):
+def test_herenow_guard_allows_a_password_wake_off_and_loopback_hosts(env, monkeypatch):
     monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
+    api.check_wake_toolsets("herenow", wake=True, password=True)
     api.check_wake_toolsets("herenow", wake=False)
     api.check_wake_toolsets("tailscale", wake=True)
     api.check_wake_toolsets("local", wake=True)
+    with pytest.raises(ReviewError, match="no password"):
+        api.check_wake_toolsets("herenow", wake=True, password=False)
     monkeypatch.delenv("MOCKREVIEW_WAKE_TOOLSETS")
-    api.check_wake_toolsets("herenow", wake=True)
+    api.check_wake_toolsets("herenow", wake=True, password=False)
 
 
-def test_add_round_refuses_a_herenow_review_while_wake_toolsets_is_set(env, monkeypatch, tmp_path):
+def test_guard_refuses_every_waking_board_while_the_server_listens_beyond_loopback(env, monkeypatch):
+    monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
+    monkeypatch.setenv("MOCKREVIEW_HOST", "0.0.0.0")
+    for mode in ("local", "tailscale", "herenow"):
+        with pytest.raises(ReviewError, match="beyond loopback"):
+            api.check_wake_toolsets(mode, wake=True, password=True)
+    api.check_wake_toolsets("local", wake=False)
+
+
+def test_add_round_refuses_an_unpassworded_herenow_review_while_wake_toolsets_is_set(env, monkeypatch, tmp_path):
     spec = store.parse_round_spec(decisions=str(_decisions_file(tmp_path)))
-    public = store.create_review("Public", "", ORIGIN, "herenow", spec)
+    public = store.create_review("Public", "", ORIGIN, "herenow", spec, password=False)
     monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
     with pytest.raises(ReviewError, match="wake_toolsets"):
         api.add_round(public["id"], decisions=str(_decisions_file(tmp_path)))
     assert len(store.load(public["id"])["rounds"]) == 1
+
+
+def test_password_off_is_refused_on_a_waking_herenow_board_while_wake_toolsets_is_set(env, monkeypatch, tmp_path):
+    spec = store.parse_round_spec(decisions=str(_decisions_file(tmp_path)))
+    gated = store.create_review("Gated", "", ORIGIN, "herenow", spec, password=True)
+    monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
+    with pytest.raises(ReviewError) as e:
+        api.password(gated["id"], False)
+    assert e.value.status == 409 and "no password" in e.value.message
+    assert store.load(gated["id"])["herenow"]["password_enabled"] is True     # untouched
+
+
+def _gated_submission(tmp_path, applied):
+    spec = store.parse_round_spec(decisions=str(_decisions_file(tmp_path)))
+    data = store.create_review("Gated", "", ORIGIN, "herenow", spec, password=True)
+    with store.locked(data["id"]):
+        d = store.load(data["id"])
+        d["herenow"].update(slug="gated-site-ab12", password_status="applied" if applied else "error",
+                            password_applied=True if applied else None)
+        store.save(data["id"], d)
+    return data
+
+
+def test_wake_is_held_until_here_now_confirms_the_password(env, monkeypatch, tmp_path):
+    monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
+    data = _gated_submission(tmp_path, applied=False)
+    service.submit(data["id"], 1, DEC_FB, data["token"])
+    assert env["receiver"].wakes == []                                   # not woken
+    sub = store.load(data["id"])["rounds"][0]["submission"]
+    assert sub["status"] == "pending_notify" and "held, not woken" in sub["last_error"]
+
+
+def test_wake_goes_out_for_a_confirmed_password_board(env, monkeypatch, tmp_path):
+    monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
+    data = _gated_submission(tmp_path, applied=True)
+    service.submit(data["id"], 1, DEC_FB, data["token"])
+    assert len(env["receiver"].wakes) == 1
+    assert store.load(data["id"])["rounds"][0]["submission"]["status"] == "notified"
+
+
+def test_wake_is_held_for_any_board_once_the_server_listens_beyond_loopback(env, monkeypatch, tmp_path):
+    monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
+    spec = store.parse_round_spec(decisions=str(_decisions_file(tmp_path)))
+    data = store.create_review("Tailnet", "", ORIGIN, "tailscale", spec)
+    monkeypatch.setenv("MOCKREVIEW_HOST", "0.0.0.0")
+    service.submit(data["id"], 1, DEC_FB, data["token"])
+    assert env["receiver"].wakes == []
 
 
 # ---------------------------------------------------------------- graceful degrade without tools
