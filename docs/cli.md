@@ -8,12 +8,12 @@ Every command is available as `hermes mockreview <command>`. Without the Hermes 
 
 ```text
 usage: hermes mockreview [-h]
-                         {setup,create,add-round,design,feedback,list,close,settings,housekeeping,owner,adopt,notify-test,publish,password,poll,serve} ...
+                         {setup,create,add-round,design,feedback,ack,list,close,settings,housekeeping,owner,adopt,notify-test,publish,password,poll,serve} ...
 
 mock-review CLI. First time? Run: hermes mockreview setup. `hermes mockreview settings` prints each setting and its source.
 
 positional arguments:
-  {setup,create,add-round,design,feedback,list,close,settings,housekeeping,owner,adopt,notify-test,publish,password,poll,serve}
+  {setup,create,add-round,design,feedback,ack,list,close,settings,housekeeping,owner,adopt,notify-test,publish,password,poll,serve}
     setup               onboard mock-review: secret, wake and notice routes,
                         hosting, autostart, a test review
     create              create a review (round 1 = --decisions or --prototype)
@@ -21,6 +21,8 @@ positional arguments:
     design              per-project design profiles the board wears (colours,
                         font, mock CSS, icon)
     feedback            print a round's feedback (JSON + markdown)
+    ack                 mark a round's submission as handled: no stalled ping
+                        for it
     list                list open reviews
     close               close a review (herenow: archive Site Data, delete the
                         site)
@@ -248,6 +250,19 @@ options:
   -h, --help     show this help message and exit
   --round ROUND
   --json         one JSON object (markdown inside)
+```
+
+## `hermes mockreview ack --help`
+
+```text
+usage: hermes mockreview ack [-h] [--round ROUND] review_id
+
+positional arguments:
+  review_id
+
+options:
+  -h, --help     show this help message and exit
+  --round ROUND  default: the newest round
 ```
 
 ## `hermes mockreview list --help`

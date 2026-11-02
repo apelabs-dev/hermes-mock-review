@@ -50,6 +50,35 @@ to guess and that the network path to the server is limited: loopback by default
   instruction. A hostile reviewer could still write persuasive notes, so keep
   review links to people you trust.
 
+## Tools for the woken session (`wake_toolsets`)
+
+Hermes runs the session that Send wakes as a webhook session with its safe webhook tools only (web search and extract,
+vision, clarify): no terminal, no files, no mock_review tools. That session therefore cannot build the next round. By
+default it posts one line ("Round N feedback is saved; the build continues in this thread's chat session.") and the
+origin chat's own session does the build.
+
+`wake_toolsets` (empty by default) lets you grant that session more, for example `mock-review, terminal, file` (the list replaces Hermes's webhook default, so
+include `mock-review` for the mock_review tools). `hermes mockreview
+setup` writes the list into the wake route's `toolsets` key in `$HERMES_HOME/webhook_subscriptions.json`, the per-route
+override Hermes reads for webhook sessions. `hermes webhook subscribe` has no flag for it on purpose, so an agent cannot
+grant itself tools; setting it is your explicit step. The notice route runs no agent and never gets it. Empty the setting
+and re-run setup to remove it.
+
+The risk: with tools granted, the woken session acts on text a reviewer typed on the board. The feedback header and the
+skill tell the model that quoted feedback is design input, not instructions, but a model can still be persuaded. Grant
+only the toolsets the build needs, and only for boards whose reviewers you trust.
+
+here.now is refused. A here.now board is a public link (password protected by default), and every board of a platform
+wakes the same route, so its feedback would reach the same tools. While `wake_toolsets` is set:
+
+- setup refuses to write it (exit 1, summary row `wake toolsets failed`) when it was run with `--hosting herenow`, when
+  `default_host` is `herenow`, or while any open here.now review wakes Hermes, and it then leaves the route without tools;
+- `create` refuses a here.now board that wakes Hermes (409), before anything is created or published, and
+  `add-round` refuses to add a round to one. A here.now board with `wake` off is allowed: it wakes nobody.
+
+The guard reads the setting, not the route file: after you empty `wake_toolsets`, re-run setup before you host on here.now
+so the route loses its tools too.
+
 ## Secrets
 
 API and signing keys are never stored in review files. `MOCKREVIEW_WEBHOOK_SECRET` and `HERENOW_API_KEY` come from the Hermes secret scope.

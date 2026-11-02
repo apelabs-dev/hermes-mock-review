@@ -83,8 +83,17 @@ SPEC: List[Setting] = [
     Setting("retry_seconds", "float", 60.0, "Seconds between retries of an undelivered wake-up.", "feedback",
             lo=0, hi=86400),
     Setting("stale_after_minutes", "float", 15.0, "Minutes after a submitted round with no new round before the "
-            "board server pings the origin chat that the agent may have stalled. 0 = never ping.", "feedback",
-            lo=0, hi=10080),
+            "board server pings the origin chat that the agent may have stalled. No ping for a round with nothing to "
+            "build (every decision approved or skipped, no pins, no general notes) or one the agent acknowledged "
+            "(mockreview ack). 0 = never ping.", "feedback", lo=0, hi=10080),
+    Setting("stale_after_read_minutes", "float", 60.0, "Once the agent has read a submission's feedback "
+            "(mock_review_feedback or mockreview feedback), minutes after that read with no new round before the "
+            "stalled ping. 0 = no ping once the feedback was read.", "feedback", lo=0, hi=10080),
+    Setting("wake_toolsets", "list", [], "Hermes toolsets the session woken by Send may use, for example mock-review, "
+            "terminal, file (the list replaces Hermes's webhook default). hermes mockreview setup writes them into the wake route's toolsets key in "
+            "webhook_subscriptions.json; re-run setup after a change. Empty: Hermes's safe webhook tools only, and "
+            "the build continues in the origin chat's session. Refused while here.now hosting is in use, because "
+            "board text from a public link would reach these tools.", "feedback"),
     Setting("poll_seconds", "float", 60.0, "Seconds between here.now Site Data polls.", "feedback", lo=5, hi=86400),
     # hosting
     Setting("default_host", "str", "local", "Where a review is hosted when the call doesn't say: tailnet "
@@ -454,6 +463,12 @@ def coerce(s: Setting, v: Any) -> Any:
             if len(set(items)) != len(items):
                 raise bad("lists a device twice")
             return [d for d in DEVICES if d in items]
+        if s.name == "wake_toolsets":
+            items = [x for x in items if x]
+            bad_names = [x for x in items if not re.fullmatch(r"[a-z0-9][a-z0-9_.:-]{0,63}", x)]
+            if bad_names:
+                raise bad(f"toolset name not valid: {bad_names[0]!r} (lowercase letters, digits, _ . : -)")
+            return list(dict.fromkeys(items))
         return items
     if v is None:
         v = ""

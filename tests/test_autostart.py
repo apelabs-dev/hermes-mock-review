@@ -74,7 +74,7 @@ def test_older_hermes_without_platform_handlers_still_registers(env, plugin):
     ctx = OldFakeCtx({"autostart": True})
     assert not hasattr(ctx, "register_platform_handler")
     plugin.register(ctx)
-    assert len(ctx.tools) == 4 and ctx.commands and ctx.cli and ctx.skills
+    assert len(ctx.tools) == 5 and ctx.commands and ctx.cli and ctx.skills
     assert ctx.platform_handlers == [] and board_threads() == []
 
 

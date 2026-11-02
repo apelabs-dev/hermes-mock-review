@@ -62,6 +62,17 @@ def _spec(decisions: Optional[str], prototype: Optional[str], design: Optional[s
     return spec
 
 
+def check_wake_toolsets(mode: str, wake: bool) -> None:
+    """Refuse a here.now board that wakes Hermes while wake_toolsets grants the woken session tools. A here.now board
+    is a public link: anyone holding it (and its password, if any) types the feedback the woken session reads, and
+    every board of a platform wakes the same route, so its toolsets would apply to that text too."""
+    if mode == "herenow" and wake and settings.get("wake_toolsets"):
+        raise ReviewError(
+            "refusing a here.now board while wake_toolsets is set: feedback from a public link would reach the woken "
+            "session's tools (" + ", ".join(settings.get("wake_toolsets")) + "). Use tailnet or local hosting, pass "
+            "wake off for this board, or empty wake_toolsets and re-run `hermes mockreview setup`.", 409)
+
+
 def _owned(fn):
     """Run an operation against the store the board server owns when this process's own store is not watched."""
     @functools.wraps(fn)
@@ -91,6 +102,7 @@ def create(title: str, origin: Optional[Dict[str, str]] = None, brief: str = "",
         want_password = settings.get("herenow_password", password)
     except settings.SettingsError as e:
         raise _settings_error(e)
+    check_wake_toolsets(mode, want_wake)
     origin = store.normalize_origin(origin, wake=want_wake)
     spec = _spec(decisions, prototype, design, allow_live_demo)
     ctx = owner.resolve()
@@ -138,6 +150,7 @@ def add_round(review_id: str, decisions: Optional[str] = None, prototype: Option
     ctx = owner.resolve_soft()
     with owner.bound(ctx):
         existing = store.load(review_id)
+        check_wake_toolsets(existing["mode"], existing.get("wake", True) is not False)
         if settings.get("wake_required") and existing.get("wake", True) is not False:
             ctx.require_wake()
         if existing["mode"] == "herenow" and ctx.state == "unreachable":
@@ -156,15 +169,57 @@ def add_round(review_id: str, decisions: Optional[str] = None, prototype: Option
                 "mode": data["mode"], "owner": ctx.as_dict(), **herenow.password_result(data)}
 
 
+def _record_read(review_id: str, round_n: int) -> None:
+    """Note the first read of the newest round's current submission: it proves a session woke and has the feedback,
+    so the stalled ping waits stale_after_read_minutes from here instead of stale_after_minutes from Send."""
+    with store.locked(review_id):
+        data = store.load(review_id)
+        r = data["rounds"][-1]
+        sub = r.get("submission")
+        if data["status"] != "open" or r["n"] != round_n or not sub or not r.get("feedback") or sub.get("read_at"):
+            return
+        sub["read_at"] = store.now_iso()
+        store.save(review_id, data)
+
+
 @_owned
 def get_feedback(review_id: str, round_n: Optional[int] = None) -> Dict[str, Any]:
     data = store.load(review_id)
     r = store.get_round(data, round_n)
+    sub = r.get("submission")
+    if data["status"] == "open" and sub and r.get("feedback") and not sub.get("read_at") \
+            and r["n"] == data["rounds"][-1]["n"]:
+        try:
+            _record_read(review_id, r["n"])
+            data = store.load(review_id)
+            r = store.get_round(data, r["n"])
+        except (ReviewError, ValueError, OSError) as e:   # the read itself must never fail on this
+            log.warning("could not record the feedback read for %s round %s: %s", review_id, r["n"], e)
     return {"review_id": data["id"], "title": data["title"], "round": r["n"], "status": data["status"],
             "kind": r.get("kind", "variants"), "decisions": store.round_index(r),
             "submission": r.get("submission"), "feedback": r.get("feedback"),
             "feedback_path": service.feedback_path(data["id"], r["n"]) if r.get("feedback") else None,
             "markdown": feedback.render_markdown(data, r)}
+
+
+@_owned
+def ack(review_id: str, round_n: Optional[int] = None) -> Dict[str, Any]:
+    """The session has handled a round's submission (answered in chat, or nothing more is coming): no stalled ping
+    for it. Once per submission; an amend is a new submission and needs its own ack."""
+    with store.locked(review_id):
+        data = store.load(review_id)
+        r = store.get_round(data, round_n)
+        sub = r.get("submission")
+        if not sub or not r.get("feedback"):
+            raise ReviewError(f"round {r['n']} of {review_id} has no submitted feedback to acknowledge", 409)
+        sub.setdefault("acked_at", store.now_iso())
+        state = sub.get("stalled_notice") or {}
+        if state.get("status") not in service.TERMINAL_NOTICE:
+            state.update(status="skipped", reason="acknowledged")
+            sub["stalled_notice"] = state
+        store.save(review_id, data)
+    return {"review_id": review_id, "round": r["n"], "seq": sub.get("seq"), "acked_at": sub["acked_at"],
+            "stalled_notice": state["status"]}
 
 
 @_owned
@@ -189,6 +244,20 @@ def list_reviews(include_closed: bool = False) -> List[Dict[str, Any]]:
 
 
 @_owned
+def open_herenow_wake_reviews() -> List[str]:
+    """Ids of open here.now reviews that wake Hermes: the boards check_wake_toolsets is about."""
+    ids = []
+    for rid in store.list_ids():
+        try:
+            d = store.load(rid)
+        except (ReviewError, ValueError, OSError):
+            continue
+        if d["status"] == "open" and d["mode"] == "herenow" and d.get("wake") is not False:
+            ids.append(rid)
+    return ids
+
+
+@_owned
 def review_link(review_id: str) -> Dict[str, Any]:
     d = store.load(review_id)
     return {"review_id": review_id, "title": d["title"], "status": d["status"], "mode": d["mode"],
@@ -209,6 +278,26 @@ def close(review_id: str) -> Dict[str, Any]:
         return _close(review_id)
 
 
+def _drop_pending_notices(data: Dict[str, Any]) -> None:
+    """A closed review never pings: every stalled ping not yet sent (including the newest round's, never attempted)
+    and every unsent ack becomes dropped, so nothing reads as still owed."""
+    if data.get("wake") is False:
+        return
+    for r in data["rounds"]:
+        sub = r.get("submission")
+        if not sub or not r.get("feedback"):
+            continue
+        for key in ("stalled_notice", "notice"):
+            state = sub.get(key)
+            if state is None and not (key == "stalled_notice" and r is data["rounds"][-1]):
+                continue
+            state = state or {}
+            if state.get("status") not in service.TERMINAL_NOTICE:
+                state.update(status="dropped", reason="review closed")
+                state.setdefault("last_error", None)
+                sub[key] = state
+
+
 def _close(review_id: str) -> Dict[str, Any]:
     data = store.load(review_id)
     res: Dict[str, Any] = {"review_id": review_id, "mode": data["mode"]}
@@ -224,6 +313,7 @@ def _close(review_id: str) -> Dict[str, Any]:
         data = store.load(review_id)
         data["status"] = "closed"
         data["closed_at"] = store.now_iso()
+        _drop_pending_notices(data)
         if data["mode"] == "herenow" and data.get("herenow"):
             data["herenow"]["deleted_at"] = store.now_iso()
         store.save(review_id, data)

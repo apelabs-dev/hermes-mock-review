@@ -73,7 +73,7 @@ def command_paths() -> List[List[str]]:
 
 def shown(value) -> str:
     if isinstance(value, list):
-        return ", ".join(value)
+        return ", ".join(value) or "(empty)"
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value) if value != "" else "(empty)"

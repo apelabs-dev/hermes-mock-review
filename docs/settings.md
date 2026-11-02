@@ -30,7 +30,9 @@ Look settings and the first three feedback settings are copied into each review 
 - `webhook_route` (str, default `mock-review`). Env: `MOCKREVIEW_WEBHOOK_ROUTE`. Webhook route prefix; setup creates `<prefix>-<platform>` for each origin platform.
 - `wake_required` (bool, default `true`). Env: `MOCKREVIEW_WAKE_REQUIRED`. Refuse to create or extend a review unless the owning service can wake Hermes on Send (the scoped signing secret is set; setup creates routes). Off: demo/local-only boards that are viewed but never wake anyone.
 - `retry_seconds` (float, default `60.0`, 0 to 86400). Env: `MOCKREVIEW_RETRY_SECONDS`. Seconds between retries of an undelivered wake-up.
-- `stale_after_minutes` (float, default `15.0`, 0 to 10080). Env: `MOCKREVIEW_STALE_AFTER_MINUTES`. Minutes after a submitted round with no new round before the board server pings the origin chat that the agent may have stalled. 0 = never ping.
+- `stale_after_minutes` (float, default `15.0`, 0 to 10080). Env: `MOCKREVIEW_STALE_AFTER_MINUTES`. Minutes after a submitted round with no new round before the board server pings the origin chat that the agent may have stalled. No ping for a round with nothing to build (every decision approved or skipped, no pins, no general notes) or one the agent acknowledged (mockreview ack). 0 = never ping.
+- `stale_after_read_minutes` (float, default `60.0`, 0 to 10080). Env: `MOCKREVIEW_STALE_AFTER_READ_MINUTES`. Once the agent has read a submission's feedback (mock_review_feedback or mockreview feedback), minutes after that read with no new round before the stalled ping. 0 = no ping once the feedback was read.
+- `wake_toolsets` (list, default `(empty)`). Env: `MOCKREVIEW_WAKE_TOOLSETS`. Hermes toolsets the session woken by Send may use, for example mock-review, terminal, file (the list replaces Hermes's webhook default). hermes mockreview setup writes them into the wake route's toolsets key in webhook_subscriptions.json; re-run setup after a change. Empty: Hermes's safe webhook tools only, and the build continues in the origin chat's session. Refused while here.now hosting is in use, because board text from a public link would reach these tools.
 - `poll_seconds` (float, default `60.0`, 5 to 86400). Env: `MOCKREVIEW_POLL_SECONDS`. Seconds between here.now Site Data polls.
 
 ## Hosting and network
@@ -90,6 +92,8 @@ mock-review settings (config: Hermes ctx.get_config, read with Hermes)
   wake_required = true  (default)
   retry_seconds = 60.0  (default)
   stale_after_minutes = 15.0  (default)
+  stale_after_read_minutes = 60.0  (default)
+  wake_toolsets = (empty)  (default)
   poll_seconds = 60.0  (default)
 [hosting]
   default_host = local  (default)

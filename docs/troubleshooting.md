@@ -104,6 +104,16 @@ The board says the feedback was sent, but nothing arrives in the chat. Check the
 
 Undelivered wake-ups are retried every `retry_seconds` while the board server runs.
 
+### The woken session says the build continues in the thread
+
+Hermes runs the session Send wakes with its safe webhook tools only, so by default it cannot write files or call the
+mock_review tools. It posts one line, "Round N feedback is saved; the build continues in this thread's chat session.", and
+the origin chat's own session builds the round (ask in that chat if it has not started). To let the woken session build
+by itself, set `wake_toolsets` (for example `hermes config set plugins.entries.mock-review.settings.wake_toolsets
+"mock-review,terminal,file"`; include `mock-review` so it can call the mock_review tools) and run `hermes mockreview setup` again; setup prints `will change: set toolsets ... on webhook route
+...` and the summary shows `wake toolsets ok`. The gateway reads the route file again on its next request. Setup refuses
+while here.now hosting is in use: see [security](security.md#tools-for-the-woken-session-wake_toolsets).
+
 ## Sent but nothing happened
 
 Send does three things, so a chat that stays silent is a real signal:
@@ -112,7 +122,8 @@ Send does three things, so a chat that stays silent is a real signal:
 2. Right after the gateway accepts it, an ack is posted to the origin chat (and mirrored into that chat's session):
    "Got your feedback on `<title>`, round N ... Hermes is working on round N+1".
 3. If no new round appears within `stale_after_minutes` (default 15), a ping posts to the same chat saying the agent may
-   have stalled.
+   have stalled. Once the session has read the feedback (`mock_review_feedback`), the ping waits
+   `stale_after_read_minutes` (default 60) from that read instead and says Hermes read it and posted no round.
 
 Check them in order:
 
@@ -127,6 +138,15 @@ Check them in order:
   exists or the review is closed).
 - The ping only fires while the board server runs, for open reviews with wake on, once per submission, and only if no
   newer round exists. `stale_after_minutes` 0 turns it off. The board shows the same hint.
+- No ping is expected (the stored submission's `stalled_notice` shows `skipped`) when the round asks for no more work:
+  every decision Approved or Skipped, with no pins and no general notes. Close the review when you are done.
+- The session can mark a submission as handled with `mockreview ack <review id> [--round N]` (tool `mock_review_ack`),
+  for example when it answered in chat: no ping for that submission. An amend is a new submission with its own clock.
+- Closing a review, by hand or by `auto_close_idle_days`, drops any ping not yet sent (`dropped`, reason
+  `review closed`). A closed review never pings.
+- A notice that can never be delivered goes `dropped` with one warning in the server log and is not retried: a review
+  whose origin has no chat id (created before chat ids were required), or a gateway answer of 400, 413 or 422. 401, 403,
+  429 and 5xx answers are retried every `retry_seconds`.
 
 ## Multiplexing gateways
 
