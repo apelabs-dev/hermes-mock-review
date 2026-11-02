@@ -90,8 +90,8 @@ SPEC: List[Setting] = [
             "(mock_review_feedback or mockreview feedback), minutes after that read with no new round before the "
             "stalled ping. 0 = no ping once the feedback was read.", "feedback", lo=0, hi=10080),
     Setting("wake_toolsets", "list", [], "Hermes toolsets the session woken by Send may use, for example mock-review, "
-            "terminal, file (the list replaces Hermes's webhook default). hermes mockreview setup writes them into the wake route's toolsets key in "
-            "webhook_subscriptions.json; re-run setup after a change. Empty: Hermes's safe webhook tools only, and "
+            "terminal, file (the list replaces Hermes's webhook default). hermes mockreview setup prints the toolsets line to add by hand to the wake "
+            "route in webhook_subscriptions.json; add it again after every setup run. Empty: Hermes's safe webhook tools only, and "
             "the build continues in the origin chat's session. Refused for a waking board whose Send is ungated "
             "(a here.now board with its password off, or any board while host listens beyond loopback), because "
             "that board text would reach these tools.", "feedback"),

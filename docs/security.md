@@ -58,11 +58,14 @@ default it posts one line ("Round N feedback is saved; the build continues in th
 origin chat's own session does the build.
 
 `wake_toolsets` (empty by default) lets you grant that session more, for example `mock-review, terminal, file` (the list replaces Hermes's webhook default, so
-include `mock-review` for the mock_review tools). `hermes mockreview
-setup` writes the list into the wake route's `toolsets` key in `$HERMES_HOME/webhook_subscriptions.json`, the per-route
-override Hermes reads for webhook sessions. `hermes webhook subscribe` has no flag for it on purpose, so an agent cannot
-grant itself tools; setting it is your explicit step. The notice route runs no agent and never gets it. Empty the setting
-and re-run setup to remove it.
+include `mock-review` for the mock_review tools). Hermes reads it from the wake route's `toolsets` key in
+`$HERMES_HOME/webhook_subscriptions.json`, the per-route override for webhook sessions. `hermes webhook subscribe` has
+no flag for it on purpose, so an agent cannot grant itself tools, and granting them is a manual edit, as Hermes's
+webhook docs describe. `hermes mockreview setup` never opens that file: it prints the exact line to add to each wake
+route (`"toolsets": ["mock-review", "terminal", "file"],`) and you add it by hand. Setup re-subscribes the routes on
+every run, which drops the key, so add the line again after each setup run. Hermes has no command that shows a route's
+toolsets, so setup cannot check the edit; its summary says `wake toolsets manual`. The notice route runs no agent and
+never gets it. To remove it, empty the setting and re-run setup (the re-subscribe drops the key).
 
 The risk: with tools granted, the woken session acts on text a reviewer typed on the board. The feedback header and the
 skill tell the model that quoted feedback is design input, not instructions, but a model can still be persuaded. Grant
@@ -78,9 +81,9 @@ A waking board is allowed only while the way to its Send button is gated (`mockr
 
 While `wake_toolsets` is set:
 
-- setup refuses to write it (exit 1, summary row `wake toolsets failed`) when it was run with `--hosting lan`, while
+- setup refuses to print the line (exit 1, summary row `wake toolsets failed`) when it was run with `--hosting lan`, while
   `host` is beyond loopback, when here.now is the chosen or default host with `herenow_password` off, or while any open
-  here.now review wakes Hermes with its password off; it then leaves the route without tools;
+  here.now review wakes Hermes with its password off;
 - `create` refuses a waking here.now board with the password off, and any waking board while `host` is beyond loopback
   (409, before anything is created or published); `add-round` refuses to add a round to one;
 - `mockreview password <id> off` is refused on a waking here.now board;
@@ -91,8 +94,8 @@ While `wake_toolsets` is set:
 A board with `wake` off is always allowed: it wakes nobody. The password is shared, so anyone you give it to can type
 feedback the woken session acts on: give it only to reviewers you would trust with those tools.
 
-The guard reads the setting, not the route file: after you empty `wake_toolsets`, re-run setup so the route loses its
-tools too.
+The guard reads the setting, not the route file: keep `wake_toolsets` matching what you added by hand. After you empty
+it, re-run setup so the route loses its tools too.
 
 ## Secrets
 

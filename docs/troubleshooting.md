@@ -110,8 +110,10 @@ Hermes runs the session Send wakes with its safe webhook tools only, so by defau
 mock_review tools. It posts one line, "Round N feedback is saved; the build continues in this thread's chat session.", and
 the origin chat's own session builds the round (ask in that chat if it has not started). To let the woken session build
 by itself, set `wake_toolsets` (for example `hermes config set plugins.entries.mock-review.settings.wake_toolsets
-"mock-review,terminal,file"`; include `mock-review` so it can call the mock_review tools) and run `hermes mockreview setup` again; setup prints `will change: set toolsets ... on webhook route
-...` and the summary shows `wake toolsets ok`. The gateway reads the route file again on its next request. Setup refuses
+"mock-review,terminal,file"`; include `mock-review` so it can call the mock_review tools) and run `hermes mockreview setup` again. Setup
+prints the `"toolsets": [...]` line and the route to add it to in `webhook_subscriptions.json`; add it by hand (the
+summary shows `wake toolsets manual`). The gateway reads the route file again on its next request. Every setup run
+re-subscribes the routes and drops the key, so add the line again after each run. Setup refuses
 while a waking board would be ungated (a here.now password off, or `host` beyond loopback): see [security](security.md#tools-for-the-woken-session-wake_toolsets).
 
 ## Sent but nothing happened

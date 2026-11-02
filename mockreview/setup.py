@@ -3,8 +3,9 @@
 Interactive-but-headless-safe: when stdin is not a terminal and `--yes` is absent it prints a one-line usage
 message and exits 2 before touching anything. Every Hermes-shaped operation goes through the `hermes` CLI as a
 subprocess (argv list, no shell, a timeout, captured output); the plugin never reads or writes Hermes state files
-itself, with one exception: the wake route's manual `toolsets` key in webhook_subscriptions.json, which carries the
-opt-in `wake_toolsets` setting and which `hermes webhook subscribe` deliberately cannot set (see sync_wake_toolsets).
+itself. The opt-in `wake_toolsets` setting is the one thing it cannot apply that way: `hermes webhook subscribe`
+deliberately has no flag for a route's `toolsets` key, so setup prints the exact line for the user to add by hand
+(see wake_toolsets_instructions).
 The signing secret is only ever generated or read in memory, written through Hermes's own
 `hermes config set MOCKREVIEW_WEBHOOK_SECRET <value>` route, and every captured subprocess output is passed through
 `redact()` before it is printed. The secret value is never printed, logged or stored by the wizard.
@@ -20,7 +21,6 @@ whether the board answers and whether the gateway runs.
 from __future__ import annotations
 
 import argparse
-import contextlib
 import http.client
 import json
 import os
@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
-from . import api, config, locks, owner, settings, store, wakeguard
+from . import api, config, owner, settings, store, wakeguard
 from .store import ReviewError
 
 # The installed plugin directory is the tree that holds plugin.yaml and mockreview/ (bin/mockreview lives under it).
@@ -75,9 +75,8 @@ PROMPT_TEMPLATE = (
 )
 
 # wake_toolsets lives in the wake route's manual `toolsets` key: `hermes webhook subscribe` deliberately has no flag
-# for it, so an agent cannot grant itself tools. Same file, lock and encoding as hermes_cli/webhook.py.
+# for it, so an agent cannot grant itself tools. Setup only names the file; the user edits it (Hermes's webhook docs).
 SUBSCRIPTIONS_FILE = "webhook_subscriptions.json"
-SUBSCRIPTIONS_LOCK = ".webhook_subscriptions.lock"
 ROUTE_DESCRIPTION = "Wakes the origin chat when a mock-review round is submitted."
 
 # The deliver-only notice route renders the payload's `message` verbatim: an immediate ack (and a stalled ping later).
@@ -112,62 +111,28 @@ def notice_route_argv(route: str, platform: str, secret: str) -> List[str]:
             "--deliver-only", "--mirror-to-session"]
 
 
-def _read_subscriptions(path: Path) -> Dict[str, Any]:
-    text = path.read_text(encoding="utf-8").lstrip("\ufeff") if path.exists() else ""   # Hermes reads utf-8-sig
-    subs = json.loads(text) if text.strip() else {}
-    if not isinstance(subs, dict):
-        raise ValueError(f"{path} does not hold a JSON object")
-    return subs
+def toolsets_line(toolsets: List[str]) -> str:
+    """The JSON member the user adds to a wake route, e.g. `"toolsets": ["mock-review", "terminal", "file"]`."""
+    return '"toolsets": ' + json.dumps(list(toolsets))
 
 
-def _write_subscriptions(path: Path, subs: Dict[str, Any]) -> None:
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".webhook_subscriptions.", suffix=".tmp")   # mode 0600
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(json.dumps(subs, indent=2, ensure_ascii=False))
-        os.replace(tmp, path)
-    except BaseException:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-        raise
-
-
-def sync_wake_toolsets(names: List[str], toolsets: List[str], dry_run: bool) -> List[str]:
-    """Make each wake route's manual `toolsets` key match wake_toolsets: set it when the list is non-empty, remove it
-    when empty. Returns the changes as "will change" texts, made unless dry_run. Only the named routes are touched (the
-    notice routes run no agent); nothing else in the file changes. `hermes webhook subscribe` rebuilds the whole record,
-    so the routes step before this has already dropped any earlier key; removing it here keeps that true even if a
-    later Hermes keeps unknown keys. Raises OSError/ValueError on an unreadable file or a missing wake route."""
-    path = settings.hermes_home() / SUBSCRIPTIONS_FILE
-    shown = ", ".join(toolsets)
-    if dry_run and toolsets:   # the routes step only planned the routes, so the file may not have them yet
-        changes = [f"set toolsets {shown} on webhook route {n}" for n in names]
-        for text in changes:
-            _will_change(text)
-        return changes
-    if not toolsets and not path.exists():
+def wake_toolsets_instructions(names: List[str], toolsets: List[str]) -> List[str]:
+    """The manual step that grants wake_toolsets, as printable lines: which file, which route, the exact line. Setup
+    never opens the file. `hermes webhook subscribe` rebuilds the whole record, so every setup run (which re-subscribes
+    the routes) drops a hand-added key, and the line must be added again after it. Hermes cannot report a route's
+    toolsets (`hermes webhook list` does not show them), so the result is unverified; wakeguard stays the runtime
+    check."""
+    if not toolsets or not names:
         return []
-    with (contextlib.nullcontext() if dry_run else locks.exclusive(path.parent / SUBSCRIPTIONS_LOCK)):
-        subs = _read_subscriptions(path)
-        missing = [n for n in names if not isinstance(subs.get(n), dict)]
-        if toolsets and missing:
-            raise ValueError(f"webhook route(s) {', '.join(missing)} not found in {path}")
-        changes = []
-        for n in names:
-            route = subs.get(n)
-            if not isinstance(route, dict):
-                continue
-            if toolsets and route.get("toolsets") != toolsets:
-                route["toolsets"] = list(toolsets)
-                changes.append(f"set toolsets {shown} on webhook route {n}")
-            elif not toolsets and "toolsets" in route:
-                del route["toolsets"]
-                changes.append(f"remove toolsets from webhook route {n}")
-        for text in changes:
-            _will_change(text)
-        if changes and not dry_run:
-            _write_subscriptions(path, subs)
-    return changes
+    path = settings.hermes_home() / SUBSCRIPTIONS_FILE
+    lines = [f"wake_toolsets is a manual step: Hermes lets only you grant a webhook route tools. In {path}:"]
+    for n in names:
+        lines.append(f'  add this line to the "{n}" route:')
+        lines.append(f"    {toolsets_line(toolsets)},")
+    lines.append("the gateway reads the file again on its next webhook request. Setup re-subscribes these routes on "
+                 "every run, which drops the key: add the line again after each setup run. Setup cannot read the "
+                 "route back, so this step is not verified.")
+    return lines
 
 
 def wake_toolsets_blockers(hosting: str) -> List[str]:
@@ -961,7 +926,7 @@ def _run(args: argparse.Namespace) -> int:
         print("hosting: local (nothing written)")
     summary.append(hosting_row)
 
-    # 4a. wake_toolsets: the one Hermes file setup edits itself (see sync_wake_toolsets), and only for this setting
+    # 4a. wake_toolsets: a manual step. Setup prints the route's `toolsets` line and never edits the route file.
     toolsets = settings.get("wake_toolsets")
     wake_names = [wake_route_name(req.webhook_route, p) for p in platforms]
     blockers = wake_toolsets_blockers(req.hosting) if toolsets else []
@@ -969,24 +934,16 @@ def _run(args: argparse.Namespace) -> int:
         print("refusing to set wake_toolsets: " + "; ".join(blockers) + ". Feedback typed on an ungated board would "
               "reach the woken session's tools. Turn the here.now password on (or close those reviews) and keep the "
               "server on loopback, then re-run setup.")
-        toolsets = []
-    granted = [n for n, o in zip(wake_names, results["routes"]) if o == "ok"] if toolsets else wake_names
-    try:
-        changes = sync_wake_toolsets(granted, toolsets, req.dry_run)
-    except (OSError, ValueError) as e:
-        print(f"could not update the wake route toolsets: {e}")
         failed = True
-        summary.append(("wake toolsets", "failed", str(e)[:80]))
-    else:
-        if blockers:
-            failed = True
-            summary.append(("wake toolsets", "failed", "ungated boards"))
-        elif toolsets and not granted:
+        summary.append(("wake toolsets", "failed", "ungated boards"))
+    elif toolsets:
+        granted = [n for n, o in zip(wake_names, results["routes"]) if o == "ok"]   # dry run: the planned routes
+        if granted:
+            for line in wake_toolsets_instructions(granted, toolsets):
+                print(line)
+            summary.append(("wake toolsets", "manual", "add by hand, see above; not verified"))
+        else:
             summary.append(("wake toolsets", "skipped", "no wake route was created"))
-        elif toolsets:
-            summary.append(("wake toolsets", "planned" if req.dry_run else "ok", ", ".join(toolsets)))
-        elif changes:
-            summary.append(("wake toolsets", "planned" if req.dry_run else "ok", "removed"))
 
     # 4b. a --port that differs from the setting is saved, so the board, the test review and the
     # links all use it (otherwise --port only changed the preflight check)

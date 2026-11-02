@@ -69,10 +69,10 @@ delete it afterwards. Hermes refuses a `HERMES_HOME` outside its data directory,
 - Review look settings are stored in the review when it is created, so a later config change never alters an open review.
 - One settings table. Add a setting by adding a `Setting` to `SPEC`, then regenerate `plugin.yaml` and the docs. A test
   fails when `plugin.yaml` is out of sync.
-- `setup.py` changes Hermes state only by running `hermes` subcommands. The one exception is the wake route's manual
-  `toolsets` key in `webhook_subscriptions.json` (setting `wake_toolsets`), which `hermes webhook subscribe` deliberately
-  cannot set: setup edits only that key, under Hermes's own lock file, and refuses it while a waking board would be ungated (see `wakeguard.py`). It never
-  touches any other Hermes file (`config.yaml`, `.env`, `auth.json`).
+- `setup.py` changes Hermes state only by running `hermes` subcommands, and never opens a Hermes file (`config.yaml`,
+  `.env`, `auth.json`, `webhook_subscriptions.json`). The wake route's manual `toolsets` key (setting `wake_toolsets`),
+  which `hermes webhook subscribe` deliberately cannot set, is the user's edit: setup prints the exact line and refuses
+  while a waking board would be ungated (see `wakeguard.py`).
 - Python 3.9 or newer, standard library only (PyYAML is optional). Code must run on macOS, Linux and Windows; use
   `locks.py` for file locks and avoid POSIX-only calls outside it.
 - No identifiers of a person, machine, network or other project in code, docs, tests or fixtures. Use example domains such
