@@ -53,14 +53,15 @@ itself once the board runs, and setup prints no link until a board answers. The 
 
 Hermes runs the session Send wakes with its safe webhook tools only, so by default that session replies "Round N
 feedback is saved; the build continues in this thread's chat session." and the chat's own session builds the round. To
-let the woken session build right away, grant it toolsets and re-run setup. Include `mock-review` so it can call the
+let the woken session build right away, set the toolsets, re-run setup and add the line it prints by hand. Include `mock-review` so it can call the
 mock_review tools; the list replaces Hermes's webhook default rather than adding to it:
 
     hermes config set plugins.entries.mock-review.settings.wake_toolsets "mock-review,terminal,file"
     hermes mockreview setup
 
-Setup writes them into the wake route only (`--dry-run` shows the change), and removes them when you empty the setting
-and run it again. It refuses while a board's Send button would be ungated (a here.now board with its password off, or
+Setup never edits Hermes's route file: it prints the `"toolsets"` line to add to the wake route in
+`webhook_subscriptions.json` (Hermes keeps this a manual step so an agent cannot grant itself tools). Each setup run
+re-subscribes the route and drops the key, so add it again afterwards. It refuses while a board's Send button would be ungated (a here.now board with its password off, or
 the server listening beyond loopback), because feedback typed there would reach those tools. Read [security](docs/security.md#tools-for-the-woken-session-wake_toolsets) first.
 
 ### Try a board without an agent

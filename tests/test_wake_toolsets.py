@@ -46,40 +46,51 @@ def test_wake_toolsets_defaults_to_empty_and_validates_names(monkeypatch):
         settings.get("wake_toolsets", ["terminal; rm -rf /"])
 
 
-# ---------------------------------------------------------------- setup writes the route's manual toolsets key
+# ---------------------------------------------------------------- setup prints the route's manual toolsets line
 
-def test_setup_grants_wake_toolsets_on_the_wake_route_only_and_is_idempotent(monkeypatch, tmp_path, capsys):
+def _line(toolsets):
+    return '"toolsets": ' + json.dumps(toolsets)
+
+
+def _no_toolsets_on_disk():
+    return not _subs_path().exists() or all("toolsets" not in r for r in _subs().values())
+
+
+def test_setup_prints_the_toolsets_line_for_the_wake_route_only_and_never_writes_it(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal,file")
     shim = _shim(tmp_path)
     fake_create(monkeypatch)
     rc, out, _ = run_setup(monkeypatch, shim, capsys)
     assert rc == 0, out
-    subs = _subs()
-    assert subs[WAKE]["toolsets"] == ["terminal", "file"]
-    assert "toolsets" not in subs[NOTICE]                        # the deliver-only route runs no agent
-    assert f"will change: set toolsets terminal, file on webhook route {WAKE}" in out
-    assert re.search(r"^\s*wake toolsets\s+ok\s+\(terminal, file\)", out, re.M)
-    assert subs[WAKE]["secret"] not in out
+    assert f'add this line to the "{WAKE}" route' in out and _line(["terminal", "file"]) in out
+    assert f'"{NOTICE}" route' not in out                         # the deliver-only route runs no agent
+    assert re.search(r"^\s*wake toolsets\s+manual\s+\(add by hand, see above; not verified\)", out, re.M)
+    assert _no_toolsets_on_disk()                                 # setup never edits the route file itself
+    assert _subs()[WAKE]["secret"] not in out
 
-    rc, out, _ = run_setup(monkeypatch, shim, capsys)            # re-run: the same file
-    assert rc == 0 and _subs() == subs
+    before = _subs()
+    rc, again, _ = run_setup(monkeypatch, shim, capsys)            # re-run: same instructions, file untouched
+    assert rc == 0 and _line(["terminal", "file"]) in again and _no_toolsets_on_disk()
+    assert set(_subs()) == set(before)
 
-    monkeypatch.delenv("MOCKREVIEW_WAKE_TOOLSETS")               # emptied: the key goes away
+
+def test_setup_tells_the_user_a_rerun_drops_a_hand_added_key(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
+    shim = _shim(tmp_path)
+    fake_create(monkeypatch)
     rc, out, _ = run_setup(monkeypatch, shim, capsys)
     assert rc == 0
-    after = _subs()
-    assert "toolsets" not in after[WAKE] and "toolsets" not in after[NOTICE]
-    assert "set toolsets" not in out
+    assert "re-subscribes" in out and "add the line again" in out
 
 
-def test_setup_dry_run_shows_the_toolsets_change_and_writes_nothing(monkeypatch, tmp_path, capsys):
+def test_setup_dry_run_prints_the_toolsets_line_and_writes_nothing(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal,file")
     shim = _shim(tmp_path)
     fake_create(monkeypatch)
     rc, out, _ = run_setup(monkeypatch, shim, capsys, args=("--yes", "--dry-run"))
     assert rc == 0
-    assert f"will change: set toolsets terminal, file on webhook route {WAKE}" in out
-    assert re.search(r"^\s*wake toolsets\s+planned\s+\(terminal, file\)", out, re.M)
+    assert _line(["terminal", "file"]) in out
+    assert re.search(r"^\s*wake toolsets\s+manual", out, re.M)
     assert not _subs_path().exists()
 
 
@@ -102,10 +113,11 @@ def test_setup_refuses_wake_toolsets_while_an_unpassworded_herenow_review_is_ope
     assert rc == 1
     assert "refusing to set wake_toolsets" in out and public["id"] in out
     assert re.search(r"^\s*wake toolsets\s+failed", out, re.M)
-    assert all("toolsets" not in r for r in _subs().values())
+    assert '"toolsets":' not in out                                # no line to paste while a board is ungated
+    assert _no_toolsets_on_disk()
 
 
-def test_setup_grants_wake_toolsets_with_a_passworded_herenow_review_open(env, monkeypatch, tmp_path, capsys):
+def test_setup_prints_the_line_with_a_passworded_herenow_review_open(env, monkeypatch, tmp_path, capsys):
     spec = store.parse_round_spec(decisions=str(_decisions_file(tmp_path)))
     store.create_review("Gated", "", ORIGIN, "herenow", spec, password=True)
     monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
@@ -114,7 +126,7 @@ def test_setup_grants_wake_toolsets_with_a_passworded_herenow_review_open(env, m
     rc, out, _ = run_setup(monkeypatch, shim, capsys)
     assert rc == 0, out
     assert "refusing to set wake_toolsets" not in out
-    assert _subs()[WAKE]["toolsets"] == ["terminal"]
+    assert _line(["terminal"]) in out and _no_toolsets_on_disk()
 
 
 def test_setup_refuses_wake_toolsets_with_lan_hosting(monkeypatch, tmp_path, capsys):
@@ -124,7 +136,7 @@ def test_setup_refuses_wake_toolsets_with_lan_hosting(monkeypatch, tmp_path, cap
     rc, out, _ = run_setup(monkeypatch, shim, capsys, args=("--yes", "--hosting", "lan"))
     assert rc == 1
     assert "refusing to set wake_toolsets" in out and "lan hosting" in out
-    assert all("toolsets" not in r for r in _subs().values())
+    assert '"toolsets":' not in out and _no_toolsets_on_disk()
 
 
 def test_setup_refuses_wake_toolsets_with_herenow_hosting_and_password_off(monkeypatch, tmp_path, capsys):
@@ -135,35 +147,46 @@ def test_setup_refuses_wake_toolsets_with_herenow_hosting_and_password_off(monke
     rc, out, _ = run_setup(monkeypatch, shim, capsys, args=("--yes", "--hosting", "herenow"))
     assert rc == 1
     assert "refusing to set wake_toolsets" in out and "herenow_password off" in out
-    assert all("toolsets" not in r for r in _subs().values())
+    assert '"toolsets":' not in out and _no_toolsets_on_disk()
 
 
-def test_setup_with_wake_toolsets_opens_only_the_subscriptions_file(monkeypatch, tmp_path, capsys):
-    """The one sanctioned exception to "setup never touches Hermes state files": the subscriptions file, and only when
-    the user set wake_toolsets. Never .env, auth.json or config.yaml."""
-    forbidden = {".env", "auth.json", "config.yaml"}
+def test_setup_with_wake_toolsets_never_opens_a_hermes_state_file(monkeypatch, tmp_path, capsys):
+    """With wake_toolsets set, setup still changes Hermes state only through `hermes` subcommands: it never opens
+    webhook_subscriptions.json (nor .env, auth.json, config.yaml) itself, for reading or writing."""
+    forbidden = {".env", "auth.json", "config.yaml", "webhook_subscriptions.json", ".webhook_subscriptions.lock"}
     opened = []
-    original_open, original_io_open = builtins.open, io.open
+    original_open, original_io_open, original_read = builtins.open, io.open, Path.read_text
+    original_os_open = os.open
 
     def check(path):
         if isinstance(path, (str, bytes, os.PathLike)):
             name = Path(os.fsdecode(path)).name
             opened.append(name)
-            if name in forbidden:
-                raise AssertionError("forbidden Hermes state read")
+            if name in forbidden or name.startswith(".webhook_subscriptions."):
+                raise AssertionError(f"forbidden Hermes state access: {name}")
 
     monkeypatch.setattr(builtins, "open", lambda p, *a, **k: (check(p), original_open(p, *a, **k))[1])
     monkeypatch.setattr(io, "open", lambda p, *a, **k: (check(p), original_io_open(p, *a, **k))[1])
+    monkeypatch.setattr(Path, "read_text", lambda p, *a, **k: (check(p), original_read(p, *a, **k))[1])
+    monkeypatch.setattr(os, "open", lambda p, *a, **k: (check(p), original_os_open(p, *a, **k))[1])
     monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
     shim = _shim(tmp_path)
     fake_create(monkeypatch)
-    rc, _, _ = run_setup(monkeypatch, shim, capsys)
-    assert rc == 0
-    assert "webhook_subscriptions.json" in opened and not forbidden & set(opened)
+    rc, out, _ = run_setup(monkeypatch, shim, capsys)
+    assert rc == 0, out
+    assert not forbidden & set(opened)
 
 
-def test_hermes_reads_the_toolsets_setup_wrote(monkeypatch, tmp_path, capsys):
-    """Read the written file with Hermes's own WebhookAdapter.toolsets_for_source (keyed on user_id webhook:<route>)."""
+def test_setup_module_has_no_route_file_writer():
+    """The sanctioned path is `hermes webhook ...`; the old direct reader/writer must not come back."""
+    src = (ROOT / "mockreview" / "setup.py").read_text(encoding="utf-8")
+    for name in ("_read_subscriptions", "_write_subscriptions", "sync_wake_toolsets", "SUBSCRIPTIONS_LOCK"):
+        assert name not in src, name
+
+
+def test_hermes_reads_the_line_setup_printed(monkeypatch, tmp_path, capsys):
+    """Paste the printed line into the route the way the user would, then read it with Hermes's own
+    WebhookAdapter.toolsets_for_source (keyed on user_id webhook:<route>)."""
     src = os.environ.get("HERMES_AGENT_SRC")
     if src:
         sys.path.insert(0, str(Path(src).expanduser()))
@@ -174,9 +197,13 @@ def test_hermes_reads_the_toolsets_setup_wrote(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal,file")
     shim = _shim(tmp_path)
     fake_create(monkeypatch)
-    assert run_setup(monkeypatch, shim, capsys)[0] == 0
+    rc, out, _ = run_setup(monkeypatch, shim, capsys)
+    assert rc == 0
+    printed = next(l.strip() for l in out.splitlines() if l.strip().startswith('"toolsets":'))
+    subs = _subs()
+    subs[WAKE].update(json.loads("{" + printed.rstrip(",") + "}"))   # the user's manual edit
     adapter = WebhookAdapter.__new__(WebhookAdapter)
-    adapter._routes = _subs()
+    adapter._routes = subs
     assert adapter.toolsets_for_source(SimpleNamespace(user_id=f"webhook:{WAKE}")) == ["terminal", "file"]
     assert adapter.toolsets_for_source(SimpleNamespace(user_id=f"webhook:{NOTICE}")) is None
 
