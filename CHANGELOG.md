@@ -3,6 +3,13 @@
 All notable changes to this project are listed here. The format follows Keep a Changelog, and the project follows
 semantic versioning.
 
+## [1.1.6](https://github.com/apelabs-dev/hermes-mock-review/compare/v1.1.5...v1.1.6) (2026-11-03)
+
+
+### Bug Fixes
+
+* bundle password-gated here.now prototypes and verify them in a real browser ([#14](https://github.com/apelabs-dev/hermes-mock-review/issues/14)) ([3e099bc](https://github.com/apelabs-dev/hermes-mock-review/commit/3e099bcd7e6d93741c496fed5270ec28d9f7a952))
+
 ## [1.1.5](https://github.com/apelabs-dev/hermes-mock-review/compare/v1.1.4...v1.1.5) (2026-11-02)
 
 
