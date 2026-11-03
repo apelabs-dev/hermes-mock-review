@@ -95,13 +95,32 @@ def load(review_id: str) -> Dict[str, Any]:
     return json.loads(p.read_text(encoding="utf-8"))
 
 
+# On Windows, replacing a file another thread or process has open for reading fails with ERROR_ACCESS_DENIED
+# (PermissionError) until that reader closes it, which is a few milliseconds here: the board reads review.json on every
+# request. Retry the rename briefly there instead of failing the write (a Send answered 500 on Windows CI).
+_WINDOWS = os.name == "nt"
+_REPLACE_TRIES = 40
+_REPLACE_DELAY = 0.025
+
+
+def _replace(src: str, dst: Path) -> None:
+    for attempt in range(_REPLACE_TRIES):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if not _WINDOWS or attempt == _REPLACE_TRIES - 1:
+                raise
+            time.sleep(_REPLACE_DELAY)
+
+
 def atomic_write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-", suffix=path.suffix)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
-        os.replace(tmp, path)
+        _replace(tmp, path)
     except BaseException:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(tmp)
