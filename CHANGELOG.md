@@ -3,6 +3,14 @@
 All notable changes to this project are listed here. The format follows Keep a Changelog, and the project follows
 semantic versioning.
 
+## [1.1.7](https://github.com/apelabs-dev/hermes-mock-review/compare/v1.1.6...v1.1.7) (2026-11-03)
+
+
+### Bug Fixes
+
+* open "Try it live" rounds on Use it so clicks work the page ([#16](https://github.com/apelabs-dev/hermes-mock-review/issues/16)) ([e704997](https://github.com/apelabs-dev/hermes-mock-review/commit/e70499710b51b26def5b0ad2ea1c34903418d894))
+* retry the review.json rename on Windows while a reader holds the file ([#19](https://github.com/apelabs-dev/hermes-mock-review/issues/19)) ([20b410f](https://github.com/apelabs-dev/hermes-mock-review/commit/20b410f5719dadde3f53e3e345d2d83ad108091a))
+
 ## [1.1.6](https://github.com/apelabs-dev/hermes-mock-review/compare/v1.1.5...v1.1.6) (2026-11-03)
 
 
