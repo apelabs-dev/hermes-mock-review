@@ -33,12 +33,25 @@ def chrome():
         bc.find_browser()
     except bc.BrowserUnavailable:
         pytest.skip("no Chrome/Chromium/Edge installed")
-    with bc.Chrome() as (host, port, path):
+    # A cold browser on a busy CI runner (Windows especially) can take well over the production check's 20 s to open
+    # its debugging port, so give it longer and one relaunch. A launch failure is a rig problem, not the board's.
+    for attempt in (1, 2):
+        browser = bc.Chrome(startup=60)
+        try:
+            host, port, path = browser.__enter__()
+            break
+        except bc.BrowserCheckError:
+            browser.__exit__(None, None, None)
+            if attempt == 2:
+                raise
+    try:
         ws = bc.WebSocket(host, port, path)
         try:
             yield bc.Cdp(ws, bc.Observer())
         finally:
             ws.close()
+    finally:
+        browser.__exit__(None, None, None)
 
 
 @pytest.fixture
