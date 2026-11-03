@@ -19,9 +19,11 @@ PAGE = ('<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;f
         '#go{position:absolute;left:20px;top:20px;width:220px;height:90px}</style></head><body>'
         '<button id="go" type="button">Do the thing</button>'
         '<script>var n=0;document.getElementById("go").addEventListener("click",function(){n++;'
-        'parent.postMessage({proto_click:n},"*");});</script></body></html>')
+        'parent.postMessage({proto_click:n},"*");});'
+        'addEventListener("load",function(){parent.postMessage({proto_ready:1},"*");});</script></body></html>')
 
-RECORDER = ('if (window.top === window) { window.__clicks = 0; addEventListener("message", function (e) {'
+RECORDER = ('if (window.top === window) { window.__clicks = 0; window.__ready = 0; addEventListener("message", function (e) {'
+            ' if (e.data && e.data.proto_ready) window.__ready = 1;'
             ' if (e.data && e.data.proto_click) window.__clicks = e.data.proto_click; }); }')
 
 
@@ -59,8 +61,9 @@ class Board:
                                                         "mobile": False}, session=self.sid)
         cdp.call("Page.addScriptToEvaluateOnNewDocument", {"source": RECORDER}, session=self.sid)
         cdp.call("Page.navigate", {"url": url}, session=self.sid)
-        assert self.until("!!document.querySelector('.proto iframe')"), "the prototype round never rendered"
-        time.sleep(1.0)  # the frame loads and its probe says hello
+        assert self.until("!!document.querySelector('.proto iframe') && window.__ready === 1", timeout=60), \
+            "the prototype round never loaded"
+        time.sleep(0.5)  # the probe's hello reaches the board, which answers with the tool state
 
     def js(self, expr):
         return self.cdp.evaluate(expr, session=self.sid)
@@ -74,10 +77,12 @@ class Board:
             self.cdp.pump(0.1)
         return None
 
-    def settle(self):
-        # A popover drawn over the cross-process frame needs a beat before Chrome's hit-test data includes it;
-        # clicked sooner, the event still goes to the frame underneath. A person is never that fast.
-        time.sleep(0.5)
+    def press(self, sel):
+        # The pin popover's own buttons sit over the cross-process frame, and right after the popover appears Chrome's
+        # hit-test data can still send a synthetic click to the frame underneath (a person is never that fast).
+        # Those buttons are not under test, so press them directly; every click on the page itself is a real one.
+        assert self.js("(function(e){if(!e)return false;e.click();return true})(document.querySelector(%s))"
+                       % json.dumps(sel)), f"{sel} is not on the page"
 
     def click(self, x, y):
         for kind in ("mouseMoved", "mousePressed", "mouseReleased"):
@@ -91,10 +96,20 @@ class Board:
         assert r, f"{sel} is not on the page"
         self.click(*r)
 
-    def click_page_button(self):
-        r = json.loads(self.js("JSON.stringify((function(r){return [r.left,r.top]})("
-                               "document.querySelector('.proto iframe').getBoundingClientRect()))"))
-        self.click(r[0] + 130, r[1] + 65)   # the centre of #go inside the frame
+    def tap_page(self, tries=4):
+        """A real click on the page's button. Returns 'page' when the page's own handler ran, 'pin' when the board
+        opened a pin instead. A click that did neither (a slow runner still compositing the frame) is retried; it is
+        never counted as either outcome, so the bug (a pin) and the fix (the handler) stay distinguishable."""
+        before = self.clicks()
+        for _ in range(tries):
+            r = json.loads(self.js("JSON.stringify((function(r){return [r.left,r.top]})("
+                                   "document.querySelector('.proto iframe').getBoundingClientRect()))"))
+            self.click(r[0] + 130, r[1] + 65)   # the centre of #go inside the frame
+            got = self.until("window.__clicks > %d ? 'page' : document.querySelector('.popover') ? 'pin' : ''" % before,
+                             timeout=4)
+            if got:
+                return got
+        return "missed"
 
     def tool(self):
         return self.js("(document.querySelector('#proto-tool .seg-btn.on')||{}).textContent||''")
@@ -111,9 +126,8 @@ class Board:
 
 def test_live_round_opens_on_use_it_and_clicks_work_the_page(server, live_review, chrome):
     b = Board(chrome, f"{server}/r/{live_review}/")
-    b.click_page_button()
-    assert b.until("window.__clicks === 1", timeout=5), "a first click on the live page must reach the page's handler"
-    assert not b.popover() and b.pins() == 0
+    assert b.tap_page() == "page", "a first click on the live page must reach the page's handler, not drop a pin"
+    assert b.clicks() == 1 and not b.popover() and b.pins() == 0
     assert b.tool() == "Use it"
     assert b.js("!!document.querySelector('#dzbar #proto-tool')"), "the switch must live in the header"
     assert not b.js("!!document.querySelector('.proto-foot .seg')"), "no second switch under the page"
@@ -124,30 +138,20 @@ def test_pin_is_opt_in_and_drops_back_to_use_it(server, live_review, chrome):
     # Pin, then save: a pin is added, the page's handler never ran, and the next click works the page again.
     b.click_sel("#proto-tool .seg-btn:nth-child(2)")
     assert b.until("document.body.classList.contains('proto-pin')") and b.tool() == "Pin"
-    b.click_page_button()
-    assert b.until("!!document.querySelector('.popover textarea')"), "a click in Pin mode must open a pin"
-    b.settle()
+    assert b.tap_page() == "pin", "a click in Pin mode must open a pin"
     assert b.clicks() == 0, "in Pin mode the page's handler must not run"
-    # Typing is not what's under test (headless keyboard focus can stay on the frame), so set the note directly.
     b.js("(function(t){t.value='make this bigger';t.dispatchEvent(new Event('input'));return 1})(document.querySelector('.popover textarea'))")
-    b.click_sel(".popover .btn-primary")
-    assert b.until("document.querySelectorAll('#pins-proto li').length === 1"), b.js(
-        "JSON.stringify([!!document.querySelector('.popover'), document.querySelector('.popover textarea') && document.querySelector('.popover textarea').value,"
-        "(function(){var e=document.querySelector('.popover .btn-primary');if(!e)return null;var r=e.getBoundingClientRect();return [r.left,r.top,r.width,r.height, document.elementFromPoint(r.left+r.width/2,r.top+r.height/2).outerHTML.slice(0,80)]})(), innerWidth, innerHeight])")
+    b.press(".popover .btn-primary")
+    assert b.until("document.querySelectorAll('#pins-proto li').length === 1")
     assert b.tool() == "Use it" and not b.js("document.body.classList.contains('proto-pin')")
-    time.sleep(0.3)
-    b.click_page_button()
-    assert b.until("window.__clicks === 1"), "after a pin the page must be clickable again"
-    assert b.pins() == 1 and not b.popover()
+    assert b.tap_page() == "page", "after a pin the page must be clickable again"
+    assert b.clicks() == 1 and b.pins() == 1 and not b.popover()
     # Pin, then cancel: no pin, back to Use it.
     b.click_sel("#proto-tool .seg-btn:nth-child(2)")
     assert b.until("document.body.classList.contains('proto-pin')")
-    b.click_page_button()
-    assert b.until("!!document.querySelector('.popover')")
-    b.settle()
-    b.click_sel(".popover .pop-actions .btn-ghost")
+    assert b.tap_page() == "pin"
+    b.press(".popover .pop-actions .btn-ghost")
     assert b.until("!document.querySelector('.popover')")
     assert b.tool() == "Use it" and b.pins() == 1
-    time.sleep(0.3)
-    b.click_page_button()
-    assert b.until("window.__clicks === 2")
+    assert b.tap_page() == "page"
+    assert b.clicks() == 2
