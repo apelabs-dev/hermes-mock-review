@@ -32,6 +32,7 @@
     view: 1,
     device: pref('device', window.innerWidth < 700 ? 'both' : 'both'),
     tool: 'comment',
+    protoTool: 'interact',   // "Try it live" opens usable: Pin is opt-in and drops back to Use it after each pin
     draft: null,
     amending: false,
     sending: false,
@@ -1012,7 +1013,7 @@
     var bar = h('header', { class: 'dzbar', id: 'dzbar' },
       projectIcon(r),
       h('div', { class: 'pb-title' }, h('strong', { text: st.title }), h('span', { class: 'pb-sub', text: (d ? d.label + ' · ' : '') + 'Round ' + r.n + (r.kind === 'prototype' ? ' · prototype' : '') })),
-      h('span', { class: 'spacer' }), widthSeg, themeControl(r), chip);
+      h('span', { class: 'spacer' }), protoToolSeg(r), widthSeg, themeControl(r), chip);
     if (window.ResizeObserver) new ResizeObserver(function () { document.documentElement.style.setProperty('--barh', bar.offsetHeight + 'px'); }).observe(bar);
     return bar;
   }
@@ -1452,34 +1453,55 @@
     f.iframe = h('iframe', { src: v.file, title: R().title + ' prototype', sandbox: 'allow-scripts', referrerpolicy: 'no-referrer' });
     f.el = f.iframe;
     S.frames = [f];
-    if (!pinsOn()) S.tool = 'interact';
-    var tools = isEditable() && pinsOn() ? seg([{ value: 'interact', label: 'Use it', icon: 'hand' }, { value: 'comment', label: 'Pin', icon: 'pin' }],
-      S.tool, function (t) { S.tool = t; keepPlace(render); }, 'Tool') : null;
+    if (!pinsOn()) S.protoTool = 'interact';
     var b = { id: 'proto', type: 'recap', options: [] };
-    var foot = h('div', { class: 'proto-foot' }, tools, decideRow(b, false), h('span', { class: 'status', id: 'proto-status' }));
+    var foot = h('div', { class: 'proto-foot' }, decideRow(b, false), h('span', { class: 'status', id: 'proto-status' }));
     if (S.width !== 'desktop') f.iframe.style.width = (S.width === 'phone' ? CFG.mobile_width : CFG.tablet_width) + 'px';
     var stage = h('div', { class: 'proto w-' + S.width }, f.iframe);
     var wrap = h('div', { class: 'proto-wrap', id: 'dz-proto' }, stage, foot, h('ol', { class: 'ipins', id: 'pins-proto' }));
     setTimeout(function () { refreshBlock('proto'); }, 0);
+    document.body.classList.toggle('proto-pin', S.protoTool === 'comment');
     return wrap;
+  }
+  // "Use it | Pin" lives in the header on a prototype round, so it is never hidden under the page.
+  function protoToolSeg(r) {
+    if (r.kind !== 'prototype' || !isEditable() || !pinsOn()) return null;
+    var t = seg([{ value: 'interact', label: 'Use it', icon: 'hand', title: 'Click through the page' },
+      { value: 'comment', label: 'Pin', icon: 'pin', title: 'Tap the page to pin a comment' }], S.protoTool, setProtoTool, 'Tool');
+    t.classList.add('tseg');
+    t.id = 'proto-tool';
+    return t;
+  }
+  // Switch without re-rendering: a re-render would reload the page and lose where he clicked through to.
+  function setProtoTool(t) {
+    S.protoTool = t === 'comment' && pinsOn() ? 'comment' : 'interact';
+    var g = document.getElementById('proto-tool');
+    if (g) Array.prototype.forEach.call(g.querySelectorAll('.seg-btn'), function (b, i) {
+      var on = (i === 0 ? 'interact' : 'comment') === S.protoTool;
+      b.classList.toggle('on', on); b.setAttribute('aria-checked', on ? 'true' : 'false');
+    });
+    document.body.classList.toggle('proto-pin', S.protoTool === 'comment');
+    var f = S.frames[0];
+    if (f && f.ctx === 'proto') pushProto(f);
   }
   function pushProto(f) {
     var out = [];
     S.draft.pins.forEach(function (p, i) { if (p.block === 'proto' && p.w === f.device) out.push({ i: i, n: i + 1, x: p.x, y: p.y }); });
     if (f.ghost) out.push({ i: -1, n: S.draft.pins.length + 1, x: f.ghost.x, y: f.ghost.y, ghost: true });
-    try { f.iframe.contentWindow.postMessage({ __mockreview: 1, cmd: 'state', comment: isEditable() && pinsOn() && S.tool === 'comment', scale: 1, pins: pinsOn() ? out : [] }, '*'); } catch (e) {}
+    try { f.iframe.contentWindow.postMessage({ __mockreview: 1, cmd: 'state', comment: isEditable() && pinsOn() && S.protoTool === 'comment', scale: 1, pins: pinsOn() ? out : [] }, '*'); } catch (e) {}
   }
   function protoMessage(f, d) {
     var rc = f.iframe.getBoundingClientRect();
     if (d.type === 'hello') { f.alive = true; pushProto(f); return; }
     if (d.type === 'click') {
-      if (!isEditable() || !pinsOn() || S.tool !== 'comment') return;
+      if (!isEditable() || !pinsOn() || S.protoTool !== 'comment') return;
       var x = num(d.x, 0, 1), y = num(d.y, 0, 1);
       f.ghost = { x: x, y: y }; pushProto(f);
       notePop({ title: 'New pin · prototype', where: wlabel(f.device) + ' · ~' + pct(x) + ', ' + pct(y) + ' of the page', isNew: true,
         anchor: { x: rc.left + num(d.cx, 0, 4000), y: rc.top + num(d.cy, 0, 4000) }, text: '',
-        onClose: function () { f.ghost = null; pushProto(f); },
-        onSave: function (text) { S.draft.pins.push({ block: 'proto', option: null, w: f.device, x: x, y: y, text: text }); saveDraft(); f.ghost = null; pushProto(f); redrawPins('proto'); } });
+        // One pin per Pin tap: saved or cancelled, the page goes back to Use it so the next click works the page.
+        onClose: function () { f.ghost = null; setProtoTool('interact'); },
+        onSave: function (text) { S.draft.pins.push({ block: 'proto', option: null, w: f.device, x: x, y: y, text: text }); saveDraft(); f.ghost = null; setProtoTool('interact'); redrawPins('proto'); } });
     } else if (d.type === 'pin') {
       var i = num(d.i, -1, 99) | 0, p = S.draft.pins[i]; if (!p) return;
       notePop({ title: 'Pin ' + (i + 1) + ' · prototype', where: wlabel(p.w) + ' · ~' + pct(p.x) + ', ' + pct(p.y),

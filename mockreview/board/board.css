@@ -475,6 +475,9 @@ figure.ctx-fig { margin-top: 16px; }
   .dzbar .wseg .seg-btn { padding: 5px 8px; }
   .dzbar .wseg .seg-btn span { display: none; }
   .dzbar .wseg .seg-btn .ico { display: inline; }
+  .dzbar .tseg .seg-btn { padding: 5px 8px; }
+  .dzbar .tseg .seg-btn span { display: none; }
+  .dzbar .tseg .seg-btn .ico { display: inline; }
   .dzbar .badge { padding: 5px 7px; }
   .dzbar .pb-title { flex: 1 1 0; min-width: 0; }
   .dzbar .pb-title strong { max-width: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -74,6 +74,8 @@ one pricing page; this one opens as a live prototype:
       --prototype "$EXAMPLES/a-calm-editorial/index.html"
 
 It prints the review's `url`. `--no-wake` makes it a board nobody is woken by, so no signing secret or route is needed.
+A live prototype opens in **Use it** mode, so clicks work the page. To leave a comment, switch the header to **Pin** and
+tap the spot; after each pin the board goes back to Use it.
 Agents write decision rounds instead; see [docs/decisions-format.md](docs/decisions-format.md).
 
 ## Hosting modes
