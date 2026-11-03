@@ -102,7 +102,8 @@ def _webp(data: bytes, mime: str) -> Tuple[bytes, str]:
     if image_mod is None:
         return data, mime
     try:
-        im = image_mod.open(io.BytesIO(data))
+        pil_open = image_mod.open   # Pillow's image decoder, not a text file handle
+        im = pil_open(io.BytesIO(data))
         if getattr(im, "is_animated", False):
             return data, mime
         if im.mode not in ("RGB", "RGBA"):

@@ -354,7 +354,7 @@ def test_child_env_drops_secret_looking_variables(monkeypatch):
 
 def test_find_browser_env_override_and_missing(monkeypatch, tmp_path):
     exe = tmp_path / "fakechrome"
-    exe.write_text("#!/bin/sh\n")
+    exe.write_text("#!/bin/sh\n", encoding="utf-8")
     exe.chmod(0o755)
     monkeypatch.setenv(bc.BROWSER_ENV, str(exe))
     assert bc.find_browser() == str(exe)
@@ -409,7 +409,7 @@ def _gone(pid: int, wait=5.0) -> bool:
 @posix_only
 def test_chrome_launch_isolated_group_and_cleanup_even_on_error(tmp_path):
     exe = tmp_path / "chrome"
-    exe.write_text(FAKE_BROWSER)
+    exe.write_text(FAKE_BROWSER, encoding="utf-8")
     exe.chmod(exe.stat().st_mode | stat.S_IXUSR)
     c = bc.Chrome(executable=str(exe))
     with pytest.raises(RuntimeError):
@@ -417,12 +417,12 @@ def test_chrome_launch_isolated_group_and_cleanup_even_on_error(tmp_path):
             assert (host, port, path) == ("127.0.0.1", 9222, "/devtools/browser/x")
             pid, profile = c.proc.pid, c.profile
             assert os.getpgid(pid) == pid != os.getpgid(os.getpid())        # its own process group
-            argv = Path(profile, "argv.txt").read_text()
+            argv = Path(profile, "argv.txt").read_text(encoding="utf-8")
             assert "--headless=new" in argv and "--remote-debugging-port=0" in argv and f"--user-data-dir={profile}" in argv
             assert PASSWORD not in argv
             # without these Chrome's network can stall on the macOS keychain when HOME is not a real home
             assert "--use-mock-keychain" in argv and "--password-store=basic" in argv
-            helper = int(Path(profile, "helper.pid").read_text())
+            helper = int(Path(profile, "helper.pid").read_text(encoding="utf-8"))
             assert _alive(helper)
             raise RuntimeError("the check blew up mid-run")
     assert _gone(pid) and _gone(helper), "browser or its helper survived"
@@ -432,14 +432,14 @@ def test_chrome_launch_isolated_group_and_cleanup_even_on_error(tmp_path):
 @posix_only
 def test_chrome_that_exits_early_or_never_opens_its_port_is_cleaned_up(tmp_path):
     early = tmp_path / "early"
-    early.write_text("#!/bin/sh\nexit 3\n")
+    early.write_text("#!/bin/sh\nexit 3\n", encoding="utf-8")
     early.chmod(0o755)
     c = bc.Chrome(executable=str(early))
     with pytest.raises(bc.BrowserCheckError, match="exited before"):
         c.__enter__()
     assert c.profile is None and c.proc is None
     silent = tmp_path / "silent"
-    silent.write_text("#!/bin/sh\nsleep 300\n")
+    silent.write_text("#!/bin/sh\nsleep 300\n", encoding="utf-8")
     silent.chmod(0o755)
     c = bc.Chrome(executable=str(silent), startup=0.5)
     with pytest.raises(bc.BrowserCheckError, match="debugging port in time"):

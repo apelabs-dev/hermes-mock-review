@@ -315,7 +315,8 @@ def test_runtime_helper_resolves_paths_like_the_browser(proj, tmp_path):
     js = ("var window={};" + helper + "console.log(JSON.stringify(["
           "window.__mrA('./assets/p-1.png?v=2#x').slice(0,16),window.__mrA('assets/../assets/p-1.png').slice(0,16),"
           "window.__mrA('assets/other.png')]))")
-    out = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=30).stdout
+    out = subprocess.run(["node", "-e", js], capture_output=True, text=True, encoding="utf-8",
+                         errors="replace", timeout=30).stdout
     assert json.loads(out) == ["data:image/png;b", "data:image/png;b", "assets/other.png"]
 
 
