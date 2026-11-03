@@ -151,3 +151,44 @@ def test_child_environment_keeps_windows_runtime_and_isolates_apps(tmp_path, mon
     assert not any(value == "discard-me" for value in env.values())
     assert all(Path(env[key]).is_relative_to(tmp_path)
                for key in ("HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA"))
+
+
+# ---- review.json replace while a reader holds it (WinError 5 on Windows) ----
+
+def _flaky_replace(monkeypatch, fails):
+    from mockreview import store
+    real, calls = store.os.replace, []
+
+    def fake(src, dst):
+        calls.append(dst)
+        if len(calls) <= fails:
+            raise PermissionError(5, "Access is denied")
+        return real(src, dst)
+    monkeypatch.setattr(store.os, "replace", fake)
+    monkeypatch.setattr(store, "_REPLACE_DELAY", 0)
+    return store, calls
+
+
+def test_windows_replace_retries_while_a_reader_holds_the_file(tmp_path, monkeypatch):
+    store, calls = _flaky_replace(monkeypatch, 3)
+    monkeypatch.setattr(store, "_WINDOWS", True)
+    target = tmp_path / "review.json"
+    store.atomic_write(target, '{"ok": 1}')
+    assert target.read_text(encoding="utf-8") == '{"ok": 1}' and len(calls) == 4
+    assert not list(tmp_path.glob(".tmp-*"))
+
+
+def test_replace_gives_up_after_its_budget_and_cleans_up(tmp_path, monkeypatch):
+    store, calls = _flaky_replace(monkeypatch, 10 ** 6)
+    monkeypatch.setattr(store, "_WINDOWS", True)
+    with pytest.raises(PermissionError):
+        store.atomic_write(tmp_path / "review.json", "{}")
+    assert len(calls) == store._REPLACE_TRIES and not list(tmp_path.glob(".tmp-*"))
+
+
+def test_replace_does_not_retry_off_windows(tmp_path, monkeypatch):
+    store, calls = _flaky_replace(monkeypatch, 1)
+    monkeypatch.setattr(store, "_WINDOWS", False)
+    with pytest.raises(PermissionError):
+        store.atomic_write(tmp_path / "review.json", "{}")
+    assert len(calls) == 1
