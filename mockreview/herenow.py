@@ -21,7 +21,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from . import config, locks, passwords, service, store
+from . import browsercheck, config, locks, passwords, service, store
 from . import secrets
 from .store import ReviewError
 
@@ -86,7 +86,8 @@ def password_result(data: Dict[str, Any]) -> Dict[str, Any]:
         return {}
     hn = data.get("herenow") or {}
     return {"password": hn.get("password") if hn.get("password_enabled") and
-            hn.get("password_status") == "applied" and hn.get("password_applied") is True else None,
+            hn.get("password_status") == "applied" and hn.get("password_applied") is True
+            and not store.verify_blocks(data) else None,
             "password_enabled": hn.get("password_enabled", False),
             "password_status": hn.get("password_status", "legacy")}
 
@@ -123,6 +124,46 @@ def _apply_password(review_id: str) -> Dict[str, Any]:
     return data
 
 
+gated_prototype = store.gated_prototype
+
+
+def _verify_site(review_id: str) -> Dict[str, Any]:
+    """Caller holds .publish.lock and the password gate is live. Load the real board behind its password in a browser
+    (browsercheck): any 4xx/5xx or failed subresource, an unstyled frame or a missing browser fails the publish, and
+    the review's URL and password stay withheld (verify_status) until a later publish passes."""
+    with store.locked(review_id):
+        data = store.load(review_id)
+        hn, rnd = data["herenow"], data["rounds"][-1]
+        site_url, secret, n, vid = hn.get("site_url"), hn.get("password"), rnd["n"], rnd["variants"][0]["id"]
+        hn.update(verify_status="pending", verify_error=None)
+        store.save(review_id, data)
+    problem: Optional[browsercheck.BrowserCheckError] = None
+    if not site_url or not secret:
+        problem = browsercheck.BrowserCheckError("the site URL or password is not stored")
+    else:
+        try:
+            browsercheck.verify_board(site_url, secret, n, variant=vid)
+        except browsercheck.BrowserCheckError as e:
+            problem = e
+    with store.locked(review_id):
+        data = store.load(review_id)
+        hn = data["herenow"]
+        if problem is None:
+            hn.update(verify_status="verified", verify_error=None, verified_round=n, verified_at=store.now_iso())
+        else:
+            hn.update(verify_status="failed", verify_error=problem.message[:600])
+        store.save(review_id, data)
+    if problem is not None:
+        unavailable = isinstance(problem, browsercheck.BrowserUnavailable)
+        raise HereNowError(
+            f"browser check of the password-gated prototype failed: {problem.message}. "
+            + ("It could not be verified, so it is treated as failed. " if unavailable else "")
+            + "The board's link and password are withheld. Fix the prototype and add a round (a gated prototype "
+            f"round is bundled automatically), or retry `mockreview publish {review_id}`.",
+            409 if unavailable else 502)
+    return data
+
+
 def set_password(review_id: str, enabled: bool) -> Dict[str, Any]:
     if not isinstance(enabled, bool):
         raise ReviewError("password must be a boolean")
@@ -138,7 +179,10 @@ def set_password(review_id: str, enabled: bool) -> Dict[str, Any]:
             if enabled and not hn.get("password"):
                 hn["password"] = passwords.generate()
             store.save(review_id, data)
-        return _apply_password(review_id)
+        data = _apply_password(review_id)
+        if enabled and gated_prototype(data):
+            data = _verify_site(review_id)     # a prototype round made while the gate was off has no bundle
+        return data
 
 
 def build_site(data: Dict[str, Any], dest: Path) -> Path:
@@ -156,8 +200,9 @@ def build_site(data: Dict[str, Any], dest: Path) -> Path:
     return dest
 
 
-def publish(review_id: str) -> Dict[str, Any]:
-    """Build and publish (create or update) the review's site via the here.now publish helper."""
+def publish(review_id: str, verify: bool = True) -> Dict[str, Any]:
+    """Build and publish (create or update) the review's site via the here.now publish helper. A gated prototype is
+    then loaded in a browser behind its password (see _verify_site); the poller's quiet republish skips that."""
     try:
         script = config.herenow_publish_script()
     except FileNotFoundError as e:
@@ -200,12 +245,14 @@ def publish(review_id: str) -> Dict[str, Any]:
         if hn.get("password_enabled") or ("password_enabled" in hn and
                                           hn.get("password_status") != "applied"):
             data = _apply_password(review_id)
+        if verify and gated_prototype(data):
+            data = _verify_site(review_id)
     return data
 
 
 def republish_quietly(review_id: str) -> None:
     try:
-        publish(review_id)
+        publish(review_id, verify=False)
     except Exception as e:  # the poller must keep running
         log.error("republish of %s failed: %s", review_id, e)
 

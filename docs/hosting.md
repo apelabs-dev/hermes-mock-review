@@ -132,3 +132,55 @@ An unpublished toggle saves the choice but returns an error until publication ca
 
 Legacy reviews without a stored password choice stay public on republish. Enable their gate explicitly with the
 password command. Closing still archives feedback and deletes the site; housekeeping behavior is unchanged.
+
+### Prototype rounds on a password-gated board
+
+A prototype ("try it live") round shows the page in an iframe with `sandbox="allow-scripts"`. That frame has an opaque
+origin, so its requests for its own stylesheets, scripts, images and fonts are cross-site, and the here.now unlock cookie
+(`__hn_unlock_<slug>`, `SameSite=Lax`) is not sent with them. The gate answers each one with 401 and the reviewer sees an
+unstyled, broken page. Fetching the same URLs with `curl` and the cookie typed in by hand returns 200, so a curl check
+passes while a reviewer's browser fails. Mock-review does not add `allow-same-origin` to work around it: that would give
+the prototype the board's own origin.
+
+Two things make a gated prototype work, and both run on `create` and `add-round` (CLI, API and the agent tools):
+
+- **Bundling.** For a here.now review with its password on, a prototype round is rewritten into one self-contained HTML
+  file. Local CSS (including `@import` and `url()` references inside it), scripts, images, fonts, icons, `srcset`
+  candidates and inline `style` URLs become `data:` URIs. ES modules (`import`, `export ... from`, `import()`) are
+  served through an import map. A path that a script builds at run time from a folder prefix, such as
+  ``` `assets/shots/poster-${n}.webp` ```, resolves through one generated lookup table that holds each file once, and a
+  whole-string path in a script is looked up there too. `srcset` lists are parsed candidate by candidate, so a list that
+  mixes `data:`, remote and local candidates has every local one inlined. Missing files (including a script string that
+  is a whole asset path naming no file, such as `'missing.png'` or `'lost/poster.png'`, and a template literal that ends
+  in an asset extension whose folder is missing; external URLs, prose, object keys, a download's file name and a bare
+  `x.json` or `x.txt` are left as written), paths outside the prototype's folder,
+  symbolic links, oversized files (25 MiB each, 50 MiB of assets in all, as for other rounds, and 64 MiB of output), a local `<iframe>`, a link to another
+  local page, a manifest, `<base href>`, a Content-Security-Policy that blocks `data:`, workers, a service worker, an own
+  import map with local paths and paths built by concatenation (`"assets/" + name`) are errors that name the file or
+  construct; nothing is created or published. A PNG or JPEG over 300 KB is re-encoded as WebP (quality 85) only when
+  Pillow is already installed and the result is smaller; otherwise it is inlined unchanged. Nothing is installed.
+  Boards on `local`, `tailnet`, and here.now boards with the password off keep serving the `assets/` folder as before.
+- **Browser verification.** After the gate is applied, mock-review opens the published board in the installed Chrome,
+  Chromium or Edge (headless, throwaway profile, one browser at a time), types the password into the form like a
+  reviewer, lets the board build its real sandboxed frame and counts every HTTP 4xx/5xx and failed request after the
+  unlock, including the prototype's own favicon request (only the browser's probe for the board page itself is
+  ignored). The frame is an out-of-process frame, which the check follows through its own browser session. Any failure,
+  a request still unfinished when the wait ends, a frame that is not exactly `sandbox="allow-scripts"`, or a frame with
+  stylesheets that none applied, fails the publish. The browser is found from `MOCKREVIEW_BROWSER` (path to the executable), then the usual
+  names on `PATH`, then the standard macOS and Windows install paths. With no browser the check cannot run, so the
+  publish fails with a message saying so: it never passes silently. The password goes in through the browser's input
+  channel, never argv, a URL, the environment or a log, and is scrubbed from every message.
+
+While the check runs and after it fails, `verify_status` in `review.json` is `pending` or `failed`; the URL and password
+are withheld from create, add-round, publish, list and open results, the same way an unconfirmed gate is. The site stays
+published but unshared. Fix the prototype and add a round, or retry `hermes mockreview publish <review id>`. A `create`
+that fails this way says the review was created but publishing failed and names that retry command. Turning the password
+on for a board whose newest round is a prototype runs the check too; the poller's background republish does not.
+
+A failed or pending check only withholds the link while it still applies: when the password is turned off (the frame's
+files are then public) or a later round is not a prototype (decisions rounds have no frame), the link and password rules
+are the ordinary ones again, and turning the password back on checks a prototype round again. A board with the password
+off never gets a `verify_status`.
+
+On macOS the check starts Chrome with `--use-mock-keychain --password-store=basic`: without them Chrome's network can
+stall on a Keychain prompt when the process's home directory is not a real one (a test run, a service account).

@@ -88,6 +88,13 @@ A review is hosted in one of three ways. Set the default with `default_host`, or
   needs the official here-now Hermes skill and a `HERENOW_API_KEY`. Create/add-round/publish return a `password`
   beside the URL: send both to the reviewer. Use `--no-password` on create only for an intentionally public board.
   Change an open board with `hermes mockreview password <id> on|off` or `/mockreview password <id> <on|off>`.
+  A prototype round on a password-gated here.now board is bundled into one self-contained HTML file (local CSS, scripts,
+  images and fonts inlined; a missing or unsupported reference fails the call), then published and loaded in a real
+  Chrome, Chromium or Edge behind its password inside the sandboxed iframe; failed requests or an unstyled page fail the
+  publish and the link and password are withheld. The sandboxed frame has an opaque origin, so the `SameSite=Lax` unlock
+  cookie is not sent with its requests and any file left on the site would 401; fetching the URLs with `curl` and the cookie
+  proves nothing. Set `MOCKREVIEW_BROWSER` if the browser is not found. Details in
+  [docs/hosting.md](docs/hosting.md#prototype-rounds-on-a-password-gated-board).
 
 [docs/hosting.md](docs/hosting.md) covers each mode step by step.
 

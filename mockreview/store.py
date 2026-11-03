@@ -535,10 +535,11 @@ def _install_round(review_id: str, n: int, spec: Dict[str, Any]) -> List[Dict[st
         for vid, p in zip(VARIANT_IDS, pages):
             vdir = base / vid
             vdir.mkdir(parents=True)
-            html = p["src"].read_text(encoding="utf-8", errors="replace")
+            # A bundled page (bundle.py) carries its assets inline: no assets/ folder goes into the round.
+            html = p["html"] if p.get("bundled") else p["src"].read_text(encoding="utf-8", errors="replace")
             (vdir / "index.html").write_text(inject_probe(html), encoding="utf-8")
             assets = p["src"].parent / "assets"
-            if assets.is_dir() and not assets.is_symlink():
+            if not p.get("bundled") and assets.is_dir() and not assets.is_symlink():
                 _copy_assets(assets, vdir / "assets")
             variants.append({"id": vid, "label": p["label"], "stance": p["stance"],
                              "file": f"rounds/{n}/{vid}/index.html", "source": str(p["src"])})
@@ -663,10 +664,26 @@ def get_round(data: Dict[str, Any], n: Optional[int]) -> Dict[str, Any]:
     raise ReviewError(f"round {n} not found", 404)
 
 
+def gated_prototype(data: Dict[str, Any]) -> bool:
+    """A password-gated review whose newest round is a prototype: the one case a reviewer's sandboxed frame can lose
+    its assets to the gate, so the published board must be loaded in a browser before anyone is given the link."""
+    return ((data.get("herenow") or {}).get("password_enabled") is True
+            and (data.get("rounds") or [{}])[-1].get("kind") == "prototype")
+
+
+def verify_blocks(data: Dict[str, Any]) -> bool:
+    """The browser check has not cleared the board AND still applies. A failed or pending check only withholds the link
+    while the newest round is a gated prototype: once the password is off, or a later round is not a prototype, there
+    is nothing left for it to guard (a gated prototype round is checked again when it is added or the gate is set)."""
+    return (data.get("herenow") or {}).get("verify_status") in ("pending", "failed") and gated_prototype(data)
+
+
 def review_url(data: Dict[str, Any]) -> str:
     if data["mode"] == "herenow":
         hn = data.get("herenow") or {}
         if "password_enabled" in hn and hn.get("password_status") != "applied":
+            return ""
+        if verify_blocks(data):
             return ""
         return hn.get("site_url") or ""
     if data["mode"] == "local":
