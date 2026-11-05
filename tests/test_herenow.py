@@ -195,28 +195,108 @@ def _levels(caplog):
     return [r.levelname for r in caplog.records if r.name == "mockreview.herenow"]
 
 
-def test_transient_poll_failure_warns_then_errors_after_three(hn_review, env, monkeypatch, caplog):
+def test_transient_poll_failure_is_info_then_warns_then_errors_after_three(hn_review, env, monkeypatch, caplog):
     herenow._poll_failures.clear()
     monkeypatch.setattr(herenow, "open_reviews", lambda: [hn_review["id"]])
     monkeypatch.setattr(herenow, "poll_review", _failing_poll(500))
-    with caplog.at_level("WARNING", logger="mockreview.herenow"):
+    with caplog.at_level("INFO", logger="mockreview.herenow"):
         for _ in range(4):
             herenow.poll_all()
-    assert _levels(caplog) == ["WARNING", "WARNING", "ERROR", "ERROR"]
+    assert _levels(caplog) == ["INFO", "WARNING", "ERROR", "ERROR"]
 
 
 def test_poll_success_resets_the_failure_count(hn_review, env, monkeypatch, caplog):
     herenow._poll_failures.clear()
     monkeypatch.setattr(herenow, "open_reviews", lambda: [hn_review["id"]])
     monkeypatch.setattr(herenow, "poll_review", _failing_poll(500))
-    with caplog.at_level("WARNING", logger="mockreview.herenow"):
+    with caplog.at_level("INFO", logger="mockreview.herenow"):
         herenow.poll_all()
         herenow.poll_all()
         monkeypatch.setattr(herenow, "poll_review", lambda rid, *a, **k: [])
         herenow.poll_all()
         monkeypatch.setattr(herenow, "poll_review", _failing_poll(503))
         herenow.poll_all()
-    assert _levels(caplog) == ["WARNING", "WARNING", "WARNING"]
+    assert _levels(caplog) == ["INFO", "WARNING", "INFO"]
+
+
+def test_single_site_data_blip_raises_no_warning(hn_review, env, monkeypatch, caplog):
+    # here.now's Site Data routes fail for well under a minute every five minutes; one failed poll followed by a
+    # good one is that window, not an incident, and must not reach WARNING (the level Self-Watch reports).
+    herenow._poll_failures.clear()
+    monkeypatch.setattr(herenow, "open_reviews", lambda: [hn_review["id"]])
+    with caplog.at_level("WARNING", logger="mockreview.herenow"):
+        for _ in range(3):
+            monkeypatch.setattr(herenow, "poll_review", _failing_poll(500))
+            herenow.poll_all()
+            monkeypatch.setattr(herenow, "poll_review", lambda rid, *a, **k: [])
+            herenow.poll_all()
+    assert _levels(caplog) == []
+
+
+def test_worker_polls_again_soon_after_a_transient_failure(hn_review, env, monkeypatch):
+    from mockreview import server
+    herenow._poll_failures.clear()
+    monkeypatch.setenv("MOCKREVIEW_POLL_SECONDS", "300")
+    monkeypatch.setattr(herenow, "open_reviews", lambda: [hn_review["id"]])
+    monkeypatch.setattr(herenow, "poll_review", _failing_poll(500))
+    herenow.poll_all()
+    assert herenow.retry_delay() == herenow.TRANSIENT_RETRY_SECONDS
+    # The poll started at 1000 and its request hung until 1010: the retry is due TRANSIENT_RETRY_SECONDS after 1010,
+    # whatever poll_seconds is (sooner than a long one, and never back inside the outage window for a short one).
+    for period in ("300", "60", "30"):
+        monkeypatch.setenv("MOCKREVIEW_POLL_SECONDS", period)
+        due = server.Worker.next_poll_base(1000.0, 1010.0) + float(period)
+        assert due == 1010.0 + herenow.TRANSIENT_RETRY_SECONDS
+    monkeypatch.setattr(herenow, "poll_review", lambda rid, *a, **k: [])
+    herenow.poll_all()
+    assert herenow.retry_delay() is None
+    assert server.Worker.next_poll_base(1000.0, 1010.0) == 1000.0      # healthy: the usual poll_seconds cadence
+
+
+def _http_error(status, body):
+    import io
+    import urllib.error
+    return urllib.error.HTTPError("https://here.now/api/v1/x", status, "err", {}, io.BytesIO(body.encode()))
+
+
+# A trimmed copy of the page the Cloudflare edge serves when here.now's backend Worker throws.
+CF_1101_PAGE = """<!DOCTYPE html><html class="no-js" lang="en-US"><head><title>Worker threw exception |
+backend.example.test | Cloudflare</title></head><body><div id="cf-error-details" class="cf-error-details-wrapper">
+<h1><span class="cf-error-type">Error</span> <span class="cf-error-code">1101</span></h1>
+<h2 class="cf-subheadline">Worker threw exception</h2><p>Your IP: 192.0.2.10</p>
+<span class="cf-footer-item">Cloudflare Ray ID: <strong class="font-semibold">0123456789abcdef</strong></span>
+</div></body></html>"""
+
+
+@pytest.mark.parametrize("status,body,expected", [
+    (500, CF_1101_PAGE, "here.now GET failed (HTTP 500, Cloudflare error 1101, ray 0123456789abcdef)"),
+    (500, "Error 1101 Worker threw exception", "here.now GET failed (HTTP 500, Cloudflare error 1101)"),
+    (404, '{"error":"Collection not found","code":"collection_disabled"}',
+     "here.now GET failed (HTTP 404, collection_disabled)"),
+    (500, '{"echo":"Bearer hn-secret-value"}', "here.now GET failed (HTTP 500)"),
+    (502, "", "here.now GET failed (HTTP 502)"),
+])
+def test_api_error_names_the_failure_without_the_body(monkeypatch, status, body, expected):
+    import urllib.request
+    monkeypatch.setattr(herenow, "api_key", lambda: "hn-secret-value")
+    def fail(req, timeout=None):
+        raise _http_error(status, body)
+    monkeypatch.setattr(urllib.request, "urlopen", fail)
+    with pytest.raises(herenow.HereNowError) as ei:
+        herenow._api("GET", "/publishes/fake-slug-ab12/data/feedback")
+    assert ei.value.message == expected
+    assert ei.value.status == status
+    assert "192.0.2.10" not in ei.value.message and "secret" not in ei.value.message
+
+
+def test_fetch_records_uses_the_short_poll_timeout(monkeypatch):
+    seen = []
+    def api(method, path, timeout=20.0, body=None):
+        seen.append(timeout)
+        return {"records": [], "nextCursor": None}
+    monkeypatch.setattr(herenow, "_api", api)
+    herenow.fetch_records("fake-slug-ab12")
+    assert seen == [herenow.POLL_TIMEOUT] and herenow.POLL_TIMEOUT < 20.0
 
 
 @pytest.mark.parametrize("status", [400, 401, 403, 404, 409])

@@ -347,6 +347,17 @@ class Worker(threading.Thread):
     def run(self) -> None:
         self._context.copy().run(self._run)
 
+    @staticmethod
+    def next_poll_base(polled_at: float, now: float) -> float:
+        """The last_poll value for the next poll. Normally polled_at (the next poll waits poll_seconds). After a
+        transient failure (herenow.retry_delay), the next poll is due exactly that delay after the failure came back
+        (`now`), sooner or later than poll_seconds: a hung request no longer eats into the delay, and a short
+        poll_seconds no longer sends the retry back into the same here.now outage window."""
+        delay = herenow.retry_delay()
+        if delay is None:
+            return polled_at
+        return now + delay - config.poll_seconds()
+
     def _ticks(self):
         """Yield once per tick until stopped, inside the owning profile's secret scope, rebuilt every tick."""
         while not self.stop_event.wait(self.tick):
@@ -372,6 +383,7 @@ class Worker(threading.Thread):
                         herenow.poll_all()
                 except Exception:
                     log.exception("here.now poll failed")
+                self.last_poll = self.next_poll_base(self.last_poll, time.time())
             try:
                 if time.time() - self.last_housekeeping >= settings.get("housekeeping_seconds"):
                     self.last_housekeeping = time.time()
