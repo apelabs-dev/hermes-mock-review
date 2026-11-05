@@ -359,11 +359,36 @@ def open_reviews() -> List[str]:
     return out
 
 
+# A 5xx, a timeout or a dropped connection is usually here.now having a bad minute: the next poll
+# (every few minutes) recovers. Log those at WARNING and raise to ERROR only after this many failures
+# in a row for one review. Anything else (bad key, bad slug, a 4xx, an unexpected exception) is not
+# transient and logs at ERROR at once.
+TRANSIENT_POLL_ERROR_LIMIT = 3
+_poll_failures: Dict[str, int] = {}
+
+
+def _is_transient_poll_error(e: Exception) -> bool:
+    return isinstance(e, HereNowError) and (e.status >= 500 or e.status in (408, 429))
+
+
 def poll_all() -> int:
     n = 0
-    for rid in open_reviews():
+    ids = open_reviews()
+    for gone in set(_poll_failures) - set(ids):
+        _poll_failures.pop(gone, None)
+    for rid in ids:
         try:
             n += sum(1 for o in poll_review(rid) if o["result"] == "accepted")
+            _poll_failures.pop(rid, None)
         except Exception as e:
-            log.error("poll of %s failed: %s", rid, e)
+            if not _is_transient_poll_error(e):
+                _poll_failures.pop(rid, None)
+                log.error("poll of %s failed: %s", rid, e)
+                continue
+            count = _poll_failures[rid] = _poll_failures.get(rid, 0) + 1
+            if count >= TRANSIENT_POLL_ERROR_LIMIT:
+                log.error("poll of %s failed %d times in a row: %s", rid, count, e)
+            else:
+                log.warning("poll of %s failed (%d of %d before it is an error): %s",
+                            rid, count, TRANSIENT_POLL_ERROR_LIMIT, e)
     return n

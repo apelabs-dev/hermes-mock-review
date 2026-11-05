@@ -183,3 +183,58 @@ def test_publish_protocol_without_bash(hn_review, tmp_path, monkeypatch, success
     assert argv[-2:] == ["--slug", "fake-slug-ab12"]
     assert kwargs["encoding"] == "utf-8" and kwargs["errors"] == "replace"
     assert kwargs["env"]["HERENOW_API_KEY"] == "test-public-key"
+
+
+def _failing_poll(status):
+    def boom(rid, *a, **k):
+        raise herenow.HereNowError(f"here.now GET failed (HTTP {status})", status)
+    return boom
+
+
+def _levels(caplog):
+    return [r.levelname for r in caplog.records if r.name == "mockreview.herenow"]
+
+
+def test_transient_poll_failure_warns_then_errors_after_three(hn_review, env, monkeypatch, caplog):
+    herenow._poll_failures.clear()
+    monkeypatch.setattr(herenow, "open_reviews", lambda: [hn_review["id"]])
+    monkeypatch.setattr(herenow, "poll_review", _failing_poll(500))
+    with caplog.at_level("WARNING", logger="mockreview.herenow"):
+        for _ in range(4):
+            herenow.poll_all()
+    assert _levels(caplog) == ["WARNING", "WARNING", "ERROR", "ERROR"]
+
+
+def test_poll_success_resets_the_failure_count(hn_review, env, monkeypatch, caplog):
+    herenow._poll_failures.clear()
+    monkeypatch.setattr(herenow, "open_reviews", lambda: [hn_review["id"]])
+    monkeypatch.setattr(herenow, "poll_review", _failing_poll(500))
+    with caplog.at_level("WARNING", logger="mockreview.herenow"):
+        herenow.poll_all()
+        herenow.poll_all()
+        monkeypatch.setattr(herenow, "poll_review", lambda rid, *a, **k: [])
+        herenow.poll_all()
+        monkeypatch.setattr(herenow, "poll_review", _failing_poll(503))
+        herenow.poll_all()
+    assert _levels(caplog) == ["WARNING", "WARNING", "WARNING"]
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 409])
+def test_permanent_poll_failure_errors_at_once(hn_review, env, monkeypatch, caplog, status):
+    herenow._poll_failures.clear()
+    monkeypatch.setattr(herenow, "open_reviews", lambda: [hn_review["id"]])
+    monkeypatch.setattr(herenow, "poll_review", _failing_poll(status))
+    with caplog.at_level("WARNING", logger="mockreview.herenow"):
+        herenow.poll_all()
+    assert _levels(caplog) == ["ERROR"]
+
+
+def test_unexpected_poll_exception_errors_at_once(hn_review, env, monkeypatch, caplog):
+    herenow._poll_failures.clear()
+    monkeypatch.setattr(herenow, "open_reviews", lambda: [hn_review["id"]])
+    def boom(rid, *a, **k):
+        raise KeyError("x")
+    monkeypatch.setattr(herenow, "poll_review", boom)
+    with caplog.at_level("WARNING", logger="mockreview.herenow"):
+        herenow.poll_all()
+    assert _levels(caplog) == ["ERROR"]
