@@ -52,6 +52,35 @@ class HereNowError(ReviewError):
     pass
 
 
+# here.now answers API errors with JSON ({"code": "..."}). When its backend Worker crashes instead, the Cloudflare
+# edge answers with an HTML error page ("Error 1101 ... Worker threw exception", a Ray ID). Pull out only these short
+# tokens, so a log line says which kind of failure it was and the Ray ID can go in a support request.
+_CF_ERROR_RE = re.compile(r"Error\s+(1\d{3})\b")
+_CF_RAY_RE = re.compile(r"Ray ID:\s*([0-9a-f]{16})\b")
+_TAG_RE = re.compile(r"<[^>]{0,2000}>")
+_JSON_CODE_RE = re.compile(r'"code"\s*:\s*"([a-z_]{1,48})"')
+
+
+def _error_detail(e: urllib.error.HTTPError) -> str:
+    try:
+        body = e.read(64 * 1024).decode("utf-8", "replace")
+    except Exception:
+        return ""
+    text = _TAG_RE.sub(" ", body)
+    parts = []
+    cf = _CF_ERROR_RE.search(text)
+    if cf:
+        parts.append(f"Cloudflare error {cf.group(1)}")
+        ray = _CF_RAY_RE.search(text)
+        if ray:
+            parts.append(f"ray {ray.group(1)}")
+    else:
+        code = _JSON_CODE_RE.search(body)
+        if code:
+            parts.append(code.group(1))
+    return "".join(", " + p for p in parts)
+
+
 def api_key() -> str:
     key = secrets.get_secret("HERENOW_API_KEY")
     if not key:
@@ -74,8 +103,10 @@ def _api(method: str, path: str, timeout: float = 20.0,
             raw = resp.read(4 * 1024 * 1024)
             return json.loads(raw or b"{}")
     except urllib.error.HTTPError as e:
-        # Remote responses may echo credentials, including a password PATCH body.
-        raise HereNowError(f"here.now {method} failed (HTTP {e.code})", e.code) from None
+        # Remote responses may echo credentials, including a password PATCH body: never log the body, only the
+        # short tokens _error_detail matches.
+        detail = _error_detail(e)
+        raise HereNowError(f"here.now {method} failed (HTTP {e.code}{detail})", e.code) from None
     except (urllib.error.URLError, OSError, ValueError) as e:
         raise HereNowError(f"here.now {method} failed", 502) from None
 
@@ -266,7 +297,7 @@ def fetch_records(slug: str) -> List[Dict[str, Any]]:
         q = {"limit": "100"}
         if cursor:
             q["cursor"] = cursor
-        res = _api("GET", f"/publishes/{slug}/data/{COLLECTION}?" + urllib.parse.urlencode(q))
+        res = _api("GET", f"/publishes/{slug}/data/{COLLECTION}?" + urllib.parse.urlencode(q), timeout=POLL_TIMEOUT)
         recs = res.get("records") if isinstance(res, dict) else None
         out.extend(r for r in (recs or []) if isinstance(r, dict))
         cursor = res.get("nextCursor") if isinstance(res, dict) else None
@@ -359,12 +390,24 @@ def open_reviews() -> List[str]:
     return out
 
 
-# A 5xx, a timeout or a dropped connection is usually here.now having a bad minute: the next poll
-# (every few minutes) recovers. Log those at WARNING and raise to ERROR only after this many failures
-# in a row for one review. Anything else (bad key, bad slug, a 4xx, an unexpected exception) is not
-# transient and logs at ERROR at once.
+# here.now's Site Data routes go down for well under a minute at a time, on a five-minute rhythm: requests hang for up
+# to ~30 s, then every Site Data request answers HTTP 500 (Cloudflare error 1101, the backend Worker threw) while the
+# rest of the API keeps answering. A poll that lands in that window fails and one TRANSIENT_RETRY_SECONDS later
+# succeeds. So a 5xx, a timeout or a dropped connection:
+#   - first failure in a row: INFO, and the Worker polls again after TRANSIENT_RETRY_SECONDS instead of poll_seconds;
+#   - second in a row (the retry hit it too, so not that blip): WARNING;
+#   - TRANSIENT_POLL_ERROR_LIMIT in a row: ERROR.
+# Anything else (bad key, bad slug, a 4xx, an unexpected exception) is not transient and logs at ERROR at once.
+# POLL_TIMEOUT keeps a hung request from holding the Worker (and the notice retries it runs) for the full 20 s.
+POLL_TIMEOUT = 10.0
+TRANSIENT_RETRY_SECONDS = 45.0
 TRANSIENT_POLL_ERROR_LIMIT = 3
 _poll_failures: Dict[str, int] = {}
+
+
+def retry_delay() -> Optional[float]:
+    """Seconds until the Worker should poll again after a transient failure, or None to keep poll_seconds."""
+    return TRANSIENT_RETRY_SECONDS if _poll_failures else None
 
 
 def _is_transient_poll_error(e: Exception) -> bool:
@@ -388,7 +431,9 @@ def poll_all() -> int:
             count = _poll_failures[rid] = _poll_failures.get(rid, 0) + 1
             if count >= TRANSIENT_POLL_ERROR_LIMIT:
                 log.error("poll of %s failed %d times in a row: %s", rid, count, e)
+            elif count == 1:
+                log.info("poll of %s hit a here.now blip, retrying in %.0f s: %s", rid, TRANSIENT_RETRY_SECONDS, e)
             else:
-                log.warning("poll of %s failed (%d of %d before it is an error): %s",
+                log.warning("poll of %s failed %d times in a row (%d is an error): %s",
                             rid, count, TRANSIENT_POLL_ERROR_LIMIT, e)
     return n
