@@ -3,6 +3,13 @@
 All notable changes to this project are listed here. The format follows Keep a Changelog, and the project follows
 semantic versioning.
 
+## [1.1.9](https://github.com/apelabs-dev/hermes-mock-review/compare/v1.1.8...v1.1.9) (2026-11-05)
+
+
+### Bug Fixes
+
+* retry a here.now Site Data poll after its outage window and name the Cloudflare error ([#23](https://github.com/apelabs-dev/hermes-mock-review/issues/23)) ([6828350](https://github.com/apelabs-dev/hermes-mock-review/commit/6828350832e0c381ab5d3cd387cc68aab83e74cd))
+
 ## [1.1.8](https://github.com/apelabs-dev/hermes-mock-review/compare/v1.1.7...v1.1.8) (2026-11-05)
 
 
