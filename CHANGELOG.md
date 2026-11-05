@@ -3,6 +3,13 @@
 All notable changes to this project are listed here. The format follows Keep a Changelog, and the project follows
 semantic versioning.
 
+## [1.1.10](https://github.com/apelabs-dev/hermes-mock-review/compare/v1.1.9...v1.1.10) (2026-11-05)
+
+
+### Bug Fixes
+
+* close a here.now review whose site is already gone ([#25](https://github.com/apelabs-dev/hermes-mock-review/issues/25)) ([9188174](https://github.com/apelabs-dev/hermes-mock-review/commit/918817491bfd6c6cb61e0328484cdbb027499a5b))
+
 ## [1.1.9](https://github.com/apelabs-dev/hermes-mock-review/compare/v1.1.8...v1.1.9) (2026-11-05)
 
 
