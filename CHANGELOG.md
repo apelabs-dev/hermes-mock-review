@@ -3,6 +3,13 @@
 All notable changes to this project are listed here. The format follows Keep a Changelog, and the project follows
 semantic versioning.
 
+## [1.1.8](https://github.com/apelabs-dev/hermes-mock-review/compare/v1.1.7...v1.1.8) (2026-11-05)
+
+
+### Bug Fixes
+
+* log a transient here.now poll failure as a warning until it repeats ([#21](https://github.com/apelabs-dev/hermes-mock-review/issues/21)) ([c6b8753](https://github.com/apelabs-dev/hermes-mock-review/commit/c6b875311c754f0ec6c41f1634cbd9b6dca0e1bb))
+
 ## [1.1.7](https://github.com/apelabs-dev/hermes-mock-review/compare/v1.1.6...v1.1.7) (2026-11-03)
 
 
