@@ -268,7 +268,7 @@ def publish(review_id: str, verify: bool = True) -> Dict[str, Any]:
         with store.locked(review_id):
             data = store.load(review_id)
             data.setdefault("herenow", {}).update(slug=slug, site_url=url, published_at=store.now_iso(),
-                                                  auth_mode=results.get("auth_mode"))
+                                                  auth_mode=results.get("auth_mode"), site_gone_at=None)
             store.save(review_id, data)
         # Legacy reviews stay public until explicitly toggled. Never remove a gate on a
         # normal unprotected republish; retry an interrupted/failed removal, however.
@@ -307,15 +307,21 @@ def fetch_records(slug: str) -> List[Dict[str, Any]]:
 
 
 def delete_site(slug: str) -> bool:
+    """Delete a published site. A DELETE whose response is lost may still have deleted it, so a transport failure is
+    retried once: the retried DELETE answers 404 when the first one had already landed, and 200 when it had not."""
     if not SLUG_RE.match(slug or ""):
         raise HereNowError("bad slug", 400)
-    try:
-        _api("DELETE", f"/publish/{slug}")
-    except HereNowError as e:
-        if e.status == 404:
-            return False
-        raise
-    return True
+    attempt = 0
+    while True:
+        try:
+            _api("DELETE", f"/publish/{slug}")
+            return True
+        except HereNowError as e:
+            if e.status == 404:
+                return False
+            if e.status not in (502, 504) or attempt:
+                raise
+            attempt += 1
 
 
 def parse_record(rec: Dict[str, Any]) -> Dict[str, Any]:
@@ -341,7 +347,7 @@ def poll_review(review_id: str, fetch: Optional[Callable[[str], List[Dict[str, A
     fetch = fetch or fetch_records
     data = store.load(review_id)
     hn = data.get("herenow") or {}
-    if data["mode"] != "herenow" or data["status"] != "open" or not hn.get("slug"):
+    if data["mode"] != "herenow" or data["status"] != "open" or not hn.get("slug") or hn.get("site_gone_at"):
         return []
     records = fetch(hn["slug"])
     seen = set(hn.get("processed_records") or [])
@@ -385,7 +391,8 @@ def open_reviews() -> List[str]:
             d = store.load(rid)
         except (ReviewError, ValueError, OSError):
             continue
-        if d.get("mode") == "herenow" and d.get("status") == "open" and (d.get("herenow") or {}).get("slug"):
+        hn = d.get("herenow") or {}
+        if d.get("mode") == "herenow" and d.get("status") == "open" and hn.get("slug") and not hn.get("site_gone_at"):
             out.append(rid)
     return out
 
@@ -424,6 +431,16 @@ def poll_all() -> int:
             n += sum(1 for o in poll_review(rid) if o["result"] == "accepted")
             _poll_failures.pop(rid, None)
         except Exception as e:
+            if isinstance(e, HereNowError) and e.status == 404:
+                # The site was deleted (a close whose DELETE response was lost) but the review is still open: stop
+                # polling it, once. Closing the review now only needs the local half.
+                _poll_failures.pop(rid, None)
+                with store.locked(rid):
+                    data = store.load(rid)
+                    data.setdefault("herenow", {})["site_gone_at"] = store.now_iso()
+                    store.save(rid, data)
+                log.warning("poll of %s: the here.now site is gone (HTTP 404); stopped polling, close the review to finish", rid)
+                continue
             if not _is_transient_poll_error(e):
                 _poll_failures.pop(rid, None)
                 log.error("poll of %s failed: %s", rid, e)

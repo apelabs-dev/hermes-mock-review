@@ -311,11 +311,18 @@ def _close(review_id: str) -> Dict[str, Any]:
     res: Dict[str, Any] = {"review_id": review_id, "mode": data["mode"]}
     if data["mode"] == "herenow" and (data.get("herenow") or {}).get("slug") and data["status"] == "open":
         slug = data["herenow"]["slug"]
-        res["final_poll"] = herenow.poll_review(review_id, republish=False)
-        records = herenow.fetch_records(slug)
-        store.atomic_write(store.review_dir(review_id) / "archive" / "sitedata-records.json",
-                           json.dumps(records, indent=2, ensure_ascii=False))
-        res["archived_records"] = len(records)
+        try:
+            res["final_poll"] = herenow.poll_review(review_id, republish=False)
+            records = herenow.fetch_records(slug)
+            store.atomic_write(store.review_dir(review_id) / "archive" / "sitedata-records.json",
+                               json.dumps(records, indent=2, ensure_ascii=False))
+            res["archived_records"] = len(records)
+        except herenow.HereNowError as e:
+            # The site can be gone already when a DELETE deleted it but lost its response: a 404 from the final poll
+            # or the archive read means there is nothing left to poll. Keep the archive the earlier attempt wrote.
+            if e.status != 404:
+                raise
+            res["site_already_gone"] = True
         res["site_deleted"] = herenow.delete_site(slug)
     with store.locked(review_id):
         data = store.load(review_id)
