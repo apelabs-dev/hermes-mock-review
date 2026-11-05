@@ -62,8 +62,9 @@ board server, which polls every `poll_seconds`.
 3. Create the review with `mode="herenow"` (or set `default_host` to `herenow`).
 
 The server has to be running for feedback to come back, because the here.now page cannot reach your computer. Closing the
-review deletes the public site and archives its Site Data. `hermes mockreview publish <review id>` republishes a review,
-and `hermes mockreview poll` reads Site Data once.
+review deletes the public site and archives its Site Data. A review whose site is already gone at here.now (HTTP 404)
+stops being polled and still closes locally, keeping the last Site Data archive. `hermes mockreview publish <review id>`
+republishes a review, and `hermes mockreview poll` reads Site Data once.
 
 ## Waking the agent
 

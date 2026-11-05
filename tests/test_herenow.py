@@ -1,11 +1,12 @@
 import json
 import os
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
 from conftest import FEEDBACK
-from mockreview import config, herenow, service, store
+from mockreview import api, config, herenow, service, store
 
 
 @pytest.fixture
@@ -299,7 +300,7 @@ def test_fetch_records_uses_the_short_poll_timeout(monkeypatch):
     assert seen == [herenow.POLL_TIMEOUT] and herenow.POLL_TIMEOUT < 20.0
 
 
-@pytest.mark.parametrize("status", [400, 401, 403, 404, 409])
+@pytest.mark.parametrize("status", [400, 401, 403, 409])
 def test_permanent_poll_failure_errors_at_once(hn_review, env, monkeypatch, caplog, status):
     herenow._poll_failures.clear()
     monkeypatch.setattr(herenow, "open_reviews", lambda: [hn_review["id"]])
@@ -318,3 +319,111 @@ def test_unexpected_poll_exception_errors_at_once(hn_review, env, monkeypatch, c
     with caplog.at_level("WARNING", logger="mockreview.herenow"):
         herenow.poll_all()
     assert _levels(caplog) == ["ERROR"]
+
+
+def _delete_api(monkeypatch, outcomes):
+    calls = []
+
+    def api(method, path, *a, **kw):
+        calls.append((method, path))
+        outcome = outcomes[min(len(calls) - 1, len(outcomes) - 1)]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+    monkeypatch.setattr(herenow, "_api", api)
+    return calls
+
+
+def test_delete_site_retries_a_lost_response_and_accepts_a_404(monkeypatch):
+    calls = _delete_api(monkeypatch, [herenow.HereNowError("here.now DELETE failed", 502),
+                                      herenow.HereNowError("here.now DELETE failed (HTTP 404)", 404)])
+    assert herenow.delete_site("fake-slug-ab12") is False
+    assert calls == [("DELETE", "/publish/fake-slug-ab12")] * 2
+
+
+def test_delete_site_retries_a_lost_response_and_reports_the_delete(monkeypatch):
+    calls = _delete_api(monkeypatch, [herenow.HereNowError("here.now DELETE failed", 502), {}])
+    assert herenow.delete_site("fake-slug-ab12") is True
+    assert calls == [("DELETE", "/publish/fake-slug-ab12")] * 2
+
+
+def test_delete_site_raises_the_last_transport_error(monkeypatch):
+    calls = _delete_api(monkeypatch, [herenow.HereNowError("here.now DELETE failed", 502),
+                                      herenow.HereNowError("here.now DELETE failed", 504)])
+    with pytest.raises(herenow.HereNowError) as ei:
+        herenow.delete_site("fake-slug-ab12")
+    assert ei.value.status == 504
+    assert calls == [("DELETE", "/publish/fake-slug-ab12")] * 2
+
+
+def test_delete_site_does_not_retry_a_real_http_error(monkeypatch):
+    calls = _delete_api(monkeypatch, [herenow.HereNowError("here.now DELETE failed (HTTP 403)", 403)])
+    with pytest.raises(herenow.HereNowError) as ei:
+        herenow.delete_site("fake-slug-ab12")
+    assert ei.value.status == 403
+    assert calls == [("DELETE", "/publish/fake-slug-ab12")]
+
+
+def test_close_after_the_site_is_gone_keeps_the_first_archive_and_closes_locally(hn_review, monkeypatch):
+    rid = hn_review["id"]
+    archive = store.review_dir(rid) / "archive" / "sitedata-records.json"
+    state = {"gone": False, "deletes": 0}
+
+    def remote(method, path, *a, **kw):
+        if method == "DELETE":
+            state["gone"] = True
+            state["deletes"] += 1
+            # Both attempts of the first close lose their response; afterwards the site is observed gone.
+            if state["deletes"] <= 2:
+                raise herenow.HereNowError("here.now DELETE failed", 502)
+            raise herenow.HereNowError("here.now DELETE failed (HTTP 404)", 404)
+        if state["gone"]:
+            raise herenow.HereNowError("here.now GET failed (HTTP 404)", 404)
+        return {"records": [], "nextCursor": None}
+    monkeypatch.setattr(herenow, "_api", remote)
+
+    with pytest.raises(herenow.HereNowError):
+        api.close(rid)
+    assert store.load(rid)["status"] == "open"
+    first_archive = archive.read_bytes()
+
+    result = api.close(rid)
+    assert result["status"] == "closed"
+    assert result["site_deleted"] is False
+    assert result["site_already_gone"] is True
+    data = store.load(rid)
+    assert data["status"] == "closed" and data["closed_at"]
+    assert data["herenow"]["deleted_at"]
+    assert archive.read_bytes() == first_archive
+
+
+def test_poll_404_warns_once_stops_polling_and_a_republish_resumes(hn_review, tmp_path, monkeypatch, caplog):
+    rid = hn_review["id"]
+    calls = []
+
+    def remote(method, path, *a, **kw):
+        calls.append(method)
+        raise herenow.HereNowError("here.now GET failed (HTTP 404)", 404)
+    monkeypatch.setattr(herenow, "_api", remote)
+    herenow._poll_failures.clear()
+    with caplog.at_level("WARNING", logger="mockreview.herenow"):
+        herenow.poll_all()
+        herenow.poll_all()
+    assert _levels(caplog) == ["WARNING"]
+    assert calls == ["GET"]
+    assert store.load(rid)["herenow"]["site_gone_at"]
+    assert herenow.open_reviews() == []
+    assert herenow.retry_delay() is None
+    assert herenow.poll_review(rid) == []
+    assert calls == ["GET"]
+
+    script = tmp_path / "publish.sh"
+    monkeypatch.setattr(config, "herenow_publish_script", lambda: script)
+    monkeypatch.setattr(herenow, "_api", lambda *a, **kw: {})
+    monkeypatch.setattr(herenow.subprocess, "run", lambda argv, **kw: SimpleNamespace(
+        returncode=0, stderr="publish_result.slug=fake-slug-ab12\n"
+                              "publish_result.site_url=https://fake-slug-ab12.here.now/\n"
+                              "publish_result.auth_mode=authenticated\n"))
+    herenow.publish(rid, verify=False)
+    assert store.load(rid)["herenow"]["site_gone_at"] is None
+    assert herenow.open_reviews() == [rid]
