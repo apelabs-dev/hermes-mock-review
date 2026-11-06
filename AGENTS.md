@@ -17,7 +17,8 @@ boards for UI mockups and wakes the agent when the reviewer presses Send. User d
     (call argument, then env, then Hermes config, then default). A strict fallback parser reads `config.yaml` when PyYAML
     is missing.
   - `cli.py`: every subcommand; `setup.py` is the onboarding wizard.
-  - `mcp.py`: the stdio MCP server for other coding agents: JSON-RPC on stdout, logs on stderr, no socket.
+  - `mcp.py`: the stdio MCP server for other coding agents: UTF-8 JSON-RPC on stdout, logs on stderr, no listening
+    socket of its own.
   - `api.py`: the operations behind the CLI and the tools. `store.py`: review files, `decisions.json` validation, design
     profiles. `feedback.py`: validation and markdown for submitted feedback. `service.py`: submit handling shared by the
     local server and the here.now poller.
@@ -64,7 +65,8 @@ delete it afterwards. Hermes refuses a `HERMES_HOME` outside its data directory,
 - The server binds loopback by default. `make_server` refuses any host outside `ALLOWED_HOSTS`. Every request passes the
   Host allowlist, a POST with an Origin header must match it, and `/` and `/api/owner` answer local requests only. Keep
   all three when you add a route.
-- The MCP server speaks stdio only: JSON-RPC on stdout, logs on stderr, no socket, and it calls `mockreview.api` like the
+- The MCP server speaks stdio only: UTF-8 JSON-RPC on stdout (both directions pinned to UTF-8, never the console code
+  page), logs on stderr, no listening socket of its own, and it calls `mockreview.api` like the
   CLI — never a second code path.
 - Anything a reviewer or a mock can supply is untrusted: text is rendered as text, mock HTML is stripped of scripts and
   handlers, feedback is validated in `feedback.py`, and here.now records go through the same `service.submit` path.
