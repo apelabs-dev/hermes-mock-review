@@ -136,10 +136,12 @@ OpenCode, in `opencode.json`:
 
     {
       "mcp": {
-        "mock-review": {
-          "type": "local",
-          "command": ["<abs>/bin/mockreview", "mcp"],
-          "enabled": true
+        "servers": {
+          "mock-review": {
+            "type": "local",
+            "command": ["<abs>/bin/mockreview", "mcp"],
+            "disabled": false
+          }
         }
       }
     }
