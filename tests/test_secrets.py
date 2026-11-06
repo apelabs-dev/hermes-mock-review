@@ -73,10 +73,10 @@ def test_notify_load_secret_uses_the_environment_without_hermes(monkeypatch):
 # would resolve whatever the starting process had in its environment. It fails closed (returns "") instead of
 # propagating, because a half-installed Hermes must not take unrelated calls like mock_review_list down with it.
 
-def _fake_scope_package(tmp_path, monkeypatch, source):
+def _fake_scope_package(tmp_path, monkeypatch, source, init_source=""):
     package = tmp_path / "agent"
     package.mkdir()
-    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "__init__.py").write_text(init_source, encoding="utf-8")
     (package / "secret_scope.py").write_text(source, encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
     importlib.invalidate_caches()
@@ -98,6 +98,26 @@ def test_a_scope_without_get_secret_never_reads_the_environment(tmp_path, monkey
     restore_real_accessor(monkeypatch)
     monkeypatch.setenv("MOCKREVIEW_WEBHOOK_SECRET", "synthetic-env-wake-secret")
     _fake_scope_package(tmp_path, monkeypatch, "OTHER = 1\n")
+    assert secrets.get_secret("MOCKREVIEW_WEBHOOK_SECRET") == ""
+
+
+def test_a_parent_package_that_fails_to_import_never_reads_the_environment(tmp_path, monkeypatch):
+    # find_spec("agent.secret_scope") imports the parent first, so a half-installed Hermes used to look *absent* here
+    # and read the environment. The package's presence is decided by the top-level spec, which never runs __init__.py.
+    restore_real_accessor(monkeypatch)
+    monkeypatch.setenv("MOCKREVIEW_WEBHOOK_SECRET", "synthetic-env-wake-secret")
+    _fake_scope_package(tmp_path, monkeypatch, 'def get_secret(name): return "scoped"\n',
+                        init_source="raise ImportError('half-installed')\n")
+    assert secrets.get_secret("MOCKREVIEW_WEBHOOK_SECRET") == ""
+
+
+def test_a_parent_package_that_raises_something_else_never_reads_the_environment(tmp_path, monkeypatch):
+    # A parent raising anything other than ImportError used to escape as a raw exception, which the docstring said
+    # could not happen. It fails closed now, like every other broken-Hermes case.
+    restore_real_accessor(monkeypatch)
+    monkeypatch.setenv("MOCKREVIEW_WEBHOOK_SECRET", "synthetic-env-wake-secret")
+    _fake_scope_package(tmp_path, monkeypatch, 'def get_secret(name): return "scoped"\n',
+                        init_source="raise RuntimeError('boom parent')\n")
     assert secrets.get_secret("MOCKREVIEW_WEBHOOK_SECRET") == ""
 
 

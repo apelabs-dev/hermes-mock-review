@@ -20,21 +20,22 @@ _build_failures: Set[Tuple[str, str]] = set()   # (home, exception class) alread
 _logged_env_secrets: Set[str] = set()
 
 
-def _scope_module_available() -> bool:
-    """True when `agent.secret_scope` exists, whether or not importing it succeeds.
+def _hermes_package_present() -> bool:
+    """True when a top-level `agent` package exists, whether or not it imports cleanly.
 
-    Absence is decided by the module spec, never by catching ImportError from the import itself: an ImportError raised
-    inside `agent.secret_scope` (a broken install, a moved internal module) or a missing `get_secret` symbol is a
-    failure, not absence, and must not fall back to the process environment. Under multiplexing a broken scope that
-    fell back would read whatever the starting process had in its environment, which is the leak this guard exists to
-    stop. A module already in `sys.modules` counts as available, so a bound scope object keeps working.
+    `find_spec("agent.secret_scope")` imports the parent package first, so a half-installed Hermes whose
+    `agent/__init__.py` raises looked *absent* here (and read the environment), while a parent raising anything other
+    than ImportError escaped as a raw exception. The top-level spec is located without executing `__init__.py`, so it
+    answers presence; a package already in `sys.modules` answers directly, and anything that cannot be proven absent
+    counts as present. Presence is what decides the source: only a machine with no `agent` package at all may read the
+    environment.
     """
-    if sys.modules.get("agent.secret_scope") is not None:
-        return True
+    if "agent" in sys.modules:
+        return sys.modules["agent"] is not None
     try:
-        return importlib.util.find_spec("agent.secret_scope") is not None
-    except (ImportError, AttributeError, ValueError):
-        return False
+        return importlib.util.find_spec("agent") is not None
+    except Exception:       # cannot prove absence: fail closed
+        return True
 
 
 def get_secret(name: str) -> str:
@@ -42,10 +43,11 @@ def get_secret(name: str) -> str:
 
     Inside Hermes the scoped value is the only source: never read the environment, never leak another profile's
     value. The stdio MCP server has no gateway and no profile scope, so there the environment is the deployment's
-    secret store. A scope that exists but cannot be imported is a failure, not absence: it fails closed instead of
-    reading the environment, because a half-installed Hermes must never turn into a silent profile-scope leak.
+    secret store. A Hermes package that exists but cannot be imported -- including a broken parent `__init__.py`, a
+    moved internal module or a missing `get_secret` -- is a failure, not absence: it fails closed instead of reading
+    the environment, because a half-installed Hermes must never turn into a silent profile-scope leak.
     """
-    if not _scope_module_available():
+    if not _hermes_package_present():
         value = (os.environ.get(name) or "").strip()
         if value and name not in _logged_env_secrets:
             _logged_env_secrets.add(name)
@@ -53,12 +55,12 @@ def get_secret(name: str) -> str:
         return value
     try:
         from agent.secret_scope import get_secret as scoped_secret
-    except ImportError as e:
+    except Exception as e:  # ImportError, a raising parent, a drifted install: fail closed, never the environment
         key = (name, type(e).__name__)
         if key not in _build_failures:
             _build_failures.add(key)
             log.warning("secret %s cannot be read: agent.secret_scope raised %s; failing closed, the environment is "
-                        "not used while a scope module exists", name, type(e).__name__)
+                        "not used while a Hermes package exists", name, type(e).__name__)
         return ""
     return (scoped_secret(name) or "").strip()
 
