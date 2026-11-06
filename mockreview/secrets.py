@@ -7,9 +7,11 @@ profile scope) the process environment is the deployment's secret store.
 from __future__ import annotations
 
 from contextlib import contextmanager
+import importlib.util
 import logging
 import os
 from pathlib import Path
+import sys
 from typing import Iterator, Set, Tuple
 
 log = logging.getLogger("mockreview.secrets")
@@ -18,21 +20,46 @@ _build_failures: Set[Tuple[str, str]] = set()   # (home, exception class) alread
 _logged_env_secrets: Set[str] = set()
 
 
+def _scope_module_available() -> bool:
+    """True when `agent.secret_scope` exists, whether or not importing it succeeds.
+
+    Absence is decided by the module spec, never by catching ImportError from the import itself: an ImportError raised
+    inside `agent.secret_scope` (a broken install, a moved internal module) or a missing `get_secret` symbol is a
+    failure, not absence, and must not fall back to the process environment. Under multiplexing a broken scope that
+    fell back would read whatever the starting process had in its environment, which is the leak this guard exists to
+    stop. A module already in `sys.modules` counts as available, so a bound scope object keeps working.
+    """
+    if sys.modules.get("agent.secret_scope") is not None:
+        return True
+    try:
+        return importlib.util.find_spec("agent.secret_scope") is not None
+    except (ImportError, AttributeError, ValueError):
+        return False
+
+
 def get_secret(name: str) -> str:
     """Resolve within the caller's Hermes context; outside Hermes, fall back to the process environment.
 
-    Inside Hermes (``agent.secret_scope`` imports) the scoped value is the only source: never read the environment,
-    never leak another profile's value. The stdio MCP server has no gateway and no profile scope, so there the
-    environment is the deployment's secret store.
+    Inside Hermes the scoped value is the only source: never read the environment, never leak another profile's
+    value. The stdio MCP server has no gateway and no profile scope, so there the environment is the deployment's
+    secret store. A scope that exists but cannot be imported is a failure, not absence: it fails closed instead of
+    reading the environment, because a half-installed Hermes must never turn into a silent profile-scope leak.
     """
-    try:
-        from agent.secret_scope import get_secret as scoped_secret
-    except ImportError:
+    if not _scope_module_available():
         value = (os.environ.get(name) or "").strip()
         if value and name not in _logged_env_secrets:
             _logged_env_secrets.add(name)
             log.info("secret %s resolved from the environment (no Hermes secret scope available)", name)
         return value
+    try:
+        from agent.secret_scope import get_secret as scoped_secret
+    except ImportError as e:
+        key = (name, type(e).__name__)
+        if key not in _build_failures:
+            _build_failures.add(key)
+            log.warning("secret %s cannot be read: agent.secret_scope raised %s; failing closed, the environment is "
+                        "not used while a scope module exists", name, type(e).__name__)
+        return ""
     return (scoped_secret(name) or "").strip()
 
 
