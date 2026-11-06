@@ -84,7 +84,7 @@ def _error_detail(e: urllib.error.HTTPError) -> str:
 def api_key() -> str:
     key = secrets.get_secret("HERENOW_API_KEY")
     if not key:
-        raise HereNowError("HERENOW_API_KEY is not set in the active Hermes secret scope", 409)
+        raise HereNowError("HERENOW_API_KEY is not set (Hermes secret scope or environment)", 409)
     return key
 
 

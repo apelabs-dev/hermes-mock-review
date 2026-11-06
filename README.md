@@ -119,8 +119,9 @@ itself. The canonical command is `<abs>/bin/mockreview mcp` (the checkout or ins
 
 Wake is off for MCP boards by default, because an external CLI has no Hermes session to wake: the agent reads the marks
 with `mock_review_feedback`. Add `--wake` plus `--platform` and `--chat-id` (or `origin_platform` and `origin_chat_id`
-on one call) only when the session context names a real chat. A `local` link opens on the computer running the board;
-use `herenow` (password protected by default) or `tailnet` to open it on a phone.
+on one call) only when the session context names a real chat. A receiver of your own can be supplied through
+`MOCKREVIEW_WEBHOOK_URL`; see the receiver contract in [docs/mcp.md](docs/mcp.md#wake-without-hermes). A `local` link
+opens on the computer running the board; use `herenow` (password protected by default) or `tailnet` to open it on a phone.
 
 Claude Code, project scope (use `--mcp-config` with a JSON file for a one-off):
 
@@ -136,10 +137,12 @@ OpenCode, in `opencode.json`:
 
     {
       "mcp": {
-        "mock-review": {
-          "type": "local",
-          "command": ["<abs>/bin/mockreview", "mcp"],
-          "enabled": true
+        "servers": {
+          "mock-review": {
+            "type": "local",
+            "command": ["<abs>/bin/mockreview", "mcp"],
+            "disabled": false
+          }
         }
       }
     }
@@ -183,7 +186,8 @@ Outbound network calls:
   reads submitted feedback using your key. It publishes through the official here-now skill's `publish.sh`.
 - Nothing else. There is no telemetry, analytics or update check.
 
-Credentials. The plugin reads two secrets through Hermes's secret scope and keeps none of its own:
+Credentials. The plugin reads two secrets through Hermes's secret scope, or from the process environment when it runs
+without Hermes (the stdio MCP server), and keeps none of its own:
 `MOCKREVIEW_WEBHOOK_SECRET` (signs the wake-up request; setup generates it and stores it with `hermes config set`) and
 `HERENOW_API_KEY` (optional, here.now hosting only). Both are declared as optional secrets in `plugin.yaml`.
 

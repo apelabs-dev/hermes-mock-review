@@ -53,8 +53,11 @@ delete it afterwards. Hermes refuses a `HERMES_HOME` outside its data directory,
 
 ## Invariants
 
-- Secrets go through `mockreview/secrets.py` (Hermes's secret scope) and nowhere else. Never read a credentials file,
-  never print a secret, never put one in a log, a test fixture name or a doc. `setup.py` redacts subprocess output.
+- Secrets go through `mockreview/secrets.py` and nowhere else. Inside Hermes that means the secret scope and only the
+  secret scope: never read a credentials file, never read `os.environ`, never print a secret, never put one in a log, a
+  test fixture name or a doc. Outside Hermes (the stdio MCP server has no gateway) `get_secret` falls back to the process
+  environment because there is no profile scope to protect; the fallback is never reached while `agent.secret_scope`
+  imports. `setup.py` redacts subprocess output.
 - Under multiplexing (`agent.secret_scope.is_multiplex_active()`) every board request and every Worker tick binds the
   owning profile's secret scope through `secrets.owner_scope`, rebuilt on each entry from the home captured when the
   server started (`config.hermes_home()`). Never fall back to `os.environ`, never use another profile's scope (not even

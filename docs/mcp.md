@@ -68,6 +68,31 @@ tool uses: explicit `origin_platform` and `origin_chat_id` are required, and a d
 When wake resolves false, the board is created with `wake=False`: Send stores the feedback and notifies nobody. The
 agent reads it with `mock_review_feedback`.
 
+### Wake without Hermes
+
+Wake stays off by default. `wake: true` (or `--wake`) needs an explicit origin and a receiver.
+
+Signing happens in the **board server**: set `MOCKREVIEW_WEBHOOK_SECRET` and `MOCKREVIEW_WEBHOOK_URL` in the environment
+of the process that runs `mockreview serve`. The preflight that decides whether a board may have `wake` runs wherever the
+call resolves its wake route: normally that is the server's reported status, but with `MOCKREVIEW_OWNER=self`, or `auto`
+with no reachable server, it is a local check in the calling process, so that process needs the secret too.
+
+The receiver contract:
+
+- URL: `POST <webhook_url dir>/<webhook_route>-<platform>`. The defaults are `http://localhost:8644/webhooks/mock-review`
+  and the route `mock-review`, so the wake for a Claude Code session goes to
+  `http://localhost:8644/webhooks/mock-review-claude-code`; a receiver of your own can live anywhere, e.g.
+  `http://127.0.0.1:8791/webhooks/mock-review-claude-code`.
+- Signature: `X-Webhook-Signature-V2` = `hex(HMAC-SHA256(secret, "<X-Webhook-Timestamp>." + raw_body))`, timestamp in
+  unix seconds, reject older than 300 s, compare in constant time.
+- Answer `202`, or `200` with `{"status":"accepted"|"coalesced"|"duplicate"}`. Any other status, including `204`, is
+  recorded as a failed delivery and retried every `retry_seconds`. Dedupe on `X-Request-ID` yourself; Hermes's 1 h
+  filter is not involved.
+- Two extra POSTs can arrive on `<route>-<platform>-notice` (the immediate ack and the stalled ping). They carry counts,
+  never notes; answer `200 {"status":"delivered"}` or `404` if you do not want them.
+- With no session to answer, set `stale_after_minutes` and `stale_after_read_minutes` to `0`.
+- mock-review ships no receiver daemon and never runs a command from a board event. The receiver is the user's.
+
 ## Protocol era
 
 The server implements the legacy `initialize` handshake. A dual-era client that first probes `server/discover` gets the

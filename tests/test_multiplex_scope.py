@@ -451,19 +451,21 @@ def test_foreground_serve_cli_is_unchanged(scope, board, monkeypatch):
     assert rec.posted[0]["scope"] is None
 
 
-def test_without_hermes_there_is_no_scope_and_no_secret(monkeypatch, tmp_path):
+def test_without_hermes_the_environment_is_the_secret_store(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "agent", None)
     monkeypatch.setitem(sys.modules, "agent.secret_scope", None)
     monkeypatch.setattr(secrets, "get_secret", REAL_GET_SECRET)
     monkeypatch.setenv("MOCKREVIEW_WEBHOOK_SECRET", PROCESS["MOCKREVIEW_WEBHOOK_SECRET"])
-    write_env(config.hermes_home(), OWN)
-    assert secrets.get_secret("MOCKREVIEW_WEBHOOK_SECRET") == ""
+    write_env(config.hermes_home(), OWN)   # a profile .env needs a Hermes scope: it is ignored here
+    assert secrets.get_secret("MOCKREVIEW_WEBHOOK_SECRET") == PROCESS["MOCKREVIEW_WEBHOOK_SECRET"]
     srv = server.make_server("127.0.0.1", 0)
     t = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
     t.start()
     try:
         code, _, body = http("GET", "http://127.0.0.1:" + str(srv.server_address[1]) + "/api/owner")
-        assert code == 200 and json.loads(body)["wake"]["secret"] == "not-set"
+        assert code == 200
+        wake = json.loads(body)["wake"]
+        assert wake["secret"] == "set" and wake["ready"] is True
     finally:
         srv.shutdown()
         srv.server_close()

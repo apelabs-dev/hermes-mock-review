@@ -106,7 +106,18 @@ Wake stays off unless the agent supplies an explicit platform and chat ID, and n
 
 ## Secrets
 
-API and signing keys are never stored in review files. `MOCKREVIEW_WEBHOOK_SECRET` and `HERENOW_API_KEY` come from the Hermes secret scope.
+API and signing keys are never stored in review files. `MOCKREVIEW_WEBHOOK_SECRET` and `HERENOW_API_KEY` are resolved by
+`mockreview/secrets.py` from exactly one of two sources:
+
+- Inside Hermes, the secret scope and only the secret scope. The scoped value of the caller's profile is read; the process
+  environment is never consulted, and another profile's value is never used.
+- Outside Hermes, when `agent.secret_scope` cannot be imported (the stdio MCP server has no gateway and no profile
+  scope), the process environment. There is no profile scope to protect, so the environment is the deployment's secret
+  store.
+
+The fallback is never reached while `agent.secret_scope` imports, and the two are never combined. The wake secret is
+server-side: the board server signs the POST, and no tool returns a secret.
+
 Setup writes the webhook secret with `hermes config set`, which stores it in the Hermes `.env`. Setup never prints the
 secret: command output is redacted before display, and an existing secret is reused instead of replaced. Per-review here.now passwords, reviews, tokens
 and feedback are plain files under `$HERMES_HOME/workspace/mock-reviews` with the permissions of your account. Treat that

@@ -264,6 +264,37 @@ def test_module_subprocess_speaks_only_json_on_stdout(tmp_path):
     assert "initialize: requested protocolVersion" in stderr
 
 
+def test_wake_preflight_reads_the_secret_from_the_process_environment(tmp_path):
+    env = child_env(tmp_path)
+    blocker = tmp_path / "no-agent"
+    blocker.mkdir()
+    (blocker / "sitecustomize.py").write_text(
+        "import sys\nsys.modules['agent'] = None\nsys.modules['agent.secret_scope'] = None\n", encoding="utf-8")
+    env["PYTHONPATH"] = str(blocker) + os.pathsep + str(ROOT)
+    env["MOCKREVIEW_WEBHOOK_SECRET"] = "synthetic-env-wake-secret"
+    lines = [
+        request("initialize", {"protocolVersion": "2025-06-18"}),
+        request("tools/call", {"name": "mock_review_create", "arguments": {
+            "title": "Env wake", "decisions": str(_decisions(tmp_path)), "wake": True,
+            "origin_platform": "telegram", "origin_chat_id": "test-chat"}}, request_id=2),
+    ]
+    proc = subprocess.run([sys.executable, str(ROOT / "bin" / "mockreview"), "mcp"],
+                          input="".join(json.dumps(line) + "\n" for line in lines),
+                          capture_output=True, text=True, encoding="utf-8", errors="replace",
+                          cwd=str(ROOT), env=env, timeout=90)
+    assert proc.returncode == 0, proc.stderr
+    responses = [json.loads(line) for line in proc.stdout.splitlines()]
+    result = responses[1]["result"]
+    assert result["isError"] is False, result
+    body = payload(result)
+    assert "wake" not in body       # only a wake-off board carries wake: false
+    stored = json.loads((tmp_path / "data" / body["review_id"] / "review.json").read_text(encoding="utf-8"))
+    assert stored.get("wake", True) is True          # absence means wake is on
+    assert stored["origin"] == {"platform": "telegram", "chat_id": "test-chat"}
+    assert "synthetic-env-wake-secret" not in proc.stderr
+    assert "synthetic-env-wake-secret" not in proc.stdout
+
+
 @pytest.mark.skipif(os.name == "nt", reason="the checkout script is a POSIX shebang script")
 def test_bin_script_speaks_the_same_protocol(tmp_path):
     script = ROOT / "bin" / "mockreview"
