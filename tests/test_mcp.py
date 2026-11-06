@@ -272,3 +272,42 @@ def test_bin_script_speaks_the_same_protocol(tmp_path):
     responses, _ = _speak([str(script), "mcp", "--platform", "discord", "--chat-id", "test-chat"], tmp_path)
     assert [r["id"] for r in responses] == [1, 2, 3]
     assert payload(responses[2]["result"]) == {"reviews": []}
+
+
+# ---------------------------------------------------------------- a legacy console code page
+#
+# Windows hands a piped child the ANSI code page, not UTF-8, while MCP frames MUST be UTF-8. These spawn the real
+# server with PYTHONIOENCODING forced to cp1252 (deliberately not the utf-8 helper above) so the suite can fail on a
+# regression that the in-process StringIO tests cannot see.
+
+def _speak_legacy(argv, lines, tmp_path, encoding="cp1252"):
+    env = child_env(tmp_path)
+    env["PYTHONIOENCODING"] = encoding       # child_env sets utf-8 for every other test; this one overrides it
+    proc = subprocess.run(argv, input=b"".join(line.encode("utf-8") + b"\n" for line in lines),
+                          capture_output=True, cwd=str(ROOT), env=env, timeout=90)
+    return proc
+
+
+def test_stdio_encoding_accepts_raw_utf8_input(tmp_path):
+    # A curly quote's UTF-8 bytes include 0x9d, which cp1252 cannot decode: unpinned stdin used to die here (rc 1)
+    # before answering anything. ensure_ascii=False on purpose — an escaped \u201d would never reach the decoder.
+    lines = [json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {"x": "\u201d"}},
+                        ensure_ascii=False),
+             json.dumps(request("ping", request_id=2))]
+    proc = _speak_legacy([sys.executable, "-m", "mockreview.mcp"], lines, tmp_path)
+    assert proc.returncode == 0, proc.stderr.decode("utf-8", "replace")
+    responses = [json.loads(line) for line in proc.stdout.decode("utf-8").splitlines()]   # strict UTF-8
+    assert [r["id"] for r in responses] == [1, 2]
+
+
+def test_stdio_encoding_round_trips_non_ascii_output(env, tmp_path):
+    # Unpinned stdout used to raise UnicodeEncodeError on the emoji and take the session down (rc 1), or, on the
+    # bin script's replacing stream, hand the agent a cp1252 byte and a "?" instead of the title.
+    title = "Caf\u00e9 \u2615 board"
+    payload(call("mock_review_create", {"title": title, "decisions": str(_decisions(tmp_path))}))
+    proc = _speak_legacy([sys.executable, "-m", "mockreview.mcp"],
+                         [json.dumps(request("tools/call", {"name": "mock_review_list", "arguments": {}},
+                                             request_id=3))], tmp_path)
+    assert proc.returncode == 0, proc.stderr.decode("utf-8", "replace")
+    response = json.loads(proc.stdout.decode("utf-8").splitlines()[0])      # strict: cp1252 bytes would raise
+    assert [r["title"] for r in payload(response["result"])["reviews"]] == [title]

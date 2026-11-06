@@ -91,6 +91,8 @@ def _look_properties() -> Dict[str, Any]:
 
 
 def _origin_properties() -> Dict[str, Any]:
+    # Advisory only: store.normalize_origin is the single validator (it also bounds the platform and the identifiers),
+    # so these schemas stay loose on purpose rather than duplicating its regexes here.
     return {
         "origin_platform": {"type": "string",
                             "description": "Copy source/platform from your session context; never guess."},
@@ -334,10 +336,48 @@ def handle_request(req: Any, options: Options) -> Optional[Dict[str, Any]]:
     return _error(request_id, -32601, f"method not found: {method}")
 
 
+def _utf8_lines(stdin: Any):
+    """Read lines as UTF-8 whatever the console code page says.
+
+    MCP frames MUST be UTF-8. On Windows a piped child gets the ANSI code page, so a curly quote or an emoji in a
+    title would raise UnicodeDecodeError on read and kill the process. Reading the binary layer makes the encoding
+    ours instead of the text wrapper's; undecodable bytes become U+FFFD, which the JSON parser rejects as -32700
+    without taking the session down. A stream without a binary layer (io.StringIO in the tests) is used as is.
+    """
+    buf = getattr(stdin, "buffer", None)
+    if buf is None:
+        return stdin
+    return (raw.decode("utf-8", "replace") for raw in buf)
+
+
+def _write_response(stdout: Any, response: Dict[str, Any]) -> None:
+    """Write one UTF-8 JSON-RPC line, falling back to escaped ASCII for a lone surrogate.
+
+    Encoding is pinned here for the same reason as the reader: the text wrapper would use the console code page,
+    and a UnicodeEncodeError mid-session would cost the client its server. A stream without a binary layer
+    (io.StringIO in the tests) keeps its own encoding.
+    """
+    text = json.dumps(response, ensure_ascii=False)
+    buf = getattr(stdout, "buffer", None)
+    if buf is None:
+        try:
+            stdout.write(text + "\n")
+        except UnicodeEncodeError:
+            stdout.write(json.dumps(response, ensure_ascii=True) + "\n")
+        stdout.flush()
+        return
+    try:
+        data = text.encode("utf-8")
+    except UnicodeEncodeError:  # a lone surrogate cannot be UTF-8 encoded; escaped ASCII always can
+        data = json.dumps(response, ensure_ascii=True).encode("ascii")
+    buf.write(data + b"\n")
+    buf.flush()
+
+
 def serve(stdin: Any, stdout: Any, options: Options) -> int:
     """Read newline-delimited JSON-RPC from stdin, answer on stdout, return 0 at EOF."""
     _configure_logging()
-    for raw in stdin:
+    for raw in _utf8_lines(stdin):
         line = raw.strip()
         if not line:
             continue
@@ -348,8 +388,7 @@ def serve(stdin: Any, stdout: Any, options: Options) -> int:
         else:
             response = handle_request(req, options)
         if response is not None:
-            stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
-            stdout.flush()
+            _write_response(stdout, response)
     return 0
 
 

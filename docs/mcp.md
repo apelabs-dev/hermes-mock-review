@@ -1,9 +1,13 @@
 # MCP server (stdio)
 
 `mockreview/mcp.py` exposes the same review boards to coding agents that do not run inside Hermes. It is a Model Context
-Protocol server over stdin/stdout: JSON-RPC 2.0, one object per line in each direction, no socket, no thread and no
-subprocess. stdout carries protocol messages only; every log line and traceback goes to stderr. Read until EOF, then
-exit 0.
+Protocol server over stdin/stdout: JSON-RPC 2.0, UTF-8, one object per line in each direction, no listening socket of
+its own and no background thread. stdout carries protocol messages only; every log line and traceback goes to stderr.
+Read until EOF, then exit 0.
+
+Both streams are pinned to UTF-8 inside the server, so a Windows console code page (cp1252 and friends) cannot kill the
+session or mangle a title. The only subprocess is the here.now publish helper a `mode=herenow` round runs, exactly as
+the CLI runs it.
 
 ## Run it
 
