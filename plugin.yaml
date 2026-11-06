@@ -11,7 +11,7 @@ requires_env:
     optional: true
     secret: true
     description: "Leave empty: hermes mockreview setup generates and stores it."
-description: "Review boards for UI mockups: four mock_review tools, the mockreview CLI and slash command, the usage skill, and a webhook platform connect handler for optional in-gateway autostart."
+description: "Review boards for UI mockups: four mock_review tools, the mockreview CLI and slash command, the usage skill, a webhook platform connect handler for optional in-gateway autostart, and a stdio MCP server for other coding agents."
 platforms: [webhook]
 provides_hooks: []
 kind: standalone

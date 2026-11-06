@@ -109,6 +109,41 @@ Known issue: here.now publishing runs the official skill's Bash helper. On Windo
 with compatible paths, or running Hermes and the plugin inside WSL. Native Windows without Bash cannot publish
 here.now reviews; local hosting does not need Bash. See [hosting requirements](docs/hosting.md#herenow).
 
+## Other agents (MCP)
+
+Claude Code, Codex and OpenCode can use the same boards without Hermes in the loop: `mockreview/mcp.py` serves the five
+`mock_review_*` tools over stdio, so a coding agent can create a board, add a round and read the reviewer's marks
+itself. The canonical command is `<abs>/bin/mockreview mcp` (the checkout or installed plugin directory);
+`python -m mockreview.mcp` runs the same server when the package is on the import path. Details:
+[docs/mcp.md](docs/mcp.md).
+
+Wake is off for MCP boards by default, because an external CLI has no Hermes session to wake: the agent reads the marks
+with `mock_review_feedback`. Add `--wake` plus `--platform` and `--chat-id` (or `origin_platform` and `origin_chat_id`
+on one call) only when the session context names a real chat. A `local` link opens on the computer running the board;
+use `herenow` (password protected by default) or `tailnet` to open it on a phone.
+
+Claude Code, project scope (use `--mcp-config` with a JSON file for a one-off):
+
+    claude mcp add --transport stdio --scope project mock-review -- <abs>/bin/mockreview mcp
+
+Codex, in `~/.codex/config.toml`:
+
+    [mcp_servers.mock-review]
+    command = "python3"
+    args = ["<abs>/bin/mockreview", "mcp"]
+
+OpenCode, in `opencode.json`:
+
+    {
+      "mcp": {
+        "mock-review": {
+          "type": "local",
+          "command": ["<abs>/bin/mockreview", "mcp"],
+          "enabled": true
+        }
+      }
+    }
+
 ## Commands and reference
 
 `hermes mockreview <command>` and the `/mockreview` slash command (list, open, close, password, settings). The agent uses five

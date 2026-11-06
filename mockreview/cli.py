@@ -144,6 +144,15 @@ def cmd_serve(a) -> int:
     return server.serve(a.host, a.port, worker=not a.no_worker)
 
 
+def cmd_mcp(a) -> int:
+    from . import mcp
+    return mcp.serve(sys.stdin, sys.stdout, mcp.Options(
+        platform=a.platform if a.platform is not None else (os.environ.get("MOCKREVIEW_PLATFORM") or None),
+        chat_id=a.chat_id if a.chat_id is not None else (os.environ.get("MOCKREVIEW_CHAT_ID") or None),
+        thread=a.thread if a.thread is not None else (os.environ.get("MOCKREVIEW_THREAD") or None),
+        wake=a.wake))
+
+
 def cmd_design(a) -> int:
     with owner.bound(owner.resolve_soft()):
         if a.design_cmd == "save":
@@ -320,6 +329,13 @@ def add_commands(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
     c.add_argument("--port", type=int, default=None, help="default: the port setting (8790)")
     c.add_argument("--no-worker", action="store_true", help="no retry/poll/housekeeping background thread")
     c.set_defaults(**{FN: cmd_serve})
+
+    c = sub.add_parser("mcp", help="run the MCP server on stdio (Claude Code, Codex, OpenCode)")
+    c.add_argument("--platform", default=None, help="origin platform for wake-ups (default: MOCKREVIEW_PLATFORM)")
+    c.add_argument("--chat-id", default=None, help="origin chat ID for wake-ups (default: MOCKREVIEW_CHAT_ID)")
+    c.add_argument("--thread", default=None, help="optional origin thread ID (default: MOCKREVIEW_THREAD)")
+    c.add_argument("--wake", action="store_true", help="wake the origin chat on Send (default: off)")
+    c.set_defaults(**{FN: cmd_mcp})
 
     return p
 

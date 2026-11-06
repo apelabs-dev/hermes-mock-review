@@ -8,12 +8,12 @@ Every command is available as `hermes mockreview <command>`. Without the Hermes 
 
 ```text
 usage: hermes mockreview [-h]
-                         {setup,create,add-round,design,feedback,ack,list,close,settings,housekeeping,owner,adopt,notify-test,publish,password,poll,serve} ...
+                         {setup,create,add-round,design,feedback,ack,list,close,settings,housekeeping,owner,adopt,notify-test,publish,password,poll,serve,mcp} ...
 
 mock-review CLI. First time? Run: hermes mockreview setup. `hermes mockreview settings` prints each setting and its source.
 
 positional arguments:
-  {setup,create,add-round,design,feedback,ack,list,close,settings,housekeeping,owner,adopt,notify-test,publish,password,poll,serve}
+  {setup,create,add-round,design,feedback,ack,list,close,settings,housekeeping,owner,adopt,notify-test,publish,password,poll,serve,mcp}
     setup               onboard mock-review: secret, wake and notice routes,
                         hosting, autostart, a test review
     create              create a review (round 1 = --decisions or --prototype)
@@ -42,6 +42,8 @@ positional arguments:
     serve               run the board server in the foreground until Ctrl+C
                         (works with autostart off; exits 2 if the port is
                         taken)
+    mcp                 run the MCP server on stdio (Claude Code, Codex,
+                        OpenCode)
 
 options:
   -h, --help            show this help message and exit
@@ -403,4 +405,20 @@ options:
   --host HOST  default: the host setting (127.0.0.1)
   --port PORT  default: the port setting (8790)
   --no-worker  no retry/poll/housekeeping background thread
+```
+
+## `hermes mockreview mcp --help`
+
+```text
+usage: hermes mockreview mcp [-h] [--platform PLATFORM] [--chat-id CHAT_ID]
+                             [--thread THREAD] [--wake]
+
+options:
+  -h, --help           show this help message and exit
+  --platform PLATFORM  origin platform for wake-ups (default:
+                       MOCKREVIEW_PLATFORM)
+  --chat-id CHAT_ID    origin chat ID for wake-ups (default:
+                       MOCKREVIEW_CHAT_ID)
+  --thread THREAD      optional origin thread ID (default: MOCKREVIEW_THREAD)
+  --wake               wake the origin chat on Send (default: off)
 ```
