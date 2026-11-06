@@ -54,8 +54,9 @@ development checkout with `--plugin-dir`, validate the folder you actually insta
 ## Creating reviews
 
 `no wake route: Send would store feedback but never wake Hermes`. The signing secret is missing or the route does not
-exist. Run `hermes mockreview setup`. For a demo board that never wakes anyone, pass `--no-wake` (or set `wake_required`
-to false).
+exist. Inside Hermes, run `hermes mockreview setup`; outside Hermes, set `MOCKREVIEW_WEBHOOK_SECRET` and point
+`MOCKREVIEW_WEBHOOK_URL` at a receiver (see [mcp.md](mcp.md#wake-without-hermes)). For a demo board that never wakes
+anyone, pass `--no-wake` (or set `wake_required` to false).
 
 A create call says `this process's store ... is not the one the board server watches`, or `this process's store ... is
 private to this profile`. The process that made the call writes to a different folder than the one the running board
@@ -191,7 +192,8 @@ for multiplexing gateways (see [CHANGELOG.md](../CHANGELOG.md)). Update it and r
 `install-here-now-skill`. The here-now skill is not installed in the active Hermes home. Run
 `hermes skills install official/productivity/here-now -y`.
 
-`HERENOW_API_KEY is not set in the active Hermes secret scope`. Run `hermes config set HERENOW_API_KEY <key>`.
+`HERENOW_API_KEY is not set (Hermes secret scope or environment)`. Inside Hermes, run
+`hermes config set HERENOW_API_KEY <key>`; outside Hermes, set `HERENOW_API_KEY` in the process environment.
 
 A published page loads but feedback never comes back with `account_required` in the log. The publish ran without your
 key. Check the key, then run `hermes mockreview publish <review id>` again.

@@ -145,8 +145,10 @@ class Context:
             raise OwnerError(
                 "no wake route: Send would store feedback but never wake Hermes. "
                 f"{self.wake.get('error') or 'the owning service cannot use route ' + repr(self.wake.get('route'))}. "
-                "Fix the subscription (`hermes webhook subscribe`), or for a board nobody has to be woken by pass "
-                "wake=false / --no-wake (or set wake_required: false).", 409)
+                "Inside Hermes, check the subscription (`hermes webhook subscribe`); outside Hermes, set "
+                "MOCKREVIEW_WEBHOOK_SECRET and point MOCKREVIEW_WEBHOOK_URL at a receiver. "
+                "Or, for a board nobody has to be woken by, pass wake=false / --no-wake (or set "
+                "wake_required: false).", 409)
 
 
 def _local_wake() -> Dict[str, Any]:

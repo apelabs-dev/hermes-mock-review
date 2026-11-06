@@ -1,23 +1,38 @@
-"""The only secret access route used by foreground and background operations."""
+"""The only secret access route used by foreground and background operations.
+
+Inside Hermes the caller's profile scope is the only source; outside it (the stdio MCP server has no gateway and no
+profile scope) the process environment is the deployment's secret store.
+"""
 
 from __future__ import annotations
 
 from contextlib import contextmanager
 import logging
+import os
 from pathlib import Path
 from typing import Iterator, Set, Tuple
 
 log = logging.getLogger("mockreview.secrets")
 
 _build_failures: Set[Tuple[str, str]] = set()   # (home, exception class) already logged
+_logged_env_secrets: Set[str] = set()
 
 
 def get_secret(name: str) -> str:
-    """Resolve within the caller's Hermes context; never fall back to another store."""
+    """Resolve within the caller's Hermes context; outside Hermes, fall back to the process environment.
+
+    Inside Hermes (``agent.secret_scope`` imports) the scoped value is the only source: never read the environment,
+    never leak another profile's value. The stdio MCP server has no gateway and no profile scope, so there the
+    environment is the deployment's secret store.
+    """
     try:
         from agent.secret_scope import get_secret as scoped_secret
     except ImportError:
-        return ""
+        value = (os.environ.get(name) or "").strip()
+        if value and name not in _logged_env_secrets:
+            _logged_env_secrets.add(name)
+            log.info("secret %s resolved from the environment (no Hermes secret scope available)", name)
+        return value
     return (scoped_secret(name) or "").strip()
 
 

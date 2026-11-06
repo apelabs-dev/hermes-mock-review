@@ -85,7 +85,7 @@ def cmd_notify_test(a) -> int:
     if a.secret_env:
         secret = secrets.get_secret(a.secret_env)
         if not secret:
-            print(f"error: {a.secret_env} is not set in the active Hermes secret scope", file=sys.stderr)
+            print(f"error: {a.secret_env} is not set (Hermes secret scope or environment)", file=sys.stderr)
             return 2
     else:
         secret, err = notify.load_secret()

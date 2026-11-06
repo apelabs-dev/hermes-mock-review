@@ -35,7 +35,8 @@ def sign(body: bytes, secret: str, ts: Optional[int] = None) -> Dict[str, str]:
 def load_secret() -> Tuple[Optional[str], str]:
     """Resolve this plugin's signing secret in the caller's active scope."""
     secret = secrets.get_secret("MOCKREVIEW_WEBHOOK_SECRET")
-    return (secret, "") if secret else (None, "MOCKREVIEW_WEBHOOK_SECRET is not set in the active Hermes secret scope")
+    return (secret, "") if secret else (
+        None, "MOCKREVIEW_WEBHOOK_SECRET is not set (Hermes secret scope or environment)")
 
 
 def classify(code: int, text: str) -> Tuple[bool, str]:

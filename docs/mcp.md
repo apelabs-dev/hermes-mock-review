@@ -68,6 +68,27 @@ tool uses: explicit `origin_platform` and `origin_chat_id` are required, and a d
 When wake resolves false, the board is created with `wake=False`: Send stores the feedback and notifies nobody. The
 agent reads it with `mock_review_feedback`.
 
+### Wake without Hermes
+
+Wake stays off by default. `wake: true` (or `--wake`) needs an explicit origin and a receiver. The secret is read by the
+**board server**, not the MCP client: set `MOCKREVIEW_WEBHOOK_SECRET` and `MOCKREVIEW_WEBHOOK_URL` in the server's
+environment (the process that runs `mockreview serve`). The MCP client's environment only matters for calls that read
+settings.
+
+The receiver contract:
+
+- URL: `POST <webhook_url dir>/<webhook_route>-<platform>` (default route `mock-review`, so
+  `http://127.0.0.1:8791/webhooks/mock-review-claude-code`).
+- Signature: `X-Webhook-Signature-V2` = `hex(HMAC-SHA256(secret, "<X-Webhook-Timestamp>." + raw_body))`, timestamp in
+  unix seconds, reject older than 300 s, compare in constant time.
+- Answer `202`, or `200` with `{"status":"accepted"|"coalesced"|"duplicate"}`. Any other status, including `204`, is
+  recorded as a failed delivery and retried every `retry_seconds`. Dedupe on `X-Request-ID` yourself; Hermes's 1 h
+  filter is not involved.
+- Two extra POSTs can arrive on `<route>-<platform>-notice` (the immediate ack and the stalled ping). They carry counts,
+  never notes; answer `200 {"status":"delivered"}` or `404` if you do not want them.
+- With no session to answer, set `stale_after_minutes` and `stale_after_read_minutes` to `0`.
+- mock-review ships no receiver daemon and never runs a command from a board event. The receiver is the user's.
+
 ## Protocol era
 
 The server implements the legacy `initialize` handshake. A dual-era client that first probes `server/discover` gets the
