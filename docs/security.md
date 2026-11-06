@@ -97,6 +97,13 @@ feedback the woken session acts on: give it only to reviewers you would trust wi
 The guard reads the setting, not the route file: keep `wake_toolsets` matching what you added by hand. After you empty
 it, re-run setup so the route loses its tools too.
 
+## MCP server (stdio)
+
+`mockreview/mcp.py` serves the same five tools to a local coding agent over stdin/stdout. It opens no socket, listens on
+no port and holds no token: any local process the user starts can run it, so it is exactly as trusted as that process.
+It calls `mockreview.api` like the CLI, so review validation, storage and the origin/wake rules are the same code path.
+Wake stays off unless the agent supplies an explicit platform and chat ID, and no tool returns a secret.
+
 ## Secrets
 
 API and signing keys are never stored in review files. `MOCKREVIEW_WEBHOOK_SECRET` and `HERENOW_API_KEY` come from the Hermes secret scope.
