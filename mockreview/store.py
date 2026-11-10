@@ -189,12 +189,21 @@ TOKEN_KEYS = ("bg", "surface", "surface2", "line", "line2", "text", "muted", "fa
 COLOR_RE = re.compile(r"^(#[0-9a-fA-F]{3,8}|rgba?\([0-9.,\s%/]+\))$")
 FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
 LAYOUTS = ("side", "switch", "steps", "before-after")
-BLOCK_TYPES = ("text", "recap", "decision", "cards", "callout", "mock", "table")
+BLOCK_TYPES = ("text", "recap", "decision", "cards", "callout", "mock", "table", "settled", "defaults", "question", "piece")
+ID_BLOCKS = ("decision", "mock", "question", "piece", "defaults")   # one id namespace (recaps join it via the clash check)
 TONES = ("neutral", "ok", "warn", "err", "accent")
 BLOCK_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,23}")
 MAX_CARDS = 12
 MAX_COLUMNS = 6
 MAX_ROWS = 30
+PRESETS = ("design", "plan")
+NOTE_STATUSES = ("done", "second-look", "needs-pick")
+GATE_LABEL = "Start building"
+MAX_ITEMS = 30
+MAX_MILESTONES = 6
+MAX_NOTES_ANSWERED = 40
+MAX_GATE_AFTER = 12
+MAX_GATE_LATER = 20
 
 
 def designs_root() -> Path:
@@ -369,9 +378,124 @@ def _table(b: Dict[str, Any], where: str) -> Dict[str, Any]:
     return {"columns": columns, "rows": out_rows, "highlight_col": hl}
 
 
+def _line(v: Any, limit: int) -> str:
+    return _clean_line(v, limit) if isinstance(v, str) else ""
+
+
+def _obj(v: Any, where: str, shape: str) -> Dict[str, Any]:
+    if not isinstance(v, dict):
+        raise ReviewError(f"{where}: must be an object {shape}")
+    return v
+
+
+def _list(v: Any, where: str, lo: int, hi: int, what: str) -> List[Any]:
+    if v is None and lo == 0:
+        return []
+    if not isinstance(v, list) or not lo <= len(v) <= hi:
+        raise ReviewError(f"{where}: {what} must be a list of {lo}-{hi}")
+    return v
+
+
+def _strings(v: Any, where: str, lo: int, hi: int, limit: int, what: str = "items") -> List[str]:
+    out = []
+    for j, x in enumerate(_list(v, where, lo, hi, what)):
+        s = _line(x, limit)
+        if not s:
+            raise ReviewError(f"{where}.{what}[{j}]: must be non-empty text")
+        out.append(s)
+    return out
+
+
+def _markable_extras(b: Dict[str, Any]) -> Dict[str, str]:
+    """revised / asked / answer / group: the round 2+ badges and strip, and the plan preset's section label."""
+    return {"revised": _line(b.get("revised"), 40), "asked": _txt(b.get("asked"), 600),
+            "answer": _txt(b.get("answer"), 600), "group": _line(b.get("group"), 40)}
+
+
+def _settled(b: Dict[str, Any], where: str) -> Dict[str, Any]:
+    out = []
+    for j, it in enumerate(_list(b.get("items"), where, 1, MAX_ITEMS, "settled items")):
+        w = f"{where}.items[{j}]"
+        it = _obj(it, w, "{title, quote?, rule?}")
+        title = _line(it.get("title"), 120)
+        if not title:
+            raise ReviewError(f"{w}: title is required")
+        out.append({"title": title, "quote": _txt(it.get("quote"), 600), "rule": _txt(it.get("rule"), 1200)})
+    return {"items": out}
+
+
+def _question(b: Dict[str, Any], where: str, title: str) -> Dict[str, Any]:
+    if not title:
+        raise ReviewError(f"{where}: question needs a title")
+    rec = _obj(b.get("recommendation"), f"{where}.recommendation", "{answer, why?}")
+    answer = _line(rec.get("answer"), 300)
+    if not answer:
+        raise ReviewError(f"{where}.recommendation: answer is required")
+    return {"text": _txt(b.get("text"), 2000), "recommendation": {"answer": answer, "why": _txt(rec.get("why"), 600)}}
+
+
+def _piece(b: Dict[str, Any], where: str, title: str) -> Dict[str, Any]:
+    if not title:
+        raise ReviewError(f"{where}: piece needs a title")
+    out: Dict[str, Any] = {"tag": _line(b.get("tag"), 80), "text": _txt(b.get("text"), 2000),
+                           "items": _strings(b.get("items"), where, 0, MAX_ITEMS, 600)}
+    if b.get("html") is not None:
+        if not isinstance(b["html"], str) or not b["html"].strip():
+            raise ReviewError(f"{where}: piece html must be a non-empty html string")
+        out.update(html=b["html"], desktop_width=_width(b, where))
+    return out
+
+
+def _status(v: Any) -> Optional[Dict[str, Any]]:
+    if v is None:
+        return None
+    v = _obj(v, "decisions.json: status", "{label?, milestones?}")
+    ms = []
+    for j, m in enumerate(_list(v.get("milestones"), "decisions.json: status", 0, MAX_MILESTONES, "milestones")):
+        w = f"decisions.json: status.milestones[{j}]"
+        m = _obj(m, w, "{label, date?}")
+        label = _line(m.get("label"), 40)
+        if not label:
+            raise ReviewError(f"{w}: label is required")
+        ms.append({"label": label, "date": _line(m.get("date"), 40)})
+    return {"label": _line(v.get("label"), 120), "milestones": ms}
+
+
+def _notes_answered(v: Any, ids: set) -> List[Dict[str, str]]:
+    out = []
+    for j, n in enumerate(_list(v, "decisions.json: notes_answered", 0, MAX_NOTES_ANSWERED, "notes_answered")):
+        w = f"decisions.json: notes_answered[{j}]"
+        n = _obj(n, w, "{ref, note, answer, status?}")
+        ref = n.get("ref")
+        if not isinstance(ref, str) or ref not in ids:
+            raise ReviewError(f"{w}: ref must be the id of a block in this file, got {ref!r}")
+        note, answer = _txt(n.get("note"), 600), _txt(n.get("answer"), 600)
+        if not note or not answer:
+            raise ReviewError(f"{w}: note and answer are required")
+        status = n.get("status") or "done"
+        if status not in NOTE_STATUSES:
+            raise ReviewError(f"{w}: status must be one of {NOTE_STATUSES}")
+        out.append({"ref": ref, "note": note, "answer": answer, "status": status})
+    return out
+
+
+def _gate(v: Any, preset: str) -> Optional[Dict[str, Any]]:
+    """The locked final approval. Opt-in on a design board, on by default on a plan board."""
+    if v is None:
+        if preset != "plan":
+            return None
+        v = {}
+    v = _obj(v, "decisions.json: gate", "{label?, text?, after?, later?}")
+    w = "decisions.json: gate"
+    return {"label": _line(v.get("label"), 40) or GATE_LABEL, "text": _txt(v.get("text"), 600),
+            "after": _strings(v.get("after"), w, 0, MAX_GATE_AFTER, 300, "after"),
+            "later": _strings(v.get("later"), w, 0, MAX_GATE_LATER, 300, "later")}
+
+
 def validate_decisions(raw: Any) -> Dict[str, Any]:
     """decisions.json: the content of a decision round. The board renders it; mocks are static HTML strings.
-    Only `decision` blocks (and a markable `recap`) are voted on; text / cards / callout / mock / table are context."""
+    Markable blocks (decision, question, piece, defaults and a markable `recap`) are voted on; text / cards / callout /
+    mock / table / settled are context."""
     if not isinstance(raw, dict):
         raise ReviewError("decisions.json must be an object")
     blocks = raw.get("blocks")
@@ -379,8 +503,12 @@ def validate_decisions(raw: Any) -> Dict[str, Any]:
         raise ReviewError("decisions.json: blocks must be a non-empty list")
     if len(blocks) > MAX_BLOCKS:
         raise ReviewError(f"decisions.json: at most {MAX_BLOCKS} blocks")
-    ids = set()   # decision + context-mock ids: one namespace (pins, DOM ids)
+    preset = raw.get("preset") or "design"
+    if preset not in PRESETS:
+        raise ReviewError(f"decisions.json: preset must be one of {PRESETS}")
+    ids = set()   # decision, question, piece, defaults and context-mock ids: one namespace (pins, DOM ids)
     recap_ids = set()
+    all_recap_ids = set()
     out_blocks = []
     for i, b in enumerate(blocks):
         where = f"blocks[{i}]"
@@ -388,8 +516,8 @@ def validate_decisions(raw: Any) -> Dict[str, Any]:
             raise ReviewError(f"{where}: type must be one of {BLOCK_TYPES}")
         t = b["type"]
         ob: Dict[str, Any] = {"type": t, "title": _clean_line(b.get("title") or "", 200)}
-        if t in ("decision", "mock"):
-            did = b.get("id")
+        if t in ID_BLOCKS:
+            did = b.get("id") or ("defaults" if t == "defaults" else None)
             if not isinstance(did, str) or not BLOCK_ID_RE.fullmatch(did):
                 raise ReviewError(f"{where}: {t} id must be short lowercase (d1, d2, ...)")
             if did in ids:
@@ -402,14 +530,25 @@ def validate_decisions(raw: Any) -> Dict[str, Any]:
             ob["items"] = [_clean_line(x, 600) for x in items if isinstance(x, str)][:40]
             ob["id"] = _clean_line(b.get("id") or "recap", 24)
             ob["markable"] = bool(b.get("markable", True))
+            all_recap_ids.add(ob["id"])
             if ob["markable"]:
                 recap_ids.add(ob["id"])
+                ob.update(_markable_extras(b))
         elif t == "cards":
             ob.update(_cards(b, where))
         elif t == "callout":
             ob.update(_callout(b, where))
         elif t == "table":
             ob.update(_table(b, where))
+        elif t == "settled":
+            ob.update(_settled(b, where))
+        elif t == "defaults":
+            ob.update({"id": did, "text": _txt(b.get("text"), 1200),
+                       "items": _strings(b.get("items"), where, 1, MAX_ITEMS, 600)}, **_markable_extras(b))
+        elif t == "question":
+            ob.update({"id": did}, **_question(b, where, ob["title"]), **_markable_extras(b))
+        elif t == "piece":
+            ob.update({"id": did}, **_piece(b, where, ob["title"]), **_markable_extras(b))
         elif t == "mock":
             if not isinstance(b.get("html"), str) or not b["html"].strip():
                 raise ReviewError(f"{where}: mock needs an html string")
@@ -435,28 +574,50 @@ def validate_decisions(raw: Any) -> Dict[str, Any]:
                            "html": o["html"]})
             ob.update({"id": did, "tag": _clean_line(b.get("tag") or "", 80), "nav": _clean_line(b.get("nav") or "", 24),
                        "today": _txt(b.get("today"), 1200), "text": _txt(b.get("text"), 2000), "layout": layout,
-                       "options": oo, "desktop_width": _width(b, where)})
+                       "options": oo, "desktop_width": _width(b, where)}, **_markable_extras(b))
         out_blocks.append(ob)
     clash = ids & recap_ids
     if clash:
         raise ReviewError(f"decisions.json: block id {sorted(clash)[0]} is used twice (a recap and a decision/mock)")
     return {"intro": _txt(raw.get("intro"), 3000), "next": _txt(raw.get("next"), 600),
             "extra_css": raw.get("extra_css") if isinstance(raw.get("extra_css"), str) else "",
+            "preset": preset, "status": _status(raw.get("status")),
+            "notes_answered": _notes_answered(raw.get("notes_answered"), ids | all_recap_ids),
+            "gate": _gate(raw.get("gate"), preset),
             "blocks": out_blocks}
 
 
+def _entry(b: Dict[str, Any], kind: str, **extra: Any) -> Dict[str, Any]:
+    e = {"id": b["id"], "title": b["title"], "tag": "", "nav": "", "layout": kind, "options": [], "kind": kind,
+         "group": b.get("group", ""), "revised": b.get("revised", ""), "pinnable": False}
+    e.update(extra)
+    return e
+
+
 def decision_index(dec: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """What feedback validation + markdown need: every markable block, its title and its options."""
+    """What feedback validation + markdown need: every markable block, its title and its options. `kind` says which
+    control the block takes (decision, recap, piece, defaults: approve/change/skip; question: a choice); `pinnable`
+    says whether pins may land on it. Rounds stored before 1.2 lack both (see entry_kind / feedback)."""
     out: List[Dict[str, Any]] = []
     for b in dec["blocks"]:
         if b["type"] == "decision":
-            out.append({"id": b["id"], "title": b["title"], "tag": b["tag"], "nav": b["nav"], "layout": b["layout"],
-                        "options": [{"id": o["id"], "label": o["label"], "recommended": o["recommended"]}
-                                    for o in b["options"]]})
+            out.append(_entry(b, "decision", tag=b["tag"], nav=b["nav"], layout=b["layout"], pinnable=True,
+                              options=[{"id": o["id"], "label": o["label"], "recommended": o["recommended"]}
+                                       for o in b["options"]]))
         elif b["type"] == "recap" and b.get("markable"):
-            out.append({"id": b["id"], "title": b["title"] or "Recap", "tag": "", "nav": "Recap", "layout": "recap",
-                        "options": []})
+            out.append(_entry(b, "recap", title=b["title"] or "Recap", nav="Recap", pinnable=True))
+        elif b["type"] == "defaults":
+            out.append(_entry(b, "defaults", title=b["title"] or "How I read the rest"))
+        elif b["type"] == "question":
+            out.append(_entry(b, "question", recommendation=dict(b["recommendation"])))
+        elif b["type"] == "piece":
+            out.append(_entry(b, "piece", tag=b["tag"], pinnable="html" in b))
     return out
+
+
+def entry_kind(e: Dict[str, Any]) -> str:
+    """An index entry's kind, also for rounds stored before format 1.2 (no `kind` key)."""
+    return e.get("kind") or {"recap": "recap", "prototype": "prototype"}.get(e.get("layout"), "decision")
 
 
 def mock_index(dec: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -468,7 +629,8 @@ def round_mocks(r: Dict[str, Any]) -> List[Dict[str, Any]]:
     return (r.get("mocks") or []) if r.get("kind") == "decisions" else []
 
 
-PROTOTYPE_INDEX = [{"id": "proto", "title": "Prototype", "tag": "", "nav": "", "layout": "prototype", "options": []}]
+PROTOTYPE_INDEX = [{"id": "proto", "title": "Prototype", "tag": "", "nav": "", "layout": "prototype", "options": [],
+                    "kind": "prototype", "group": "", "revised": "", "pinnable": True}]
 
 
 def round_index(r: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -575,6 +737,9 @@ def _round_record(n: int, spec: Dict[str, Any], variants: List[Dict[str, Any]]) 
         mocks = mock_index(spec["decisions"])
         if mocks:
             r["mocks"] = mocks
+        r["preset"] = spec["decisions"].get("preset") or "design"
+        if spec["decisions"].get("gate"):
+            r["gate"] = spec["decisions"]["gate"]   # feedback.gate_state / the build action read it from here
     if spec.get("design"):
         r["design"] = validate_design(spec["design"])
     return r
@@ -721,6 +886,8 @@ def public_state(data: Dict[str, Any], submit_kind: str = "local") -> Dict[str, 
             "kind": r.get("kind", "variants"),
             "design": r.get("design"),
             "decisions": round_index(r),
+            "preset": r.get("preset", "design"),
+            "gate": r.get("gate"),
             "created_at": r["created_at"],
             "variants": [{k: v[k] for k in ("id", "label", "stance", "file")} for v in r["variants"]],
             "feedback": r.get("feedback"),
