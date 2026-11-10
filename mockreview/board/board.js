@@ -24,7 +24,7 @@
     desktop: { w: 1280, h: 800, label: 'Desktop', short: 'Desktop · 1280' },
     phone: { w: 390, h: 844, label: 'Phone', short: 'Phone · 390' }
   };
-  var LIMIT = { pin: 600, note: 3000, guidelines: 5000, choice: 2000, pins: 40 };
+  var LIMIT = { pin: 600, note: 3000, guidelines: 5000, choice: 2000, pins: 40, custom: 280 };
 
   var app = document.getElementById('app');
   var S = {
@@ -146,7 +146,11 @@
     var d = emptyDraft(r);
     if (!fb) return d;
     if (isNew(r)) {
-      Object.keys(fb.marks || {}).forEach(function (k) { var m = fb.marks[k] || {}; d.marks[k] = { status: m.status || null, option: m.option || null, note: m.note || '' }; });
+      Object.keys(fb.marks || {}).forEach(function (k) {
+        var m = fb.marks[k] || {};
+        d.marks[k] = { status: m.status || null, option: m.option || null, note: m.note || '' };
+        if (m.choice) { d.marks[k].choice = m.choice; d.marks[k].custom = m.custom || ''; }   // a question's answer
+      });
       d.pins = (fb.pins || []).map(function (p) { return { block: p.block, option: p.option || null, w: p.w, x: p.x, y: p.y, text: p.text }; });
       d.guidelines = fb.guidelines || '';
       return d;
@@ -175,12 +179,12 @@
     saveTimer = setTimeout(function () { lsSet(key(S.amending ? 'amend' : 'draft'), S.draft); }, 250);
   }
   function hasContent(d) {
-    if (d.marks) return (d.guidelines || '').trim() !== '' || d.pins.length > 0 || Object.keys(d.marks).some(function (k) { var m = d.marks[k]; return m.status || m.option || (m.note || '').trim(); });
+    if (d.marks) return (d.guidelines || '').trim() !== '' || d.pins.length > 0 || Object.keys(d.marks).some(function (k) { var m = d.marks[k]; return m.status || m.option || m.choice || (m.note || '').trim(); });
     if (d.choice || d.guidelines.trim() || d.choice_note.trim()) return true;
     return Object.keys(d.variants).some(function (k) { return d.variants[k].note.trim() || d.variants[k].pins.length; });
   }
-  function payload(d) {
-    if (d.marks) return { marks: d.marks, pins: d.pins.map(function (p) { return { block: p.block, option: p.option, w: p.w, x: +(+p.x).toFixed(4), y: +(+p.y).toFixed(4), text: p.text }; }), guidelines: d.guidelines };
+  function payload(d, action) {
+    if (d.marks) return Object.assign(action ? { action: action } : {}, { marks: cleanMarks(d.marks), pins: d.pins.map(function (p) { return { block: p.block, option: p.option, w: p.w, x: +(+p.x).toFixed(4), y: +(+p.y).toFixed(4), text: p.text }; }), guidelines: d.guidelines });
     var out = { choice: d.choice, choice_note: d.choice_note, guidelines: d.guidelines, variants: {} };
     Object.keys(d.variants).forEach(function (k) {
       out.variants[k] = { note: d.variants[k].note, pins: d.variants[k].pins.map(function (p) {
@@ -188,6 +192,80 @@
       }) };
     });
     return out;
+  }
+
+  // ---------- format 1.2: question marks, the gate and the progress line ----------
+  // Pure functions (no DOM, no state) so the tests run the real code. They mirror feedback.py: a question is resolved
+  // by a choice, any other markable block by approve or skip, and the gate opens once nothing is open or on Change.
+  function entryKind(e) { return e.kind || (e.layout === 'recap' ? 'recap' : e.layout === 'prototype' ? 'prototype' : 'decision'); }
+  function capCustom(v) { return String(v === null || v === undefined ? '' : v).replace(/[\r\n\t]+/g, ' ').slice(0, LIMIT.custom); }
+  function isResolved(e, m) {
+    m = m || {};
+    if (entryKind(e) === 'question') return m.choice === 'recommended' || (m.choice === 'custom' && !!String(m.custom || '').trim());
+    return m.status === 'approve' || m.status === 'skip';
+  }
+  function gateState(index, marks, gate) {
+    var open = [], changed = [], bits = [];
+    (index || []).forEach(function (e) {
+      var m = (marks || {})[e.id] || {};
+      if (entryKind(e) !== 'question' && m.status === 'change') changed.push(e.id);
+      else if (!isResolved(e, m)) open.push(e.id);
+    });
+    if (open.length) bits.push(open.length + ' still open');
+    if (changed.length) bits.push(changed.length + ' on Change');
+    return { has_gate: !!gate, open: open, changed: changed, ready: !!gate && !bits.length, reason: bits.join(' · ') };
+  }
+  var PROGRESS = [['plan', 'plan'], ['question', 'questions'], ['pick', 'picks'], ['recap', 'to confirm']];
+  function progressLine(index, marks) {
+    var c = {};
+    (index || []).forEach(function (e) {
+      var k = entryKind(e), g = k === 'question' ? 'question' : k === 'decision' ? 'pick' : k === 'recap' ? 'recap' : k === 'prototype' ? null : 'plan';
+      if (!g) return;
+      c[g] = c[g] || [0, 0];
+      c[g][1]++;
+      if (isResolved(e, (marks || {})[e.id])) c[g][0]++;
+    });
+    return PROGRESS.filter(function (p) { return c[p[0]]; }).map(function (p) { return c[p[0]][0] + '/' + c[p[0]][1] + ' ' + p[1]; }).join(' · ');
+  }
+  function isMarkableBlock(b) {
+    return b.type === 'decision' || b.type === 'question' || b.type === 'piece' || b.type === 'defaults' || (b.type === 'recap' && b.markable !== false);
+  }
+  // Plan preset: markable blocks grouped by `group` (first appearance first); a context block joins the group of the
+  // markable block before it, or `lead` when none came yet. settled / defaults are hoisted above the body by the caller.
+  function groupBlocks(blocks) {
+    var lead = [], groups = [], by = {}, last = null;
+    blocks.forEach(function (b) {
+      if (b.type === 'settled' || b.type === 'defaults') return;
+      if (isMarkableBlock(b)) {
+        var g = b.group || '';
+        if (!by[g]) { by[g] = { name: g, blocks: [] }; groups.push(by[g]); }
+        last = by[g];
+        last.blocks.push(b);
+      } else (last ? last.blocks : lead).push(b);
+    });
+    return { lead: lead, groups: groups };
+  }
+  // "Approve the rest": every still-open (no status yet) block of the group that takes approve/change/skip.
+  function approveRestIds(index, group, marks) {
+    return (index || []).filter(function (e) {
+      var k = entryKind(e);
+      return (e.group || '') === group && k !== 'question' && k !== 'defaults' && k !== 'prototype' && !((marks || {})[e.id] || {}).status;
+    }).map(function (e) { return e.id; });
+  }
+  // A question mark that is a custom answer with no text is not an answer: send the note alone, or nothing.
+  function cleanMarks(marks) {
+    var out = {};
+    Object.keys(marks || {}).forEach(function (k) {
+      var m = Object.assign({}, marks[k]);
+      if (m.choice === 'custom') { m.custom = capCustom(m.custom).replace(/\s+/g, ' ').trim(); if (!m.custom) { m.choice = null; delete m.custom; } }
+      else if (m.choice === 'recommended') delete m.custom;
+      if (m.choice || m.status || m.option || (m.note || '').trim()) out[k] = m;
+    });
+    return out;
+  }
+  function answerText(b, m) {
+    m = m || {};
+    return m.choice === 'recommended' ? b.recommendation.answer : m.choice === 'custom' ? String(m.custom || '').trim() : '';
   }
 
   // ---------- boot ----------
@@ -813,9 +891,10 @@
   function mark(id) { return (S.draft.marks && S.draft.marks[id]) || { status: null, option: null, note: '' }; }
   function setMark(id, patch) {
     var m = Object.assign({}, mark(id), patch);
-    if (!m.status && !m.option && !(m.note || '').trim()) delete S.draft.marks[id]; else S.draft.marks[id] = m;
+    if (markEmpty(m)) delete S.draft.marks[id]; else S.draft.marks[id] = m;
     saveDraft(); updateSendbar(); refreshBlock(id); updateTally();
   }
+  function markEmpty(m) { return !m.status && !m.option && !m.choice && !(m.note || '').trim(); }
   function initials(label) {
     var w = String(label || '?').replace(/[^\p{L}\p{N} ]/gu, ' ').trim().split(/\s+/);
     return ((w[0] || '?')[0] + (w.length > 1 ? w[1][0] : (w[0][1] || ''))).toUpperCase();
@@ -1067,25 +1146,134 @@
   function paras(text, cls) {
     return String(text || '').split(/\n{2,}/).filter(function (x) { return x.trim(); }).map(function (x) { return h('p', { class: cls || null, text: x.trim() }); });
   }
+  function fmtDay(iso) {
+    var d = new Date(iso);
+    return isNaN(d) ? '' : d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  }
+  // Format 1.2 boards (the file has a `preset`) share one skeleton: header + status line, "Your notes, answered",
+  // "Already decided", the defaults card, the body (grouped on the plan preset), then the gate. Older files have no
+  // preset and keep the header and the flat body they always had.
   function renderDoc(r, a) {
-    var dec = a.dec, st = R();
+    var dec = a.dec, st = R(), v12 = !!dec.preset, plan = dec.preset === 'plan';
     var doc = h('div', { class: 'doc' + (isEditable() ? '' : ' ro') });
+    var eyebrow = v12
+      ? [(r.design && r.design.label) || st.title, dec.preset, 'Round ' + r.n, fmtDay(r.created_at)].filter(Boolean).join(' · ')
+      : [(r.design && r.design.label), 'Round ' + r.n, wlabel(S.width) + ' mocks'].filter(Boolean).join(' · ');
     append(doc, h('header', { class: 'doc-head' },
-      h('div', { class: 'eyebrow', text: [(r.design && r.design.label), 'Round ' + r.n, wlabel(S.width) + ' mocks'].filter(Boolean).join(' · ') }),
+      h('div', { class: 'eyebrow', text: eyebrow }),
       h('h1', { text: st.title }),
       paras(dec.intro || st.brief),
+      v12 ? renderStatusLine(dec) : null,
       isEditable() && pinsOn() ? h('p', { class: 'hint-line' }, icon('pin'), 'Tap any mock to pin a comment on that spot.') : null));
-    append(doc, renderDocNav(r));
-    dec.blocks.forEach(function (b) { append(doc, renderBlock(r, a, b)); });
+    var body = dec.blocks.filter(function (b) { return b.type !== 'settled' && b.type !== 'defaults'; });
+    var grouped = plan ? groupBlocks(dec.blocks) : null;
+    append(doc, renderDocNav(r, grouped));
+    append(doc, renderNotesAnswered(dec));
+    dec.blocks.forEach(function (b) { if (b.type === 'settled') append(doc, renderSettled(b)); });
+    dec.blocks.forEach(function (b) { if (b.type === 'defaults') append(doc, renderBlock(r, a, b)); });
+    if (grouped) {
+      grouped.lead.forEach(function (b) { append(doc, renderBlock(r, a, b)); });
+      grouped.groups.forEach(function (g, i) { append(doc, renderGroup(r, a, g, i)); });
+    } else body.forEach(function (b) { append(doc, renderBlock(r, a, b)); });
     append(doc, renderElse());
-    var idx = r.decisions || [];
     append(doc, h('div', { class: 'doc-end', id: 'dz-end' }));
+    if (dec.gate) append(doc, renderGate(r, dec));
     requestAnimationFrame(updateTally);
-    void idx;
     DOC = { r: r, dec: dec };
     return doc;
   }
   var DOC = null;
+
+  // status.label, the milestones and the live progress line ("3/5 plan · 1/2 questions · 0/1 picks")
+  function renderStatusLine(dec) {
+    var s = dec.status || {}, ms = s.milestones || [];
+    return h('div', { class: 'statusline' },
+      s.label ? h('p', { class: 'st-label', text: s.label }) : null,
+      ms.length ? h('ul', { class: 'st-miles', 'aria-label': 'Milestones' }, ms.map(function (m) {
+        return h('li', null, h('span', { text: m.label }), m.date ? h('span', { class: 'st-date', text: m.date }) : null);
+      })) : null,
+      h('p', { class: 'st-progress', id: 'dz-progress', text: progressLine(viewed().decisions, S.draft.marks) }));
+  }
+  var NOTE_CHIP = { done: 'Done', 'second-look': 'Needs a second look', 'needs-pick': 'Needs a pick' };
+  function jumpTo(id) {
+    var el = document.getElementById(id); if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('flash-blk');
+    setTimeout(function () { el.classList.remove('flash-blk'); }, 1400);
+  }
+  function renderNotesAnswered(dec) {
+    var list = dec.notes_answered || [];
+    if (!list.length) return null;
+    return h('section', { class: 'blk blk-notes', id: 'dz-notes' }, h('h2', { text: 'Your notes, answered' }),
+      h('ul', { class: 'na' }, list.map(function (n) {
+        var ref = dec.blocks.filter(function (b) { return b.id === n.ref; })[0];
+        return h('li', { class: 'na-row' },
+          h('div', { class: 'na-body' },
+            h('p', { class: 'na-note' }, h('span', { class: 'na-l', text: 'Your note' }), n.note),
+            h('p', { class: 'na-ans' }, h('span', { class: 'na-l', text: 'Answer' }), n.answer)),
+          h('div', { class: 'na-side' },
+            h('span', { class: 'na-chip na-' + n.status, text: NOTE_CHIP[n.status] || NOTE_CHIP.done }),
+            h('button', { class: 'link-btn na-go', 'aria-label': 'Go to ' + ((ref && ref.title) || n.ref), text: 'Go to ' + n.ref.toUpperCase(),
+              onclick: function () { jumpTo('dz-' + n.ref); } })));
+      })));
+  }
+  function renderSettled(b) {   // "Already decided": context only, never a control
+    return h('section', { class: 'blk blk-settled' }, h('h2', { text: b.title || 'Already decided' }),
+      h('div', { class: 'cards settled' }, b.items.map(function (it) {
+        return h('article', { class: 'card settled-card' }, h('h3', { text: it.title }),
+          it.quote ? h('blockquote', { class: 'sq', text: it.quote }) : null,
+          it.rule ? h('p', { class: 'srule' }, h('span', { class: 'srule-l', text: 'Rule' }), it.rule) : null);
+      })));
+  }
+  function renderGroup(r, a, g, i) {   // plan preset: a section per group, with "Approve the rest"
+    var ed = isEditable();
+    var btn = h('button', { class: 'btn grp-approve', disabled: ed ? null : true, onclick: function () {
+      approveRestIds(r.decisions, g.name, S.draft.marks).forEach(function (id) { setMark(id, { status: 'approve' }); });
+    } }, h('span', { text: 'Approve the rest' }), h('span', { class: 'grp-n' }));
+    var sec = h('section', { class: 'gsec', id: 'grp-' + i, 'data-group': g.name },
+      h('div', { class: 'grp-head' }, h('h2', { text: g.name || 'Plan' }), h('span', { class: 'grp-count' }), btn));
+    g.blocks.forEach(function (b) { append(sec, renderBlock(r, a, b)); });
+    return sec;
+  }
+
+  // ---- the gate: the locked final approval ("Start building") ----
+  function pressedAt(r) {
+    var ls = r.n === R().current_round ? localSent(r.n) : null;
+    return fmtDate((r.submission && r.submission.submitted_at) || (ls && ls.at));
+  }
+  function renderGate(r, dec) {
+    var g = dec.gate, label = g.label || 'Start building';
+    var fb = submittedFeedback(r), pressed = !!(fb && fb.action === 'build') && !S.amending;
+    var card = h('div', { class: 'gate-card' }, h('h2', { text: label }), g.text ? paras(g.text, 'itext') : null);
+    if (pressed) {
+      append(card, h('p', { class: 'gate-done', role: 'status' }, icon('check'), label + ' pressed' + (pressedAt(r) ? ' · ' + pressedAt(r) : '')));
+    } else {
+      append(card, h('div', { class: 'gate-actions' },
+        h('button', { class: 'btn btn-primary btn-gate', id: 'gate-btn', onclick: function () { if (gateState(r.decisions, S.draft.marks, g).ready && isEditable()) send('build'); } },
+          icon('lock'), h('span', { class: 'gate-label', text: label })),
+        h('span', { class: 'gate-reason', id: 'gate-reason' })));
+    }
+    var after = g.after || [], later = g.later || [];
+    var lists = after.length || later.length ? h('div', { class: 'gate-lists' },
+      after.length ? h('div', { class: 'gate-list' }, h('h3', { text: 'What I need from you after approval' }), h('ul', null, after.map(function (x) { return h('li', { text: x }); }))) : null,
+      later.length ? h('div', { class: 'gate-list' }, h('h3', { text: 'Later, not in this plan' }), h('ul', null, later.map(function (x) { return h('li', { class: 'later', text: x }); }))) : null) : null;
+    var sec = h('section', { class: 'blk gate' + (pressed ? ' is-pressed' : ''), id: 'dz-gate' }, card, lists);
+    setTimeout(updateGate, 0);
+    return sec;
+  }
+  function updateGate() {
+    var btn = document.getElementById('gate-btn'); if (!btn) return;
+    var r = viewed(), g = r.gate || (DOC && DOC.dec.gate); if (!g) return;
+    var gs = gateState(r.decisions, S.draft.marks, g), ed = isEditable();
+    var ok = gs.ready && ed && !S.sending;
+    var reason = !ed ? 'This round is locked.' : S.sending ? 'Sending…' : gs.ready ? 'Nothing is open or on Change.' : gs.reason;
+    btn.setAttribute('aria-disabled', ok ? 'false' : 'true');
+    btn.title = ok ? (g.label || 'Start building') + ': send the approved plan to Hermes' : reason;
+    btn.classList.toggle('is-disabled', !ok);
+    var lab = btn.querySelector('.gate-label'); if (lab) lab.textContent = S.sending ? 'Sending…' : (g.label || 'Start building');
+    var rs = document.getElementById('gate-reason');
+    if (rs) { rs.textContent = reason; rs.classList.toggle('ready', ok); }
+  }
 
   function renderTally(r) {   // lives in the footer
     var idx = r.decisions || [];
@@ -1098,7 +1286,15 @@
       h('span', { class: 't-count t-open' }, h('b', { id: 'c-open', text: String(idx.length) }),
         h('span', { class: 'tl', text: ' of ' + idx.length + ' open' }), h('span', { class: 'ts', text: '/' + idx.length + ' open' })));
   }
-  function renderDocNav(r) {   // decision chips: jump to D1, D2 … (green once marked)
+  // nav chips: a plan board jumps to its groups; a design board to each decision (D1, D2 …); green once resolved
+  function renderDocNav(r, grouped) {
+    if (grouped) {
+      if (!grouped.groups.length) return null;
+      return h('nav', { class: 'dnav t-nav', 'aria-label': 'Sections' }, grouped.groups.map(function (g, i) {
+        return h('a', { href: '#grp-' + i, 'data-group': g.name, text: g.name || 'Plan',
+          onclick: function (e) { e.preventDefault(); var t = document.getElementById('grp-' + i); if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' }); } });
+      }));
+    }
     var idx = r.decisions || [];
     if (!idx.length) return null;
     return h('nav', { class: 'dnav t-nav', 'aria-label': 'Decisions' }, idx.map(function (d) {
@@ -1108,15 +1304,35 @@
   }
   function updateTally() {
     if (!document.getElementById('dz-tally')) return;
-    var idx = viewed().decisions || [], c = { approve: 0, change: 0, skip: 0 };
-    idx.forEach(function (d) { var s = mark(d.id).status; if (c[s] !== undefined) c[s]++; });
+    var idx = viewed().decisions || [], marks = S.draft.marks || {}, c = { approve: 0, change: 0, skip: 0 };
+    idx.forEach(function (d) {
+      var s = entryKind(d) === 'question' ? (isResolved(d, marks[d.id]) ? 'approve' : null) : (marks[d.id] || {}).status;   // an answered question counts as approved
+      if (c[s] !== undefined) c[s]++;
+    });
     ['approve', 'change', 'skip'].forEach(function (k) { document.getElementById('c-' + k).textContent = c[k]; });
     var open = idx.length - c.approve - c.change - c.skip;
     document.getElementById('c-open').textContent = open;
-    document.querySelectorAll('.t-nav a').forEach(function (a) { a.classList.toggle('done', !!mark(a.dataset.id).status); });
-    var end = document.getElementById('dz-end');
-    if (end && DOC) end.textContent = open ? open + ' of ' + idx.length + ' still open.' + (DOC.dec.next ? ' Once all are decided → ' + DOC.dec.next : '')
-      : 'All ' + idx.length + ' decided.' + (DOC.dec.next ? ' Next → ' + DOC.dec.next : '') + (isEditable() ? ' Press Send when you’re ready.' : '');
+    var done = {};
+    idx.forEach(function (d) { done[d.id] = isResolved(d, marks[d.id]); });
+    document.querySelectorAll('.t-nav a').forEach(function (a) {
+      var ok = a.dataset.id ? !!done[a.dataset.id] : idx.filter(function (d) { return (d.group || '') === a.dataset.group && entryKind(d) !== 'defaults'; }).every(function (d) { return done[d.id]; });
+      a.classList.toggle('done', ok);
+    });
+    var prog = document.getElementById('dz-progress');
+    if (prog) prog.textContent = progressLine(idx, marks);
+    document.querySelectorAll('.gsec').forEach(function (g) {
+      var name = g.dataset.group, mine = idx.filter(function (d) { return (d.group || '') === name && entryKind(d) !== 'defaults'; });
+      var n = approveRestIds(idx, name, marks).length;
+      g.querySelector('.grp-count').textContent = mine.filter(function (d) { return done[d.id]; }).length + '/' + mine.length + ' resolved';
+      var b = g.querySelector('.grp-approve'), gn = g.querySelector('.grp-n');
+      gn.textContent = n ? ' (' + n + ')' : '';
+      b.disabled = !n || !isEditable();
+    });
+    updateGate();
+    var end = document.getElementById('dz-end'), gate = DOC && DOC.dec.gate;
+    var nextTxt = DOC && DOC.dec.next ? DOC.dec.next : '';
+    if (end && DOC) end.textContent = open ? open + ' of ' + idx.length + ' still open.' + (nextTxt ? ' Once all are decided → ' + nextTxt : '')
+      : 'All ' + idx.length + ' decided.' + (nextTxt ? ' Next → ' + nextTxt : '') + (isEditable() ? (gate && !gateState(idx, marks, gate).ready ? '' : gate ? ' Press ' + (gate.label || 'Start building') + ' when you’re ready, or Send notes.' : ' Press Send when you’re ready.') : '');
   }
 
   var STATUS_TEXT = { approve: 'Approved', change: 'Change', skip: 'Skipped' };
@@ -1131,14 +1347,25 @@
     if (b.type === 'callout') return renderCallout(b);
     if (b.type === 'table') return renderTable(b);
     if (b.type === 'mock') return renderContextMock(r, a, b);
-    if (b.type !== 'decision' && b.type !== 'recap') return null;
-    var el = h('section', { class: 'blk item', id: 'dz-' + b.id, 'data-id': b.id });
-    var head = h('div', { class: 'ihead' }, b.tag ? h('span', { class: 'tag', text: b.tag }) : null,
-      h('h3', { text: b.title || (b.type === 'recap' ? 'Is this record right?' : b.id.toUpperCase()) }), h('span', { class: 'status' }));
+    if (b.type === 'settled') return renderSettled(b);
+    if (!isMarkableBlock(b)) return null;
+    var el = h('section', { class: 'blk item', id: 'dz-' + b.id, 'data-id': b.id, 'data-kind': b.type });
+    var head = h('div', { class: 'ihead' }, b.tag ? h('span', { class: 'tag', text: b.tag }) : b.type === 'question' ? h('span', { class: 'tag', text: 'Question' }) : null,
+      h('h3', { text: b.title || (b.type === 'recap' ? 'Is this record right?' : b.type === 'defaults' ? 'How I read the rest' : b.id.toUpperCase()) }),
+      b.revised ? h('span', { class: 'rev', text: b.revised }) : null, h('span', { class: 'status' }));
     append(el, head);
+    append(el, renderAsked(b));
     if (b.type === 'recap') {
       append(el, h('ul', { class: 'recap' }, b.items.map(function (x) { return h('li', { text: x }); })));
       if (b.markable !== false) append(el, decideRow(b, false));   // missing flag = markable, same default as store.validate_decisions
+    } else if (b.type === 'defaults') {
+      if (b.text) append(el, paras(b.text, 'itext'));
+      append(el, h('ul', { class: 'recap' }, b.items.map(function (x) { return h('li', { text: x }); })));
+      append(el, decideRow(b, false));
+    } else if (b.type === 'question') {
+      append(el, renderQuestion(b));
+    } else if (b.type === 'piece') {
+      append(el, renderPiece(r, a, b));
     } else {
       if (b.today) append(el, h('p', { class: 'today' }, h('b', { text: 'Today: ' }), b.today));
       if (b.text) append(el, paras(b.text, 'itext'));
@@ -1148,6 +1375,78 @@
     }
     setTimeout(function () { refreshBlock(b.id); }, 0);
     return el;
+  }
+  function renderAsked(b) {   // the "You asked / Answer" strip a later round carries
+    if (!b.asked && !b.answer) return null;
+    return h('div', { class: 'qa' },
+      b.asked ? h('p', { class: 'qa-row' }, h('span', { class: 'qa-l', text: 'You asked' }), b.asked) : null,
+      b.answer ? h('p', { class: 'qa-row' }, h('span', { class: 'qa-l', text: 'Answer' }), b.answer) : null);
+  }
+  function renderPiece(r, a, b) {   // title and tag sit in the head; text, items, an optional pinnable mock, then Approve / Change / Skip
+    return [
+      b.text ? paras(b.text, 'itext') : null,
+      b.items && b.items.length ? h('ul', { class: 'recap piece-items' }, b.items.map(function (x) { return h('li', { text: x }); })) : null,
+      b.html ? h('figure', { class: 'opt ctx-fig piece-fig' }, mockBox(r, a, b, { id: null, html: b.html })) : null,
+      h('ol', { class: 'ipins', id: 'pins-' + b.id }),
+      decideRow(b, false)];
+  }
+  // ---- a question: the recommendation, then "Go with recommendation" or "Different answer" (one line, 280 characters) ----
+  function renderQuestion(b) {
+    var ed = isEditable(), rec = b.recommendation || {}, id = b.id;
+    function qbtn(c, label) {
+      return h('button', { class: 'dbtn qbtn q-' + c, 'data-c': c, 'aria-pressed': 'false', disabled: ed ? null : true, text: label,
+        onclick: function () { pickAnswer(id, c); } });
+    }
+    var input = h('input', { type: 'text', class: 'qinput', maxlength: String(LIMIT.custom), placeholder: 'Your answer, in one line', 'aria-label': 'Your answer', readonly: ed ? null : true });
+    input.value = mark(id).custom || '';
+    var count = h('span', { class: 'qcount', text: input.value.length + ' / ' + LIMIT.custom });
+    input.addEventListener('input', function () {
+      var v = capCustom(input.value);
+      if (v !== input.value) input.value = v;
+      count.textContent = v.length + ' / ' + LIMIT.custom;
+      setCustom(id, v);
+    });
+    var custom = h('div', { class: 'qcustom' }, input, count);
+    custom.hidden = mark(id).choice !== 'custom';
+    var note = h('textarea', { class: 'dnote qnote', rows: '1', maxlength: '2000', placeholder: 'Note: anything to add', 'aria-label': 'Note', readonly: ed ? null : true });
+    note.value = mark(id).note || '';
+    note.addEventListener('input', function () { setMarkQuiet(id, note.value); autoGrow(note); });
+    requestAnimationFrame(function () { autoGrow(note); });
+    return [
+      b.text ? paras(b.text, 'itext') : null,
+      h('div', { class: 'qrec' }, h('span', { class: 'qrec-l', text: 'Recommendation' }), h('p', { class: 'qrec-a', text: rec.answer || '' }),
+        rec.why ? h('p', { class: 'qrec-why', text: rec.why }) : null),
+      h('div', { class: 'decide qdecide', 'data-id': id },
+        h('div', { class: 'grp', role: 'group', 'aria-label': 'Answer' }, qbtn('recommended', 'Go with recommendation'), qbtn('custom', 'Different answer')),
+        h('div', { class: 'qresult' }, h('span', { class: 'qresult-text' }),
+          h('button', { class: 'link-btn q-undo', text: 'undo', 'aria-label': 'Undo the answer', disabled: ed ? null : true, onclick: function () { setMark(id, { choice: null, custom: '' }); } }))),
+      custom, note];
+  }
+  function pickAnswer(id, c) {
+    var m = mark(id);
+    if (c === 'recommended') { setMark(id, m.choice === 'recommended' ? { choice: null, custom: '' } : { choice: 'recommended', custom: '' }); return; }
+    if (m.choice !== 'custom') setMark(id, { choice: 'custom', custom: m.custom || '' });
+    var el = document.getElementById('dz-' + id), inp = el && el.querySelector('.qinput');
+    if (inp) setTimeout(function () { inp.focus({ preventScroll: true }); }, 0);
+  }
+  function setCustom(id, text) {   // typing: store and refresh the readouts, never rebuild the input
+    var m = Object.assign({}, mark(id), { choice: 'custom', custom: text });
+    S.draft.marks[id] = m;
+    saveDraft(); updateSendbar(); updateTally();
+    var el = document.getElementById('dz-' + id); if (el) refreshQuestion(el, id);
+  }
+  function refreshQuestion(el, id) {
+    var m = mark(id), b = DOC && DOC.dec.blocks.filter(function (x) { return x.id === id; })[0];
+    var done = m.choice === 'recommended' || (m.choice === 'custom' && !!String(m.custom || '').trim());
+    el.querySelectorAll('.qbtn').forEach(function (x) { x.setAttribute('aria-pressed', String(x.dataset.c === m.choice)); });
+    var cu = el.querySelector('.qcustom'); if (cu) cu.hidden = m.choice !== 'custom';
+    var st = el.querySelector('.status');
+    st.dataset.s = done ? 'approve' : '';
+    st.textContent = done ? 'Answered' : 'Open';
+    el.classList.toggle('marked', done);
+    var rt = el.querySelector('.qresult-text');
+    if (rt) rt.textContent = done ? 'Answer: ' + (b ? answerText(b, m) : '') : m.choice === 'custom' ? 'Type your answer below' : 'Not answered yet';
+    var un = el.querySelector('.q-undo'); if (un) un.hidden = !m.choice;
   }
   // ---- context sections: nothing to vote on, never in the tally / nav / marks ----
   function renderCards(b) {   // "what's changing": a grid of short cards, 1 column on a phone, 2-3 on desktop
@@ -1415,7 +1714,7 @@
   }
   function setMarkQuiet(id, note) {   // typing: don't rebuild anything, just store
     var m = Object.assign({}, mark(id), { note: note });
-    if (!m.status && !m.option && !note.trim()) delete S.draft.marks[id]; else S.draft.marks[id] = m;
+    if (markEmpty(m)) delete S.draft.marks[id]; else S.draft.marks[id] = m;
     saveDraft(); updateSendbar(); updateNeedNote(id);
   }
   function updateNeedNote(id) {
@@ -1426,6 +1725,7 @@
   }
   function refreshBlock(id) {
     var el = document.getElementById('dz-' + id); if (!el) return;
+    if (el.getAttribute('data-kind') === 'question') { refreshQuestion(el, id); redrawPins(id); return; }
     var m = mark(id);
     el.querySelectorAll('.sbtn').forEach(function (x) { x.setAttribute('aria-pressed', String(x.dataset.s === m.status)); });
     el.querySelectorAll('.vbtn').forEach(function (x) { x.setAttribute('aria-pressed', String(x.dataset.o === m.option)); });
@@ -1521,7 +1821,7 @@
   function summaryChips() {
     var d = S.draft, r = viewed(), chips = [];
     if (isNew(r)) {
-      var decided = Object.keys(d.marks).filter(function (k) { return d.marks[k].status; }).length;
+      var decided = Object.keys(d.marks).filter(function (k) { return d.marks[k].status || d.marks[k].choice; }).length;
       chips.push(h('span', { class: 'sum-pick' + (decided ? '' : ' muted') }, decided ? icon('check') : null, decided ? decided + ' marked' : 'Nothing marked yet'));
       if (d.pins.length) chips.push(h('span', { class: 'sum-count', text: d.pins.length + ' pin' + (d.pins.length === 1 ? '' : 's') }));
       return chips;
@@ -1551,6 +1851,7 @@
       })));
   }
   function updateSendbar() {
+    updateGate();
     if (!sendbar) return;
     sendbar.textContent = '';
     setFootMsg(null, '');
@@ -1571,19 +1872,20 @@
     if (fb && !S.amending) {
       var sub = r.submission, ls = localSent(r.n);
       var title, subline, cls;
+      var built = fb.action === 'build', glabel = (r.gate && r.gate.label) || 'Start building';
       if (sub && sub.status === 'notified') {
         if (sub.stalled_notice_at) {
           title = 'Hermes may have stalled'; cls = 'warn';
           subline = 'Sent ' + fmtDate(sub.submitted_at) + (sub.amended ? ' (amended)' : '') + '. No new round yet — ask in the chat or resend from the board.';
         } else {
-          title = 'Sent ✓ — Hermes is on it'; cls = 'ok';
+          title = built ? glabel + ' pressed ✓' : 'Sent ✓ — Hermes is on it'; cls = 'ok';
           subline = 'Sent ' + fmtDate(sub.submitted_at) + (sub.amended ? ' (amended)' : '') + ' · Hermes was notified and is working on it.';
         }
       } else if (sub && sub.status === 'pending_notify') {
         title = 'Saved ✓ — still reaching Hermes'; cls = 'warn';
         subline = 'Your feedback is stored. Hermes hasn’t confirmed yet; the board server retries every minute.';
       } else if (ls) {
-        title = 'Sent ✓ — Hermes is on it'; cls = 'ok';
+        title = built ? glabel + ' pressed ✓' : 'Sent ✓ — Hermes is on it'; cls = 'ok';
         subline = st.submit.kind === 'sitedata'
           ? 'Saved ' + fmtDate(ls.at) + '. Hermes is working on it and will reply soon.'
           : 'Sent ' + fmtDate(ls.at) + '.';
@@ -1610,10 +1912,11 @@
     }
     if (missing.length && !S.error) setFootMsg('warn', 'Add a note to each Change before sending:', '', missing);
     var ready = hasContent(S.draft) && !S.sending && !missing.length;
+    var gated = isNew(r) && !!r.gate;   // a round with a gate: Send is the secondary "Send notes", the gate is primary
     inner.appendChild(h('button', {
-      class: 'btn btn-primary btn-send', disabled: ready ? null : true, onclick: send,
+      class: 'btn btn-send' + (gated ? '' : ' btn-primary'), disabled: ready ? null : true, onclick: function () { send(); },
       title: missing.length ? 'Every Change needs a note first' : hasContent(S.draft) ? 'Send this round’s feedback to Hermes' : (isNew(r) ? 'Mark a decision, pin a mock or write a note first' : 'Pick a variant, drop a pin or write a note first')
-    }, S.sending ? h('span', { class: 'spinner' }) : icon('send'), S.sending ? 'Sending…' : (S.amending ? 'Send amendment' : (isNew(r) ? 'Send' : 'Send to Hermes'))));
+    }, S.sending ? h('span', { class: 'spinner' }) : icon('send'), S.sending ? 'Sending…' : (S.amending ? 'Send amendment' : (gated ? 'Send notes' : isNew(r) ? 'Send' : 'Send to Hermes'))));
   }
 
   function toast(msg, kind) {
@@ -1642,9 +1945,12 @@
   function startAmend() { S.amending = true; S.error = null; loadDraft(); render(); }
   function cancelAmend() { S.amending = false; S.error = null; lsDel(key('amend')); loadDraft(); render(); }
 
-  function send() {
-    if (S.sending || !hasContent(S.draft)) return;
-    if (missingNotes().length) { updateSendbar(); return; }
+  function send(action) {
+    var build = action === 'build';
+    if (build) {   // the gate's own rule, the same one the server enforces
+      if (S.sending || !isEditable() || !gateState(viewed().decisions, S.draft.marks, viewed().gate).ready) { updateGate(); return; }
+    } else if (S.sending || !hasContent(S.draft)) return;
+    if (!build && missingNotes().length) { updateSendbar(); return; }
     if (S.draft.choice === 'none' && !S.draft.choice_note.trim() && !S.draft.guidelines.trim()) {
       S.error = { title: 'Say what to combine', text: 'You chose “None / combine” — add a line on what to take from which variant.' };
       updateSendbar();
@@ -1652,7 +1958,7 @@
       return;
     }
     S.error = null; S.sending = true; updateSendbar();
-    var r = viewed(), amend = S.amending, body = payload(S.draft);
+    var r = viewed(), amend = S.amending, body = payload(S.draft, build ? 'build' : (isNew(r) && r.gate ? 'send' : undefined));
     var p = R().submit.kind === 'sitedata' ? sendSiteData(r, body, amend) : sendLocal(r, body, amend);
     p.then(function (res) {
       S.sending = false;
@@ -1661,7 +1967,7 @@
       S.amending = false;
       if (res && res.state) S.review = res.state;
       loadDraft(); render();
-      toast(res && res.notified === false ? 'Saved — Hermes will be pinged as soon as it answers.' : 'Sent ✓ — Hermes is on it', res && res.notified === false ? 'warn' : 'ok');
+      toast(res && res.notified === false ? 'Saved — Hermes will be pinged as soon as it answers.' : build ? ((r.gate && r.gate.label) || 'Start building') + ' pressed ✓' : 'Sent ✓ — Hermes is on it', res && res.notified === false ? 'warn' : 'ok');
       maybePollForNotify();
       maybeWatchForRound();
     }).catch(function (e) {
