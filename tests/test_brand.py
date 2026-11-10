@@ -701,3 +701,15 @@ def test_plugin_tool_passes_the_brand_arguments_through(env, tmp_path):
     assert out["design_auto"] == "acme"
     out = json.loads(run({"title": "Plugin", "decisions": dec(tmp_path), "wake": False, "mode": "local"}))
     assert "saved profiles exist" in out["error"]
+
+
+def test_refusal_lists_saved_names_not_display_names(env, tmp_path):
+    src = make_profile(tmp_path, "src")
+    raw = json.loads((src / "design.json").read_text(encoding="utf-8"))
+    (src / "design.json").write_text(json.dumps({**raw, "name": "Acme"}), encoding="utf-8")   # the display name
+    store.save_design("acme", src)
+    store.save_design("acme2", src)
+    with pytest.raises(ReviewError) as e:
+        create(tmp_path, project=str(project(tmp_path)))
+    msg = e.value.message
+    assert "(acme, acme2)" in msg and "Acme" not in msg

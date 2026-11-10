@@ -78,7 +78,7 @@ def _brand_round(spec: Dict[str, Any], project: Optional[str], no_design: bool, 
             spec = dict(spec, design=d)
             extra["design_auto"] = name
         elif not (no_design or (review or {}).get("no_design")):
-            names = [x["name"] for x in store.list_designs()]
+            names = store.saved_design_names()
             if names:
                 raise ReviewError(brand.refusal(project, names))
     if no_design:

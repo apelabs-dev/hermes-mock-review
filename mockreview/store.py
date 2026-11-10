@@ -418,6 +418,14 @@ def design_dir(name_or_path: str) -> Path:
     return d
 
 
+def saved_design_names() -> List[str]:
+    """The names a profile is saved under (its directory names, the ones `design=` takes), sorted."""
+    root = designs_root()
+    if not root.is_dir():
+        return []
+    return sorted(d.name for d in root.iterdir() if d.is_dir() and DESIGN_RE.match(d.name))
+
+
 def list_designs() -> List[Dict[str, Any]]:
     root = designs_root()
     out = []
