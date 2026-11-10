@@ -21,9 +21,9 @@ auto-applies to every create and add-round in that project (or its git repositor
 off-profile colours or fonts is refused before anything is written, and the message names the exact location and value.
 `--off-brand "<reason>"` is the only bypass; the reason is recorded on the round and the review.
 
-To see a plan board without an agent, create the demo from a checkout (with a board running, see above):
+To see a plan board without an agent, create the demo from a checkout with a board running (see Quickstart):
 
-    hermes mockreview create --title "Offline sync plan" --platform local --chat-id demo --project "$PWD" --decisions examples/plan-demo/decisions.json --no-design --no-wake
+    hermes mockreview create --title "Offline sync plan" --platform local --chat-id demo --project "$PWD" --decisions "$PWD/examples/plan-demo/decisions.json" --no-design --no-wake
 
 `examples/plan-demo/decisions.json` uses every 1.2 block; the printed link opens round 1.
 
