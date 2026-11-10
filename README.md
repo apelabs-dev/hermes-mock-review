@@ -5,6 +5,8 @@ serves it as a review board, and you open the link, mark each decision Approve, 
 the mocks and press Send. Send wakes the agent in the chat the review came from, with your marks attached. Boards render
 inline mocks at desktop, tablet and phone widths, in light and dark, and wear a per-project design profile.
 
+<img src="docs/img/showcase.jpg" alt="mock-review: a Discord thread next to a review board showing a Cash Flow decision" width="100%">
+
 ## Plan boards and Build
 
 A `plan` preset round uses the same fixed skeleton as a design board: a status line, "Already decided", a defaults card,
@@ -30,10 +32,6 @@ To see a plan board without an agent, create the demo from a checkout with a boa
     hermes mockreview create --title "Offline sync plan" --platform local --chat-id demo --project "$PWD" --decisions "$PWD/examples/plan-demo/decisions.json" --no-design --no-wake
 
 `examples/plan-demo/decisions.json` uses every 1.2 block; the printed link opens round 1.
-
-<img src="docs/img/plan-board.png" alt="The plan demo board: status and milestones, your notes answered, already decided, two question cards (one with a typed answer), the gate cleared and Build in the footer" width="100%">
-
-<img src="docs/img/showcase.jpg" alt="mock-review: a Discord thread next to a review board showing a Cash Flow decision" width="100%">
 
 ## Install
 
