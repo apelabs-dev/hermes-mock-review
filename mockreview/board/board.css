@@ -413,6 +413,7 @@ figure.opt.picked .mock { outline: 2px solid var(--accent); }
 .need-note { flex-basis: 100%; margin: 0; font-size: 13px; font-weight: 600; color: var(--warn); }
 .need-note[hidden] { display: none; }
 body.no-pins .mock-inner { cursor: default; }
+body.mock-use .mock-inner { cursor: auto; }
 .ipins { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 6px; }
 .ipins:empty { display: none; }
 .pin-row { display: flex; gap: 10px; align-items: flex-start; width: 100%; text-align: left; border: 1px solid var(--line); background: var(--surface); border-radius: 10px; padding: 8px 10px; color: var(--text); }
@@ -560,18 +561,9 @@ figure.ctx-fig { margin-top: 16px; }
 @keyframes blkflash { 0%, 60% { box-shadow: 0 0 0 3px var(--accent-soft); background: var(--accent-soft); } 100% { box-shadow: 0 0 0 3px transparent; background: transparent; } }
 
 .gate { border-bottom: 0; }
-.gate-card { padding: 18px 20px; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--surface); box-shadow: var(--shadow-sm); }
-.gate-card h2 { margin: 0 0 6px; }
-.gate-actions { display: flex; align-items: center; gap: 8px; margin-top: 14px; color: var(--warn); }
-.gate-actions svg.ico { flex: none; }
-.gate-actions:has(.ready) { color: var(--ok); }
 .btn-gate[aria-disabled=true] { opacity: .45; cursor: not-allowed; }
 .btn-gate[aria-disabled=true]:hover { background: var(--accent); border-color: var(--accent); }
-.gate-reason { min-width: 0; font-size: 13.5px; font-weight: 600; color: var(--warn); overflow-wrap: anywhere; }
-.gate-reason.ready { color: var(--ok); }
-.gate-done { display: flex; align-items: center; gap: 8px; margin: 14px 0 0; font-weight: 700; color: var(--ok); }
-.gate-done .ico { width: 18px; height: 18px; }
-.gate-lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 18px; margin-top: 22px; }
+.gate-lists { margin-top: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 18px; margin-top: 22px; }
 .gate-list h3 { margin: 0 0 8px; font-size: 15px; }
 .gate-list ul { margin: 0; padding-left: 20px; display: grid; gap: 4px; color: var(--text); font-size: 14.5px; line-height: 1.5; }
 .gate-list .later { color: var(--muted); }
@@ -584,5 +576,4 @@ figure.ctx-fig { margin-top: 16px; }
   .qdecide .grp { flex-wrap: wrap; }
   .qdecide .qbtn { flex: 1 1 auto; }
   .qresult { flex-basis: 100%; }
-  .gate-card { padding: 16px; }
 }

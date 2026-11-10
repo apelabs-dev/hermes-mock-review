@@ -1,6 +1,6 @@
 {
   "preset": "plan",
-  "intro": "The offline-sync plan for the Notebook app. Approve, change or skip each piece, pick the settings layout, and answer the open questions. Start building opens once nothing is left on Change and every question is answered.",
+  "intro": "The offline-sync plan for the Notebook app. Approve, change or skip each piece, pick the settings layout, and answer the open questions. Build opens once nothing is left on Change and every question is answered.",
   "status": {
     "label": "Round 1 · awaiting your approval · nothing has been built",
     "milestones": [
@@ -101,7 +101,7 @@
   ],
   "next": "The sync engine comes first; the settings screen follows in week 3.",
   "gate": {
-    "label": "Start building",
+    "label": "Build",
     "text": "Approves the whole plan as it stands. The agent starts with the sync engine and reports back after each milestone.",
     "after": ["Pair two test devices so conflict handling can be checked", "Confirm the attachment size limit before week 2"],
     "later": ["Accounts and sign-in", "Sharing a notebook with someone else", "End-to-end encryption of the change log"]

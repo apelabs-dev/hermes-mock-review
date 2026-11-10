@@ -32,6 +32,7 @@
     view: 1,
     device: pref('device', window.innerWidth < 700 ? 'both' : 'both'),
     tool: 'comment',
+    mockTool: 'comment',     // a decisions round: Tap (taps reach the mock's own controls) or Pin (tap a mock to comment)
     protoTool: 'interact',   // "Try it live" opens usable: Pin is opt-in and drops back to Use it after each pin
     draft: null,
     amending: false,
@@ -439,6 +440,7 @@
     var r = viewed();
     applyDesign(r);
     document.body.classList.toggle('dz-mode', isNew(r));
+    document.body.classList.toggle('mock-use', isNew(r) && S.mockTool !== 'comment');
     if (isNew(r)) { renderNew(r); return; }
     append(app, [renderHeader(), renderToolbar(), renderStatusBanner(), renderVariants(r), renderDecision(r), renderSendbar()]);
     requestAnimationFrame(layoutAll);
@@ -929,7 +931,7 @@
 
   // ---- per-review settings (state.json → settings) ----
   var CFG_DEFAULT = { devices: ['desktop', 'mobile'], default_device: 'auto', default_theme: 'project', show_theme_toggle: true,
-    mobile_width: 390, tablet_width: 820, pins_enabled: true, require_note_on_change: false, max_pins: 40 };
+    mobile_width: 390, tablet_width: 820, pins_enabled: true, require_note_on_change: false, max_pins: 40, footer_button: 'build', interactive_elements: false };   // defaults for reviews stored before a setting existed
   var CFG = Object.assign({}, CFG_DEFAULT);
   var WKEY = { desktop: 'desktop', tablet: 'tablet', mobile: 'phone' };   // setting name → width key (pins keep 'phone')
   var WLABEL = { desktop: 'Desktop', tablet: 'Tablet', phone: 'Mobile' };
@@ -941,6 +943,8 @@
     CFG.devices = ok.length ? ok : CFG_DEFAULT.devices.slice();
     LIMIT.pins = Math.max(1, +CFG.max_pins || CFG_DEFAULT.max_pins);
     document.body.classList.toggle('no-pins', !CFG.pins_enabled);
+    // interactive_elements: mocks carry working controls, so a board opens on Tap; Pin is one press away in the header
+    if (!S.mockToolSet) { S.mockToolSet = true; S.mockTool = CFG.interactive_elements ? 'interact' : 'comment'; }
   }
   function widths() { return CFG.devices.map(function (d) { return WKEY[d]; }); }
   function viewerWidth() {
@@ -960,6 +964,8 @@
     return S.width === 'phone' ? CFG.mobile_width : S.width === 'tablet' ? Math.min(CFG.tablet_width, dw) : dw;
   }
   function pinsOn() { return !!CFG.pins_enabled; }
+  // footer_button: the one button a round with a gate gets in the footer: send or build.
+  function footerButton() { return CFG.footer_button === 'send' ? 'send' : 'build'; }
   function missingNotes() {   // require_note_on_change: decisions marked Change with no note yet
     var r = viewed();
     if (!CFG.require_note_on_change || !isNew(r) || !S.draft || !S.draft.marks || !isEditable()) return [];
@@ -1019,9 +1025,11 @@
     });
   }
   // .cq turns pointer events off for the whole mock (taps become pins); links are switched back on.
+  // :host(.use) is Tap: the mock's own controls take the taps and its fields take text.
   var MOCK_BASE = ':host{display:block}.cq{container:mock/inline-size;pointer-events:none}' +
     '.cq,.cq *{-webkit-user-select:none;user-select:none}' +
-    '.cq a[href]{pointer-events:auto;cursor:pointer}';
+    '.cq a[href]{pointer-events:auto;cursor:pointer}' +
+    ':host(.use) .cq{pointer-events:auto}:host(.use) input,:host(.use) textarea{-webkit-user-select:text;user-select:text}';
   function loadAssets(r) {
     if (ASSETS[r.n]) return ASSETS[r.n];
     var base = roundBase(r), d = r.design, out = { dec: null, css: '' }, jobs = [];
@@ -1119,7 +1127,7 @@
     var bar = h('header', { class: 'dzbar', id: 'dzbar' },
       projectIcon(r),
       h('div', { class: 'pb-title' }, h('strong', { text: st.title }), h('span', { class: 'pb-sub', text: (d ? d.label + ' · ' : '') + 'Round ' + r.n + (r.kind === 'prototype' ? ' · prototype' : '') })),
-      h('span', { class: 'spacer' }), protoToolSeg(r), widthSeg, themeControl(r), chip);
+      h('span', { class: 'spacer' }), protoToolSeg(r), mockToolSeg(r), widthSeg, themeControl(r), chip);
     if (window.ResizeObserver) new ResizeObserver(function () { document.documentElement.style.setProperty('--barh', bar.offsetHeight + 'px'); }).observe(bar);
     return bar;
   }
@@ -1191,7 +1199,7 @@
       h('h1', { text: st.title }),
       paras(dec.intro || st.brief),
       v12 ? renderStatusLine(dec) : null,
-      isEditable() && pinsOn() ? h('p', { class: 'hint-line' }, icon('pin'), 'Tap any mock to pin a comment on that spot.') : null));
+      isEditable() && pinsOn() ? h('p', { class: 'hint-line' }, icon(S.mockTool === 'comment' ? 'pin' : 'hand'), S.mockTool === 'comment' ? 'Tap any mock to pin a comment on that spot. Switch to Tap in the header to use the mock itself.' : 'Taps go to the mock: try its controls. Switch to Pin in the header to comment on a spot.') : null));
     var body = dec.blocks.filter(function (b) { return b.type !== 'settled' && b.type !== 'defaults'; });
     var grouped = plan ? groupBlocks(dec.blocks) : null;
     append(doc, renderDocNav(r, grouped));
@@ -1204,7 +1212,7 @@
     } else body.forEach(function (b) { append(doc, renderBlock(r, a, b)); });
     append(doc, renderElse());
     append(doc, h('div', { class: 'doc-end', id: 'dz-end' }));
-    if (dec.gate) append(doc, renderGate(r, dec));
+    if (dec.gate && footerButton() === 'build') append(doc, renderGate(r, dec));
     requestAnimationFrame(updateTally);
     DOC = { r: r, dec: dec };
     return doc;
@@ -1263,49 +1271,28 @@
     return sec;
   }
 
-  // ---- the gate: the locked final approval ("Start building") ----
-  function pressedAt(r) {
-    var ls = r.n === R().current_round ? localSent(r.n) : null;
-    return fmtDate((r.submission && r.submission.submitted_at) || (ls && ls.at));
-  }
-  function renderGate(r, dec) {
-    var g = dec.gate, label = g.label || 'Start building';
-    var fb = submittedFeedback(r), pressed = !!(fb && fb.action === 'build') && !S.amending;
-    var card = h('div', { class: 'gate-card' }, h('h2', { text: label }), g.text ? paras(g.text, 'itext') : null);
-    if (pressed) {
-      append(card, h('p', { class: 'gate-done', role: 'status' }, icon('check'), label + ' pressed' + (pressedAt(r) ? ' · ' + pressedAt(r) : '')));
-    } else {
-      // the Build button itself lives in the footer, in the Send slot; the card keeps the live reason
-      append(card, h('div', { class: 'gate-actions' }, icon('lock'), h('span', { class: 'gate-reason', id: 'gate-reason' })));
-    }
-    var after = g.after || [], later = g.later || [];
-    var lists = after.length || later.length ? h('div', { class: 'gate-lists' },
+  // ---- the gate: the locked final approval ("Build") ----
+  function renderGate(r, dec) {   // no card: Build lives in the footer with the reason in its tooltip; these are the approval's two lists
+    var g = dec.gate, after = g.after || [], later = g.later || [];
+    if (!after.length && !later.length) return null;
+    return h('section', { class: 'blk gate', id: 'dz-gate' }, h('div', { class: 'gate-lists' },
       after.length ? h('div', { class: 'gate-list' }, h('h3', { text: 'What I need from you after approval' }), h('ul', null, after.map(function (x) { return h('li', { text: x }); }))) : null,
-      later.length ? h('div', { class: 'gate-list' }, h('h3', { text: 'Later, not in this plan' }), h('ul', null, later.map(function (x) { return h('li', { class: 'later', text: x }); }))) : null) : null;
-    var sec = h('section', { class: 'blk gate' + (pressed ? ' is-pressed' : ''), id: 'dz-gate' }, card, lists);
-    setTimeout(updateGate, 0);
-    return sec;
+      later.length ? h('div', { class: 'gate-list' }, h('h3', { text: 'Later, not in this plan' }), h('ul', null, later.map(function (x) { return h('li', { class: 'later', text: x }); }))) : null));
   }
-  var GATE_BTN = 'Build';   // short, so it fits the footer's Send slot on a phone
+  var GATE_BTN = 'Build';   // short, so Send and Build both fit the footer on a phone
   function gateReason(gs, ed) {
     return !ed ? 'This round is locked.' : S.sending ? 'Sending…' : gs.ready ? 'Nothing is open or on Change.' : gs.reason;
   }
+  function gateTitle(g, gs, ed) {   // the Build button's tooltip: why it is locked, or what pressing it does
+    return gs.ready && ed && !S.sending ? GATE_BTN + ': ' + (g.text || 'send the approved plan to Hermes') : gateReason(gs, ed);
+  }
   function updateGate() {
     var r = viewed(), g = r.gate || (DOC && DOC.dec.gate); if (!g) return;
+    var btn = document.getElementById('gate-btn'); if (!btn) return;
     var gs = gateState(r.decisions, S.draft.marks, g), ed = isEditable();
     var ok = gs.ready && ed && !S.sending;
-    var reason = gateReason(gs, ed);
-    var rs = document.getElementById('gate-reason');
-    if (rs) {
-      rs.textContent = gs.ready && ed && !S.sending ? reason + ' Press ' + GATE_BTN + ' below.' : reason;
-      rs.classList.toggle('ready', ok);
-      var gi = rs.parentNode ? Array.prototype.filter.call(rs.parentNode.children, function (c) { return /^svg$/i.test(c.tagName); })[0] : null;
-      var want0 = ok ? 'check' : 'lock';
-      if (gi && gi.getAttribute('data-icon') !== want0) gi.replaceWith(icon(want0));
-    }
-    var btn = document.getElementById('gate-btn'); if (!btn) return;
     btn.setAttribute('aria-disabled', ok ? 'false' : 'true');
-    btn.title = ok ? (g.label || 'Start building') + ': send the approved plan to Hermes' : reason;
+    btn.title = gateTitle(g, gs, ed);
     btn.classList.toggle('is-disabled', !ok);
     var want = gateIcon(gs.ready, ed), cur = btn.querySelector('svg.ico');
     if (cur && cur.getAttribute('data-icon') !== want) { btn.replaceChild(icon(want), cur); }
@@ -1602,7 +1589,7 @@
     var w = mockWidth(b);
     var outer = h('div', { class: 'mock' });
     var inner = h('div', { class: 'mock-inner', style: { width: w + 'px' } });
-    var hostEl = h('div', { class: 'mock-host' });
+    var hostEl = h('div', { class: 'mock-host' + (isNew(viewed()) && (S.mockTool !== 'comment' || !pinsOn()) ? ' use' : '') });
     var pins = h('div', { class: 'pin-layer' });
     inner.appendChild(hostEl); inner.appendChild(pins); outer.appendChild(inner);
     var sr = hostEl.attachShadow({ mode: 'open' });
@@ -1670,7 +1657,7 @@
     tapMock(m, e);
   }
   function tapMock(m, e) {
-    if (!isEditable() || !pinsOn()) return;
+    if (!isEditable() || !pinsOn() || S.mockTool !== 'comment') return;
     var rc = m.inner.getBoundingClientRect();
     var x = num((e.clientX - rc.left) / rc.width, 0, 1), y = num((e.clientY - rc.top) / rc.height, 0, 1);
     if (S.draft.pins.length >= LIMIT.pins) { toast('That’s ' + LIMIT.pins + ' pins — use the notes for the rest.', 'warn'); return; }
@@ -1798,6 +1785,16 @@
     document.body.classList.toggle('proto-pin', S.protoTool === 'comment');
     return wrap;
   }
+  // "Tap | Pin" in the header of a decisions round: Tap sends taps to the mock's own controls, Pin drops a comment.
+  function mockToolSeg(r) {
+    if (r.kind === 'prototype' || !isNew(r) || !isEditable() || !pinsOn()) return null;
+    var t = seg([{ value: 'interact', label: 'Tap', icon: 'hand', title: 'Use the mock: taps reach its own controls' },
+      { value: 'comment', label: 'Pin', icon: 'pin', title: 'Tap a mock to pin a comment' }], S.mockTool,
+      function (v) { if (v !== S.mockTool) { S.mockTool = v; closePopover(); keepPlace(render); } }, 'Tool');
+    t.classList.add('tseg');
+    t.id = 'mock-tool';
+    return t;
+  }
   // "Use it | Pin" lives in the header on a prototype round, so it is never hidden under the page.
   function protoToolSeg(r) {
     if (r.kind !== 'prototype' || !isEditable() || !pinsOn()) return null;
@@ -1907,7 +1904,7 @@
     if (fb && !S.amending) {
       var sub = r.submission, ls = localSent(r.n);
       var title, subline, cls;
-      var built = fb.action === 'build', glabel = (r.gate && r.gate.label) || 'Start building';
+      var built = fb.action === 'build', glabel = (r.gate && r.gate.label) || 'Build';
       if (sub && sub.status === 'notified') {
         if (sub.stalled_notice_at) {
           title = 'Hermes may have stalled'; cls = 'warn';
@@ -1947,18 +1944,23 @@
     }
     if (missing.length && !S.error) setFootMsg('warn', 'Add a note to each Change before sending:', '', missing);
     var ready = hasContent(S.draft) && !S.sending && !missing.length;
-    var gated = isNew(r) && !!r.gate && !S.amending;   // a gate round: one slot, Send notes until the gate is ready, then Build
+    // A gate round has ONE footer button, picked by footer_button: Send, or Build. Build stays in the slot, locked with
+    // the reason in its tooltip, while blocks are still open; a block on Change means this round cannot be built, so the
+    // slot turns into Send for those notes.
+    var gated = isNew(r) && !!r.gate && !S.amending && isEditable() && footerButton() === 'build';
     var gs = gated ? gateState(r.decisions, S.draft.marks, r.gate) : null;
-    if (gated && gs.ready && isEditable()) {
-      inner.appendChild(h('button', { class: 'btn btn-primary btn-send btn-gate', id: 'gate-btn',
-        onclick: function () { send('build'); }, title: (r.gate.label || 'Start building') + ': send the approved plan to Hermes' },
-        S.sending ? h('span', { class: 'spinner' }) : icon('send'), h('span', { class: 'gate-label', text: S.sending ? 'Sending…' : GATE_BTN })));
+    if (gated && !gs.changed.length) {
+      var ok = gs.ready && !S.sending;
+      inner.appendChild(h('button', { class: 'btn btn-primary btn-send btn-gate' + (ok ? '' : ' is-disabled'), id: 'gate-btn',
+        'aria-disabled': ok ? 'false' : 'true', title: gateTitle(r.gate, gs, true),
+        onclick: function () { if (this.getAttribute('aria-disabled') !== 'true') send('build'); else toast(this.getAttribute('title'), 'warn'); } },   // no hover on a phone: a tap says why
+        icon(gateIcon(gs.ready, true)), h('span', { class: 'gate-label', text: S.sending ? 'Sending…' : GATE_BTN })));
       return;
     }
     inner.appendChild(h('button', {
       class: 'btn btn-send btn-primary', disabled: ready ? null : true, onclick: function () { send(); },
-      title: missing.length ? 'Every Change needs a note first' : gated && !hasContent(S.draft) ? 'Mark a block, answer a question or write a note first. ' + GATE_BTN + ' takes this spot once nothing is open or on Change' : hasContent(S.draft) ? 'Send this round’s feedback to Hermes' : (isNew(r) ? 'Mark a decision, pin a mock or write a note first' : 'Pick a variant, drop a pin or write a note first')
-    }, S.sending ? h('span', { class: 'spinner' }) : icon('send'), S.sending ? 'Sending…' : (S.amending ? 'Send amendment' : (gated ? 'Send notes' : isNew(r) ? 'Send' : 'Send to Hermes'))));
+      title: missing.length ? 'Every Change needs a note first' : hasContent(S.draft) ? 'Send this round’s feedback to Hermes' : (isNew(r) ? 'Mark a decision, pin a mock or write a note first' : 'Pick a variant, drop a pin or write a note first')
+    }, S.sending ? h('span', { class: 'spinner' }) : icon('send'), S.sending ? 'Sending…' : (S.amending ? 'Send amendment' : isNew(r) ? 'Send' : 'Send to Hermes')));
   }
 
   function toast(msg, kind) {
@@ -2009,7 +2011,7 @@
       S.amending = false;
       if (res && res.state) S.review = res.state;
       loadDraft(); render();
-      toast(res && res.notified === false ? 'Saved — Hermes will be pinged as soon as it answers.' : build ? ((r.gate && r.gate.label) || 'Start building') + ' pressed ✓' : 'Sent ✓ — Hermes is on it', res && res.notified === false ? 'warn' : 'ok');
+      toast(res && res.notified === false ? 'Saved — Hermes will be pinged as soon as it answers.' : build ? ((r.gate && r.gate.label) || 'Build') + ' pressed ✓' : 'Sent ✓ — Hermes is on it', res && res.notified === false ? 'warn' : 'ok');
       maybePollForNotify();
       maybeWatchForRound();
     }).catch(function (e) {
@@ -2078,7 +2080,7 @@
   }
 
   // Slow watch: while the current round is sent and no newer round exists, look at state.json every 30 s (for up to
-  // 2 h, 8 h after Start building, and not once the review closes) so the stalled hint and the next round show up
+  // 2 h, 8 h after Build, and not once the review closes) so the stalled hint and the next round show up
   // without a reload.
   var WATCH_EVERY = 30000, WATCH_FOR = 2 * 3600 * 1000, WATCH_FOR_BUILD = 8 * 3600 * 1000;
   function watchWindowMs(r) {   // a build may take stale_after_* x build_stale_factor (60 / 240 min by default)

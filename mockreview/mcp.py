@@ -127,7 +127,9 @@ def tools() -> List[Dict[str, Any]]:
             "description": "Create a mock review board (round 1) for the user to mark up. Returns review_id + url. "
                            "Pass project (absolute repo path) so the project's bound design profile applies; with "
                            "saved profiles, a create with no design, no binding and no no_design fails. Mocks must "
-                           "use the profile's colours and fonts (var(--accent) ...), or the call fails.",
+                           "use the profile's colours and fonts (var(--accent) ...), or the call fails. interactive_elements is "
+                           "on by default: build every control a mock shows so it works without script (select, "
+                           "details, checkbox or radio inputs styled with :checked, text inputs).",
             "inputSchema": {"type": "object", "properties": {
                 "title": {"type": "string"},
                 "brief": {"type": "string"},
@@ -147,7 +149,7 @@ def tools() -> List[Dict[str, Any]]:
             "name": "mock_review_add_round",
             "description": "Add the next round to an open mock review (same link). Keeps the review's design profile; "
                            "pass project (absolute repo path) so a bound profile applies. Mocks must use the "
-                           "profile's colours and fonts, or the call fails. After Start building, post the "
+                           "profile's colours and fonts, or the call fails. After Build, post the "
                            "build result here.",
             "inputSchema": {"type": "object", "properties": {
                 "review_id": {"type": "string"},
@@ -167,7 +169,7 @@ def tools() -> List[Dict[str, Any]]:
         {
             "name": "mock_review_ack",
             "description": "Mark a round's feedback as handled (answered here, or no round coming): no stalled ping. "
-                           "Not instead of building after Start building.",
+                           "Not instead of building after Build.",
             "inputSchema": {"type": "object", "properties": {
                 "review_id": {"type": "string"},
                 "round": {"type": "integer", "description": "Default: current."},

@@ -244,7 +244,10 @@ def _round_args(c) -> None:
     _bool_flag(g, "require-note", "require_note_on_change", "Send needs a note on every Change",
                "Change marks need no note")
     g.add_argument("--max-pins", type=int, metavar="N")
-
+    g.add_argument("--footer-button", choices=("send", "build"),
+                   help="the footer button on a round with a gate: Build (default) or Send")
+    _bool_flag(g, "interactive", "interactive_elements", "mocks carry working controls; the board opens on Tap",
+               "static mocks; the board opens on Pin")
 
 def add_commands(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest=DEST, required=True)

@@ -75,7 +75,7 @@ def test_the_plan_example_validates_and_uses_every_feature():
     assert out["notes_answered"] and {n["status"] for n in out["notes_answered"]} == set(store.NOTE_STATUSES)
     assert any(b.get("revised") and b.get("asked") and b.get("answer") for b in out["blocks"])
     assert out["status"]["label"] and out["status"]["milestones"]
-    assert out["gate"]["after"] and out["gate"]["later"] and out["gate"]["label"] == "Start building"
+    assert out["gate"]["after"] and out["gate"]["later"] and out["gate"]["label"] == "Build"
 
 
 def test_the_example_holds_only_generic_content():
@@ -87,7 +87,7 @@ def test_the_example_holds_only_generic_content():
 def test_the_round_record_and_public_state_carry_preset_gate_and_the_new_index(env, tmp_path):
     data = _review(tmp_path)
     r = data["rounds"][0]
-    assert r["preset"] == "plan" and r["gate"]["label"] == "Start building"
+    assert r["preset"] == "plan" and r["gate"]["label"] == "Build"
     assert [d["id"] for d in r["decisions"]] == MARKABLE              # settled is context, never marked
     for d in r["decisions"]:
         assert {"id", "title", "tag", "nav", "layout", "options"} <= set(d)   # today's board keeps working
@@ -113,10 +113,10 @@ def test_an_old_file_still_validates_as_a_design_board_without_a_gate():
 def test_the_gate_defaults_on_a_plan_board_and_is_opt_in_on_a_design_board():
     blocks = [{"type": "piece", "id": "p1", "title": "One"}]
     assert store.validate_decisions({"preset": "plan", "blocks": blocks})["gate"] == {
-        "label": "Start building", "text": "", "after": [], "later": []}
-    assert store.validate_decisions({"preset": "plan", "gate": None, "blocks": blocks})["gate"]["label"] == "Start building"
+        "label": "Build", "text": "", "after": [], "later": []}
+    assert store.validate_decisions({"preset": "plan", "gate": None, "blocks": blocks})["gate"]["label"] == "Build"
     assert store.validate_decisions({"blocks": blocks})["gate"] is None
-    assert store.validate_decisions({"blocks": blocks, "gate": {}})["gate"]["label"] == "Start building"
+    assert store.validate_decisions({"blocks": blocks, "gate": {}})["gate"]["label"] == "Build"
     assert store.validate_decisions({"blocks": blocks, "gate": {"label": "Ship it"}})["gate"]["label"] == "Ship it"
 
 
@@ -325,7 +325,7 @@ def test_build_with_an_open_question_is_refused_and_names_it(env, tmp_path):
     r = _review(tmp_path)["rounds"][0]
     with pytest.raises(ReviewError) as e:
         feedback.sanitize_for_round({"marks": _all_resolved(q2={"note": "not sure yet"}), "action": "build"}, r)
-    assert "Start building opens once" in e.value.message and "still open: q2" in e.value.message
+    assert "Build opens once" in e.value.message and "still open: q2" in e.value.message
     assert "on Change:" not in e.value.message
 
 
@@ -380,7 +380,7 @@ def test_build_goes_through_service_submit_and_reaches_feedback_md(env, tmp_path
     r = store.load(data["id"])["rounds"][0]
     assert r["feedback"]["action"] == "build"
     md = (config.data_root() / data["id"] / "rounds/1/feedback.md").read_text(encoding="utf-8")
-    assert "**Start building pressed**" in md
+    assert "**Build pressed**" in md
     assert feedback.decision_counts(r["feedback"], r["decisions"])["open"] == 0   # answered questions are resolved
     assert not service.nothing_to_build(r)                # a build expects round 2: the result
     assert service.notice_text(store.load(data["id"]), r) == (
@@ -432,7 +432,7 @@ def test_markdown_renders_questions_pieces_defaults_and_the_build_headline(env, 
     data, r = _submitted(tmp_path, {"marks": marks, "action": "build"})
     md = feedback.render_markdown(data, r)
     head = md.split("## Decisions")[0]
-    assert "**Start building pressed** — the reviewer pressed “Start building”" in head
+    assert "**Build pressed** — the reviewer pressed “Build”" in head
     assert "## Decisions — 4 approved · 0 to change · 1 skipped · 2 answered · 0 open" in md
     assert "- **[defaults] Approve** — How I read the rest" in md
     assert "- **[q1] Answered · recommendation** — How long should deleted notes stay recoverable?" in md
@@ -452,7 +452,7 @@ def test_markdown_for_a_plain_send_with_an_open_question(env, tmp_path):
     data, r = _submitted(tmp_path, {"marks": {"p1": {"status": "change", "note": "smaller"}},
                                     "pins": [{"block": "p2", "x": 0.5, "y": 0.5, "text": "badge too loud"}]})
     md = feedback.render_markdown(data, r)
-    assert "Start building pressed" not in md
+    assert "Build pressed" not in md
     assert "0 approved · 1 to change · 0 skipped · 0 answered · 6 open" in md
     assert "- **[q1] Open** — How long should deleted notes stay recoverable?\n  _Not answered. Recommendation: 30 days" in md
     assert "1. [p2, desktop] ~(50%,50%) of the mock — _Conflict handling_: badge too loud" in md
@@ -463,7 +463,7 @@ def test_short_summary_has_the_build_headline_and_quotes_custom_answers(env, tmp
     data, r = _submitted(tmp_path, {"marks": marks, "action": "build"})
     s = feedback.short_summary(data, r)
     lines = s.splitlines()
-    assert lines[0] == "- **Start building pressed**"
+    assert lines[0] == "- **Build pressed**"
     assert lines[1] == "- **Marks:** 4 approved · 0 to change · 1 skipped · 2 answered · 0 open"
     assert "- [q1] Recommendation — fine by me" in lines
     assert "- [q2] Different answer: “Only below 5 percent” (typed by the reviewer)" in lines
@@ -481,4 +481,37 @@ def test_a_decisions_only_round_renders_as_before(env, tmp_path):
     r = data["rounds"][0]
     md = feedback.render_markdown(data, r)
     assert "## Decisions — 1 approved · 0 to change · 0 skipped · 0 open" in md and "answered" not in md
-    assert "Start building" not in md and r["feedback"]["action"] == "send"
+    assert "Build" not in md and r["feedback"]["action"] == "send"
+
+
+# ---------------------------------------------------------------- footer_button + interactive_elements
+
+def _mock_file(tmp_path, html, name):
+    f = tmp_path / name
+    f.write_text(json.dumps({"blocks": [{"type": "mock", "id": "m1", "html": html}]}), encoding="utf-8")
+    return str(f)
+
+
+def test_footer_button_and_interactive_elements_are_stored_per_review(env, tmp_path):
+    from mockreview import api, settings
+    origin = {"platform": "discord", "chat_id": "test-chat"}
+    res = api.create("Defaults", origin, mode="local", wake=False, decisions=_mock_file(tmp_path, "<select><option>a</option></select>", "a.json"))
+    assert res["settings"]["footer_button"] == "build" and res["settings"]["interactive_elements"] is True
+    assert "hint" not in res   # the mock has a working control
+    res = api.create("Notes only", origin, mode="local", wake=False, decisions=_mock_file(tmp_path, "<div>x</div>", "b.json"),
+                     footer_button="send", interactive_elements=False)
+    assert res["settings"]["footer_button"] == "send" and res["settings"]["interactive_elements"] is False
+    assert "hint" not in res   # static mocks were asked for
+    with pytest.raises(settings.SettingsError):
+        settings.coerce(settings.BY_NAME["footer_button"], "both")   # one or the other, never both
+
+
+def test_static_mocks_get_a_hint_while_interactive_elements_is_on(env, tmp_path):
+    from mockreview import api
+    origin = {"platform": "discord", "chat_id": "test-chat"}
+    res = api.create("Static", origin, mode="local", wake=False, decisions=_mock_file(tmp_path, "<div>a picture</div>", "a.json"))
+    assert res["hint"] == api.INTERACTIVE_HINT
+    more = api.add_round(res["review_id"], decisions=_mock_file(tmp_path, "<div>still a picture</div>", "b.json"))
+    assert more["hint"] == api.INTERACTIVE_HINT
+    ok = api.add_round(res["review_id"], decisions=_mock_file(tmp_path, '<details><summary>Snooze</summary>3 days</details>', "c.json"))
+    assert "hint" not in ok

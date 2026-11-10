@@ -10,6 +10,7 @@ import calendar
 import functools
 import json
 import logging
+import re
 import shutil
 import time
 import urllib.request
@@ -182,7 +183,24 @@ def create(title: str, origin: Optional[Dict[str, str]] = None, brief: str = "",
                                "other devices on your network.")
         res.update(herenow.password_result(data))
         res["url"] = store.review_url(data)
+        res.update(_interactive_hint(spec, stored))
     return res
+
+
+_CONTROL = re.compile(r"<(select|details|input|textarea)\b", re.I)
+INTERACTIVE_HINT = ("interactive_elements is on, but no mock in this round has a working control (select, details, "
+                    "input, textarea). Build the controls the mocks show so they respond, or create the review with "
+                    "interactive_elements off for static mocks.")
+
+
+def _interactive_hint(spec: Dict[str, Any], look: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """{"hint": ...} for a decisions round whose mocks are all static while the review asks for working controls."""
+    if not (look or {}).get("interactive_elements") or not isinstance(spec.get("decisions"), dict):
+        return {}
+    html = [o.get("html") or "" for b in spec["decisions"].get("blocks") or [] for o in [b] + list(b.get("options") or [])]
+    if not any(html) or any(_CONTROL.search(x) for x in html):
+        return {}
+    return {"hint": INTERACTIVE_HINT}
 
 
 def add_round(review_id: str, decisions: Optional[str] = None, prototype: Optional[str] = None,
@@ -217,7 +235,8 @@ def add_round(review_id: str, decisions: Optional[str] = None, prototype: Option
         if data["mode"] == "herenow":
             data = herenow.publish(review_id)
         return {"review_id": review_id, "round": data["rounds"][-1]["n"], "url": store.review_url(data),
-                "mode": data["mode"], "owner": ctx.as_dict(), **extra, **herenow.password_result(data)}
+                "mode": data["mode"], "owner": ctx.as_dict(), **extra, **herenow.password_result(data),
+                **_interactive_hint(spec, new_look or existing.get("settings"))}
 
 
 def _record_read(review_id: str, round_n: int) -> None:
@@ -254,7 +273,7 @@ def get_feedback(review_id: str, round_n: Optional[int] = None) -> Dict[str, Any
            "action": (r.get("feedback") or {}).get("action", "send")}
     # The build instruction only while it is still owed: an open review whose newest round is this one.
     if res["action"] == "build" and data["status"] == "open" and r["n"] == data["rounds"][-1]["n"]:
-        label = (r.get("gate") or {}).get("label") or "Start building"
+        label = (r.get("gate") or {}).get("label") or "Build"
         res["next_step"] = (f"The reviewer approved the whole round and pressed {label}. Build it now in this session. "
                             "When done, call mock_review_add_round with the result (what you built, with notes_answered "
                             "for every note) so the reviewer sees it on the same link. Do not ask for confirmation "
@@ -265,7 +284,7 @@ def get_feedback(review_id: str, round_n: Optional[int] = None) -> Dict[str, Any
 @_owned
 def ack(review_id: str, round_n: Optional[int] = None) -> Dict[str, Any]:
     """The session has handled a round's submission (answered in chat, or nothing more is coming): no stalled ping
-    for it. Once per submission; an amend is a new submission and needs its own ack. A build (Start building) expects
+    for it. Once per submission; an amend is a new submission and needs its own ack. A build (Build) expects
     round N+1, so the session builds and adds that round instead; an ack there only silences the ping."""
     with store.locked(review_id):
         data = store.load(review_id)

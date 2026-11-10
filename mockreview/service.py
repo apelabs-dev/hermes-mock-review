@@ -72,7 +72,7 @@ def stalled_text(data: Dict[str, Any], round_: Dict[str, Any], minutes: float,
 
 
 def is_build(round_: Dict[str, Any]) -> bool:
-    """True when the round's submission pressed the gate ("Start building"): the agent builds and posts round N+1."""
+    """True when the round's submission pressed the gate ("Build"): the agent builds and posts round N+1."""
     return (round_.get("feedback") or {}).get("action") == "build"
 
 
@@ -281,7 +281,7 @@ def _deliver_notice(review_id: str, round_n: int, key: str, url: Optional[str] =
     permanent: the payload cannot be built, or the gateway rejected it with 400/413/422); no_route (the gateway has no
     such route, 404: re-run `hermes mockreview setup`); skipped (the stalled ping only: nothing to build, or the
     session acknowledged the submission). The ack also waits for the wake to be accepted, because
-    "Hermes is working on it" is only true then. After Start building the stalled ping waits build_stale_factor times
+    "Hermes is working on it" is only true then. After Build the stalled ping waits build_stale_factor times
     longer."""
     if owner.is_bound():
         return False, "not the owner service: only the board server delivers notices"

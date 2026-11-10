@@ -5,13 +5,16 @@ serves it as a review board, and you open the link, mark each decision Approve, 
 the mocks and press Send. Send wakes the agent in the chat the review came from, with your marks attached. Boards render
 inline mocks at desktop, tablet and phone widths, in light and dark, and wear a per-project design profile.
 
-## Plan boards and Start building
+## Plan boards and Build
 
 A `plan` preset round uses the same fixed skeleton as a design board: a status line, "Already decided", a defaults card,
 the plan grouped by section, then a final approval. Questions carry a recommendation (go with it, or type a different
 answer); pieces, defaults and decisions are approved, changed or skipped, and "Approve the rest" fills a section in one
-press. The footer button reads "Send notes" until every question is answered, everything else is approved or skipped
-and nothing is on Change; then it turns into "Build". The section bar stays pinned under the header, so a long plan is
+press. The footer has one button. By default it is "Build": locked, with what is still open in its
+tooltip, until every question is answered, everything else is approved or skipped and nothing is on Change; a block on
+Change turns it into "Send" for those notes. Set `footer_button` to `send` for a board that only ever sends notes.
+Mocks carry working controls by default (`interactive_elements`): the board opens on Tap so dropdowns and switches
+respond, and Pin in the header switches to commenting. The section bar stays pinned under the header, so a long plan is
 one tap from any section.
 
 Build wakes Hermes on the chat the board came from, with the approved plan. The agent builds, and the result arrives as
@@ -205,7 +208,7 @@ Outbound network calls:
   still loopback only. One right after the wake-up is accepted (an instant "got it, working on round N" in the origin
   chat, also mirrored into that chat's session), and one later, only when a sent round gets no new round within
   `stale_after_minutes` (or `stale_after_read_minutes` after the agent read it; both times `build_stale_factor` after
-  Start building), to say the agent may have stalled. No
+  Build), to say the agent may have stalled. No
   ping for a round with nothing left to build, one the agent acknowledged, or a closed review. Both carry the review title and counts, never your notes, and
   use the same signing secret as the wake-up.
 - here.now (`https://here.now/api/v1`), only for reviews you host with `herenow`: the plugin publishes the board and

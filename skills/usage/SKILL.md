@@ -32,9 +32,9 @@ build, and do not list what is missing.
 In the thread's own chat session, take over: read the feedback with `mock_review_feedback` (that read moves the stalled
 ping to `stale_after_read_minutes`, 60 by default) and build the next round with `mock_review_add_round`. If no round
 will follow, call `mock_review_ack`. A round whose decisions are all Approved or Skipped, with no pins or general
-notes and no Start building, gets no stalled ping; close the review when the user is done.
+notes and no Build, gets no stalled ping; close the review when the user is done.
 
-## When Start building wakes you
+## When Build wakes you
 
 The feedback then has `action: "build"` and a `next_step`. The plugin already posted "building round N's plan now".
 
@@ -64,6 +64,12 @@ list, and put your best answer in `recommendation`. Never make the user type an 
 
 Example: `{"type":"callout","tone":"warn","title":"Constraint","text":"Must fit one phone screen."}`.
 Safe absolute HTTP(S) links in mock/option HTML open in a new tab without creating pins; other hrefs are removed.
+`interactive_elements` is on by default: build every control a mock shows so it works without script. Use `<select>` or
+`<details>` for a dropdown, a checkbox with `:checked` for a switch, radios with `:checked` for tabs, and real
+`<input>`/`<textarea>` fields. The board opens on Tap; the user switches to Pin in the header to comment. Pass
+`interactive_elements: false` only for mocks that are meant as static pictures.
+A plan board's footer has one button, set by `footer_button`: `build` (the default; Build is locked until nothing is
+open or on Change, and turns into Send while a block is on Change) or `send` (notes only, never Build).
 Bare HTTP(S) URLs in table cells become links, including multiple URLs embedded in prose; surrounding text and
 literal HTML are preserved.
 Build decisions.json as a local file and pass its absolute path to create or add-round. The full format is in

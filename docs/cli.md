@@ -97,8 +97,10 @@ usage: hermes mockreview create [-h] --title TITLE [--brief BRIEF]
                                 [--theme-toggle] [--no-theme-toggle]
                                 [--mobile-width PX] [--tablet-width PX]
                                 [--pins] [--no-pins] [--require-note]
-                                [--no-require-note] [--max-pins N] [--wake]
-                                [--no-wake] [--password] [--no-password]
+                                [--no-require-note] [--max-pins N]
+                                [--footer-button {send,build}] [--interactive]
+                                [--no-interactive] [--wake] [--no-wake]
+                                [--password] [--no-password]
 
 options:
   -h, --help            show this help message and exit
@@ -152,6 +154,11 @@ per-review look (default: saved settings; stored in the review):
   --require-note        Send needs a note on every Change
   --no-require-note     Change marks need no note
   --max-pins N
+  --footer-button {send,build}
+                        the footer button on a round with a gate: Build
+                        (default) or Send
+  --interactive         mocks carry working controls; the board opens on Tap
+  --no-interactive      static mocks; the board opens on Pin
 ```
 
 ## `hermes mockreview add-round --help`
@@ -170,6 +177,8 @@ usage: hermes mockreview add-round [-h] [--decisions /abs/decisions.json]
                                    [--mobile-width PX] [--tablet-width PX]
                                    [--pins] [--no-pins] [--require-note]
                                    [--no-require-note] [--max-pins N]
+                                   [--footer-button {send,build}]
+                                   [--interactive] [--no-interactive]
                                    review_id
 
 positional arguments:
@@ -213,6 +222,11 @@ per-review look (default: saved settings; stored in the review):
   --require-note        Send needs a note on every Change
   --no-require-note     Change marks need no note
   --max-pins N
+  --footer-button {send,build}
+                        the footer button on a round with a gate: Build
+                        (default) or Send
+  --interactive         mocks carry working controls; the board opens on Tap
+  --no-interactive      static mocks; the board opens on Pin
 ```
 
 ## `hermes mockreview design --help`

@@ -47,19 +47,25 @@ id of a block in this file (any block with an id, including a recap). `note` (th
 
     {"ref": "p2", "note": "What if two devices edit the same note?", "answer": "The newer edit wins; see the revised piece.", "status": "second-look"}
 
-`gate`: the locked final approval. The gate card shows what is still open; the footer's Send button reads "Send notes"
-until nothing is left on Change, every markable block is approved or skipped and every question is answered, and then
-turns into "Build". Pressing Build sends the review with the action `build`.
+`gate`: the final approval. It has no card of its own on the board. The round's footer has one button, picked by the
+`footer_button` setting (`--footer-button` per review):
 
-- `label` is 40 characters and defaults to `Start building`.
-- `text` (600) says what happens when it is pressed.
+- `build` (the default): the button is "Build". It is locked until nothing is left on Change, every markable block is
+  approved or skipped and every question is answered; its tooltip says what is still open ("10 still open"), and a tap
+  on a phone shows the same line. While a block is on Change the round cannot be built, so the button is "Send" for
+  those notes. Pressing Build sends the review with the action `build`.
+- `send`: the button is always "Send" and the board never offers Build.
+
+- `label` is 40 characters and defaults to `Build`. It names the approval in the "pressed" line and in the feedback
+  Hermes reads; the footer button itself always reads "Build".
+- `text` (600) says what happens when it is pressed. It is the Build button's tooltip once the button unlocks.
 - `after` holds 0 to 12 strings of 300 characters: "What I need from you after approval".
 - `later` holds 0 to 20 strings of 300 characters: "Later, not in this plan".
 
 With `"preset": "plan"` a missing `gate` (or `null`) becomes the default gate. On a design board the gate is opt-in: add
 a `gate` object to get one.
 
-    {"label": "Start building", "text": "Approves the whole plan; work starts with the sync engine.", "after": ["Pair two test devices"], "later": ["Accounts and sign-in"]}
+    {"label": "Build", "text": "Approves the whole plan; work starts with the sync engine.", "after": ["Pair two test devices"], "later": ["Accounts and sign-in"]}
 
 ## Keys every markable block takes
 
@@ -161,7 +167,7 @@ once it has a choice.
 
 The submit carries an `action`: `send` (the default) or `build`. `build` is accepted only when the round has a `gate`,
 every markable block is approved or skipped (or answered, for a question) and nothing is on Change; otherwise the board
-gets an error naming the open and changed ids. The feedback Hermes reads starts with **Start building pressed** after a
+gets an error naming the open and changed ids. The feedback Hermes reads starts with **Build pressed** after a
 `build`, and a custom answer is quoted as typed by the reviewer.
 
 ## A full plan round
@@ -172,11 +178,26 @@ with options, the round 2+ keys and a `gate` with `after` and `later`.
 
 ## HTML in mocks
 
-Mock, option and piece HTML is static markup. The board parses it without running it and removes `script`, `iframe`, `frame`,
-`object`, `embed`, `base`, `meta`, `link` and `form` elements, `on*` attributes and `javascript:` URLs. Style it with
-`extra_css`, with the design profile's `mock.css`, or with inline `style` attributes. Anchor hrefs retain only absolute
-HTTP(S) URLs without whitespace/control characters; relative URLs and all other protocols are removed. Safe links open
-in a new tab with `target="_blank" rel="noopener noreferrer"`; clicking one does not add a pin.
+The board parses mock, option and piece HTML without running it and removes `script`, `iframe`, `frame`, `object`,
+`embed`, `base`, `meta`, `link` and `form` elements, `on*` attributes and `javascript:` URLs. Style it with `extra_css`,
+with the design profile's `mock.css`, or with inline `style` attributes. Anchor hrefs retain only absolute HTTP(S) URLs
+without whitespace/control characters; relative URLs and all other protocols are removed. Safe links open in a new tab
+with `target="_blank" rel="noopener noreferrer"`; clicking one does not add a pin.
+
+### Interactive elements
+
+The `interactive_elements` setting is on by default (`--no-interactive` per review turns it off). With it on, build
+every control a mock shows so that it responds, using markup that needs no script:
+
+- a dropdown or menu: `<select>`, or `<details><summary>` with the menu inside;
+- a switch, checkbox or toggle: `<input type="checkbox">` styled with `:checked`;
+- tabs, segmented controls and option pickers: `<input type="radio">` with `:checked` and a sibling selector;
+- text fields: `<input>` and `<textarea>`;
+- hover and focus states: `:hover` and `:focus-visible`.
+
+The board then opens on Tap, so a tap reaches the mock's own controls; the reviewer switches to Pin in the header to
+comment on a spot. A create or add-round whose mocks have no such control returns a `hint` saying so. With the setting
+off, mocks are static pictures and the board opens on Pin, where every tap on a mock drops a pin.
 
 ## Design profiles
 

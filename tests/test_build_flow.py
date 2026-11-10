@@ -1,4 +1,4 @@
-"""Start building end to end: the board's build submit wakes the origin session with a build intent, the ack says the
+"""Build end to end: the board's build submit wakes the origin session with a build intent, the ack says the
 build started, mock_review_feedback carries action + next_step, the stalled ping waits build_stale_factor times longer,
 and the next round (the result) clears it. A plain Send on the same plan board keeps today's behaviour."""
 
@@ -67,7 +67,7 @@ def test_build_submit_from_the_board_wakes_with_the_build_intent_and_acks_the_bu
     assert payload["action"] == "build" and payload["event_type"] == "review.submitted"
     assert payload["review_id"] == rid and payload["round"] == 1 and payload["title"] == "Plan"
     assert (payload["platform"], payload["chat_id"], payload["thread_id"]) == ("discord", "test-chat", "test-topic")
-    assert payload["summary"].splitlines()[0] == "- **Start building pressed**"
+    assert payload["summary"].splitlines()[0] == "- **Build pressed**"
     assert payload["amended"] is False and "recovered" not in payload
     assert _rid(wake) == f"mockreview-{rid}-r1-s1"
 
@@ -78,7 +78,7 @@ def test_build_submit_from_the_board_wakes_with_the_build_intent_and_acks_the_bu
 
     # mock_review_feedback, through the api, the MCP tool and the CLI: the same action and next_step
     fb = api.get_feedback(rid)
-    assert fb["action"] == "build" and fb["next_step"] == NEXT_STEP.format(label="Start building")
+    assert fb["action"] == "build" and fb["next_step"] == NEXT_STEP.format(label="Build")
     tool = _tool_feedback(rid)
     assert (tool["action"], tool["next_step"]) == (fb["action"], fb["next_step"])
     assert cli.main(["feedback", rid, "--json"]) == 0
@@ -239,7 +239,7 @@ def test_a_plain_send_on_a_plan_board_keeps_send_behaviour(env, tmp_path):
     rid = data["id"]
     service.submit(rid, 1, {"marks": _all_resolved(p1={"status": "change", "note": "split it"})}, data["token"])
     payload = json.loads(env["receiver"].wakes[0]["body"])
-    assert payload["action"] == "send" and "Start building pressed" not in payload["summary"]
+    assert payload["action"] == "send" and "Build pressed" not in payload["summary"]
     assert json.loads(env["receiver"].notices[0]["body"])["message"] == (
         "📨 Got your feedback on Plan, round 1 (approved 3, change 1, skip 1). "
         "Hermes is working on round 2; the link lands here when it's ready.")
@@ -281,14 +281,14 @@ def test_a_variants_round_payload_and_feedback_say_send(review, env):
 def test_mcp_tool_descriptions_teach_action_next_step_and_the_build_result():
     listed = {t["name"]: t["description"] for t in mcp.tools()}
     assert "action" in listed["mock_review_feedback"] and "next_step" in listed["mock_review_feedback"]
-    assert "Start building" in listed["mock_review_add_round"]
-    assert "Start building" in listed["mock_review_ack"]
+    assert "Build" in listed["mock_review_add_round"]
+    assert "Build" in listed["mock_review_ack"]
 
 
 def test_the_skill_says_what_to_do_when_start_building_wakes_you():
     from conftest import ROOT
     text = (ROOT / "skills" / "usage" / "SKILL.md").read_text(encoding="utf-8")
-    section = text.split("## When Start building wakes you", 1)[1].split("\n## ", 1)[0]
+    section = text.split("## When Build wakes you", 1)[1].split("\n## ", 1)[0]
     for phrase in ("Build the approved plan in this session", "approved default, settled rule and question answer",
                    "`mock_review_add_round`", "`notes_answered`", "`revised`", "fresh `gate`",
                    "Never re-ask", "Do not call `mock_review_ack` instead of building"):
@@ -298,5 +298,5 @@ def test_the_skill_says_what_to_do_when_start_building_wakes_you():
 
 def test_wake_prompt_mentions_the_build_and_keeps_the_hand_off():
     from mockreview import setup
-    assert "act on the notes, or build if Start building was pressed." in setup.PROMPT_TEMPLATE
+    assert "act on the notes, or build if Build was pressed." in setup.PROMPT_TEMPLATE
     assert setup.HANDOFF_LINE in setup.PROMPT_TEMPLATE

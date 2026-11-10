@@ -11,7 +11,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SRC = (ROOT / 'mockreview/board/board.js').read_text(encoding='utf-8')
 NAMES = ['h', 'append', 'paras', 'entryKind', 'capCustom', 'isResolved', 'gateState', 'progressLine', 'isMarkableBlock',
-         'groupBlocks', 'approveRestIds', 'groupHasBulk', 'gateIcon', 'endLine', 'icon', 'updateGate', 'gateReason', 'cleanMarks', 'answerText', 'payload', 'renderQuestion', 'renderPiece',
+         'groupBlocks', 'approveRestIds', 'groupHasBulk', 'gateIcon', 'endLine', 'icon', 'updateGate', 'gateReason', 'gateTitle', 'renderGate', 'updateSendbar', 'cleanMarks', 'answerText', 'payload', 'renderQuestion', 'renderPiece',
          'renderSettled', 'renderAsked', 'renderNotesAnswered', 'markEmpty', 'submittedFeedback', 'watchWindowMs']
 
 
@@ -40,7 +40,7 @@ INDEX = '''[{id:'p1',kind:'piece',group:'A'},{id:'p2',kind:'piece',group:'A'},{i
 
 def test_gate_not_ready_reason_text_and_ready():
     run('const I=' + INDEX + ''';
-const g = {label: 'Start building'};
+const g = {label: 'Build'};
 let s = gateState(I, {}, g);
 assert.equal(s.ready, false); assert.equal(s.reason, '5 still open');
 s = gateState(I, {p1: {status: 'approve'}, p2: {status: 'change'}, q1: {choice: 'recommended'}}, g);
@@ -163,17 +163,16 @@ def test_update_gate_swaps_the_icon_with_the_marks():
 global.ICONS = {lock: '', send: ''};
 const btn = document.createElement('button'); btn.setAttribute('id', 'gate-btn');
 btn.appendChild(icon('lock')); const lab = document.createElement('span'); lab.setAttribute('class', 'gate-label'); btn.appendChild(lab);
-const rs = document.createElement('span'); rs.setAttribute('id', 'gate-reason');
-const root = document.createElement('div'); root.appendChild(btn); root.appendChild(rs); global.ROOT_NODE = root;
+const root = document.createElement('div'); root.appendChild(btn); global.ROOT_NODE = root;
 const I = [{id: 'p1', kind: 'piece', group: 'A'}, {id: 'q1', kind: 'question', group: 'Q'}];
-const g = {label: 'Start building'}; let ed = true;
+const g = {label: 'Build', text: 'Work starts with sync.'}; let ed = true;
 global.S = {draft: {marks: {}}, sending: false}; global.DOC = {dec: {gate: g}}; global.viewed = () => ({decisions: I, gate: g}); global.isEditable = () => ed;
 const ico = () => btn.querySelectorAll('svg')[0].getAttribute('data-icon');
-updateGate(); assert.equal(ico(), 'lock'); assert.equal(btn.querySelectorAll('svg').length, 1);
+updateGate(); assert.equal(ico(), 'lock'); assert.equal(btn.querySelectorAll('svg').length, 1); assert.equal(btn.title, '2 still open');   // the reason lives in the tooltip
 S.draft.marks = {p1: {status: 'approve'}, q1: {choice: 'recommended'}};
 updateGate(); assert.equal(ico(), 'send'); assert.equal(btn.children[0].tagName, 'SVG'); assert.equal(btn.querySelectorAll('svg').length, 1);
-assert.equal(rs.textContent, 'Nothing is open or on Change. Press Build below.'); assert.ok(rs.classList.contains('ready'));
-assert.equal(lab.textContent, 'Build');   // short label: it shares the footer slot with Send notes
+assert.equal(btn.title, 'Build: Work starts with sync.');
+assert.equal(lab.textContent, 'Build');   // short label: it shares the footer slot with Send
 S.sending = true; updateGate(); assert.equal(ico(), 'send'); assert.equal(lab.textContent, 'Sending…');   // stays on send while sending
 S.sending = false; ed = false; updateGate(); assert.equal(ico(), 'lock');
 S.draft.marks = {p1: {status: 'change'}, q1: {choice: 'recommended'}}; ed = true; updateGate(); assert.equal(ico(), 'lock');
@@ -202,7 +201,7 @@ assert.equal(endLine(I, Object.assign({}, all, {p1: {status: 'change'}}), null, 
 
 def test_end_line_with_a_gate_never_repeats_the_call_to_action():
     run(NO_GATE + '''
-const g = {label: 'Start building'};
+const g = {label: 'Build'};
 assert.equal(endLine(I, {}, g, '', true), '3 of 3 still open.');
 assert.equal(endLine(I, {p1: {status: 'approve'}}, g, NX, true), '2 of 3 still open. Once all are decided → ' + NX);
 assert.equal(endLine(I, {p1: {status: 'change'}, q1: {choice: 'recommended'}}, g, '', true), '1 of 3 still open · 1 on Change.');
@@ -231,18 +230,47 @@ assert.equal(watchWindowMs({n: 2}), 2 * 3600 * 1000);   // no feedback yet: the 
 ''')
 
 
-def test_gate_card_has_no_button_and_its_reason_still_updates():
+def test_footer_button_is_send_or_build_never_both():
     run('''
 global.ICONS = {lock: '', send: '', check: ''};
-const row = document.createElement('div'); row.appendChild(icon('lock'));
-const rs = document.createElement('span'); rs.setAttribute('id', 'gate-reason'); row.appendChild(rs);
-global.ROOT_NODE = row;
 const I = [{id: 'p1', kind: 'piece', group: 'A'}, {id: 'q1', kind: 'question', group: 'Q'}];
-const g = {label: 'Start building'};
-global.S = {draft: {marks: {}}, sending: false}; global.DOC = {dec: {gate: g}}; global.viewed = () => ({decisions: I, gate: g}); global.isEditable = () => true;
-updateGate(); assert.ok(/still open/.test(rs.textContent), rs.textContent); assert.ok(!rs.classList.contains('ready'));
-assert.equal(row.children[0].getAttribute('data-icon'), 'lock');
-S.draft.marks = {p1: {status: 'approve'}, q1: {choice: 'recommended'}};
-updateGate(); assert.equal(rs.textContent, 'Nothing is open or on Change. Press Build below.'); assert.ok(rs.classList.contains('ready'));
-assert.equal(row.children[0].getAttribute('data-icon'), 'check'); assert.equal(row.children.length, 2);
+const g = {label: 'Build'};
+const round = {n: 1, decisions: I, gate: g};
+let sent = [], toasts = []; let ed = true;
+global.sendbar = document.createElement('footer'); global.footMsg = null;
+global.S = {draft: {marks: {}}, sending: false, amending: false, error: null}; global.DOC = {dec: {gate: g}};
+global.R = () => ({status: 'open', current_round: 1, submit: {kind: 'local'}}); global.viewed = () => round;
+global.isNew = () => true; global.isEditable = () => ed; global.submittedFeedback = () => null;
+global.missingNotes = () => []; global.hasContent = d => Object.keys(d.marks).length > 0;
+global.setFootMsg = () => {}; global.summaryChips = () => [];
+global.send = a => sent.push(a || 'send'); global.toast = m => toasts.push(m);
+const all = () => Array.from(sendbar.querySelectorAll('button'));
+const only = () => { assert.equal(all().length, 1); return all()[0]; };   // one button, whatever the state
+const press = () => only().listeners.click.call(only());
+const DONE = {p1: {status: 'approve'}, q1: {choice: 'recommended'}};
+
+global.footerButton = () => 'build';
+updateSendbar(); assert.equal(only().textContent.trim(), 'Build'); assert.equal(only().getAttribute('aria-disabled'), 'true');
+assert.equal(only().getAttribute('title'), '2 still open');
+press(); assert.deepEqual(sent, []); assert.deepEqual(toasts, ['2 still open']);   // locked: a tap says why and sends nothing
+S.draft.marks = {p1: {status: 'approve'}}; updateSendbar(); assert.equal(only().getAttribute('title'), '1 still open');
+S.draft.marks = DONE; updateSendbar();
+assert.equal(only().textContent.trim(), 'Build'); assert.equal(only().getAttribute('aria-disabled'), 'false');
+press(); assert.deepEqual(sent, ['build']);
+S.draft.marks = {p1: {status: 'change', note: 'split it'}, q1: {choice: 'recommended'}}; updateSendbar();
+assert.equal(only().textContent.trim(), 'Send'); press(); assert.deepEqual(sent, ['build', 'send']);   // on Change: Send takes the slot
+
+global.footerButton = () => 'send'; S.draft.marks = DONE; updateSendbar(); assert.equal(only().textContent.trim(), 'Send');
+global.footerButton = () => 'build'; ed = false; updateSendbar(); assert.notEqual(only().textContent.trim(), 'Build');   // a locked round never offers Build
+round.gate = null; ed = true; updateSendbar(); assert.equal(only().textContent.trim(), 'Send');                          // no gate: Send
+''')
+
+
+def test_the_gate_has_no_card_only_its_lists():
+    run('''
+const r = {n: 1};
+assert.equal(renderGate(r, {gate: {label: 'Build', text: 'Approves the plan.', after: [], later: []}}), null);
+const sec = renderGate(r, {gate: {label: 'Build', text: 'Approves the plan.', after: ['Pair two devices'], later: ['Accounts']}});
+assert.equal(sec.querySelectorAll('button').length, 0); assert.equal(sec.querySelectorAll('h2').length, 0);
+assert.deepEqual(Array.from(sec.querySelectorAll('h3')).map(x => x.textContent), ['What I need from you after approval', 'Later, not in this plan']);
 ''')

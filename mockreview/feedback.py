@@ -192,7 +192,7 @@ def short_summary(data: Dict[str, Any], round_: Dict[str, Any], limit: int = 150
 # feedback = {"kind": "decisions", "marks": {id: {status, option, note}}, "pins": [...], "guidelines": str}
 # ---------------------------------------------------------------------------
 # A question's mark is {choice: recommended|custom, custom, note} instead. The submit carries an action: "send" (the
-# default) or "build" (the round's gate, "Start building"), stored as feedback["action"].
+# default) or "build" (the round's gate, "Build"), stored as feedback["action"].
 STATUSES = ("approve", "change", "skip")
 CHOICES = ("recommended", "custom")
 ACTIONS = ("send", "build")
@@ -256,7 +256,7 @@ def _gate_lists(index: List[Dict[str, Any]], marks: Dict[str, Any]) -> Dict[str,
 
 
 def gate_state(feedback: Optional[Dict[str, Any]], round_: Dict[str, Any]) -> Dict[str, Any]:
-    """Whether the round's final approval ("Start building") may be pressed with these marks. `open`: markable ids not
+    """Whether the round's final approval ("Build") may be pressed with these marks. `open`: markable ids not
     resolved yet (unanswered questions included), `changed`: ids on Change, `unanswered`: the questions among `open`.
     `feedback` may be None or a draft {marks: ...}."""
     from .store import round_index
@@ -272,7 +272,7 @@ def _check_build(gate: Optional[Dict[str, Any]], index: List[Dict[str, Any]], ma
     if lists["open"] or lists["changed"]:
         bits = ([f"still open: {', '.join(lists['open'])}"] if lists["open"] else []) \
             + ([f"on Change: {', '.join(lists['changed'])}"] if lists["changed"] else [])
-        raise ReviewError(f"{gate.get('label') or 'Start building'} opens once every block is resolved and nothing is "
+        raise ReviewError(f"{gate.get('label') or 'Build'} opens once every block is resolved and nothing is "
                           f"on Change ({'; '.join(bits)}).")
 
 
@@ -406,8 +406,8 @@ def render_decisions_markdown(data: Dict[str, Any], round_: Dict[str, Any]) -> s
         "",
     ]
     if fb.get("action") == "build":
-        label = (round_.get("gate") or {}).get("label") or "Start building"
-        lines[4:4] = [f"**Start building pressed** — the reviewer pressed “{label}”: every block is resolved and "
+        label = (round_.get("gate") or {}).get("label") or "Build"
+        lines[4:4] = [f"**Build pressed** — the reviewer pressed “{label}”: every block is resolved and "
                       "nothing is on Change. Start building from the approved round.", ""]
     for d in index:
         m = fb["marks"].get(d["id"]) or {}
@@ -448,7 +448,7 @@ def short_decisions_summary(data: Dict[str, Any], round_: Dict[str, Any], limit:
     c = decision_counts(fb, index)
     parts = [f"**Marks:** {_tally(c, index)}"]
     if fb.get("action") == "build":
-        parts.insert(0, "**Start building pressed**")
+        parts.insert(0, "**Build pressed**")
     for d in index:
         m = fb["marks"].get(d["id"]) or {}
         if entry_kind(d) == "question":
