@@ -98,6 +98,7 @@
     var s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     s.setAttribute('viewBox', '0 0 24 24');
     s.setAttribute('aria-hidden', 'true');
+    s.setAttribute('data-icon', name);
     s.setAttribute('class', 'ico' + (cls ? ' ' + cls : ''));
     s.innerHTML = ICONS[name]; // static strings only
     return s;
@@ -251,6 +252,32 @@
       var k = entryKind(e);
       return (e.group || '') === group && k !== 'question' && k !== 'defaults' && k !== 'prototype' && !((marks || {})[e.id] || {}).status;
     }).map(function (e) { return e.id; });
+  }
+  // The group has a block "Approve the rest" can act on (same kinds as approveRestIds); a question-only group gets no button.
+  function groupHasBulk(index, group) {
+    return (index || []).some(function (e) {
+      var k = entryKind(e);
+      return (e.group || '') === group && k !== 'question' && k !== 'defaults' && k !== 'prototype';
+    });
+  }
+  // The gate button shows a lock only while it is locked; ready (and still editable, so also while sending) is `send`.
+  function gateIcon(ready, editable) { return ready && editable ? 'send' : 'lock'; }
+  // The summary line above the end of the board. A gate round never repeats the gate card's own call to action.
+  function endLine(index, marks, gate, next, editable) {
+    var idx = index || [], m = marks || {}, total = idx.length, nx = next || '', open = 0;
+    if (gate) {
+      var gs = gateState(idx, m, gate);
+      if (gs.ready) return 'All ' + total + ' decided.' + (nx ? ' Next → ' + nx : '');
+      var head = gs.open.length ? gs.open.length + ' of ' + total + ' still open' + (gs.changed.length ? ' · ' + gs.changed.length + ' on Change' : '') + '.'
+        : gs.changed.length + ' of ' + total + ' on Change.';
+      return head + (nx ? ' Once all are decided → ' + nx : '');
+    }
+    idx.forEach(function (d) {
+      var mk = m[d.id] || {}, s = entryKind(d) === 'question' ? (isResolved(d, mk) ? 'approve' : null) : mk.status;   // an answered question counts as approved
+      if (s !== 'approve' && s !== 'change' && s !== 'skip') open++;
+    });
+    if (open) return open + ' of ' + total + ' still open.' + (nx ? ' Once all are decided → ' + nx : '');
+    return 'All ' + total + ' decided.' + (nx ? ' Next → ' + nx : '') + (editable ? ' Press Send when you’re ready.' : '');
   }
   // A question mark that is a custom answer with no text is not an answer: send the note alone, or nothing.
   function cleanMarks(marks) {
@@ -1225,11 +1252,11 @@
           it.rule ? h('p', { class: 'srule' }, h('span', { class: 'srule-l', text: 'Rule' }), it.rule) : null);
       })));
   }
-  function renderGroup(r, a, g, i) {   // plan preset: a section per group, with "Approve the rest"
+  function renderGroup(r, a, g, i) {   // plan preset: a section per group, with "Approve the rest" when something in it can be approved
     var ed = isEditable();
-    var btn = h('button', { class: 'btn grp-approve', disabled: ed ? null : true, onclick: function () {
+    var btn = groupHasBulk(r.decisions, g.name) ? h('button', { class: 'btn grp-approve', disabled: ed ? null : true, onclick: function () {
       approveRestIds(r.decisions, g.name, S.draft.marks).forEach(function (id) { setMark(id, { status: 'approve' }); });
-    } }, h('span', { text: 'Approve the rest' }), h('span', { class: 'grp-n' }));
+    } }, h('span', { text: 'Approve the rest' }), h('span', { class: 'grp-n' })) : null;
     var sec = h('section', { class: 'gsec', id: 'grp-' + i, 'data-group': g.name },
       h('div', { class: 'grp-head' }, h('h2', { text: g.name || 'Plan' }), h('span', { class: 'grp-count' }), btn));
     g.blocks.forEach(function (b) { append(sec, renderBlock(r, a, b)); });
@@ -1250,7 +1277,7 @@
     } else {
       append(card, h('div', { class: 'gate-actions' },
         h('button', { class: 'btn btn-primary btn-gate', id: 'gate-btn', onclick: function () { if (gateState(r.decisions, S.draft.marks, g).ready && isEditable()) send('build'); } },
-          icon('lock'), h('span', { class: 'gate-label', text: label })),
+          icon(gateIcon(false, true)), h('span', { class: 'gate-label', text: label })),
         h('span', { class: 'gate-reason', id: 'gate-reason' })));
     }
     var after = g.after || [], later = g.later || [];
@@ -1270,6 +1297,8 @@
     btn.setAttribute('aria-disabled', ok ? 'false' : 'true');
     btn.title = ok ? (g.label || 'Start building') + ': send the approved plan to Hermes' : reason;
     btn.classList.toggle('is-disabled', !ok);
+    var want = gateIcon(gs.ready, ed), cur = btn.querySelector('svg.ico');
+    if (cur && cur.getAttribute('data-icon') !== want) { btn.replaceChild(icon(want), cur); }
     var lab = btn.querySelector('.gate-label'); if (lab) lab.textContent = S.sending ? 'Sending…' : (g.label || 'Start building');
     var rs = document.getElementById('gate-reason');
     if (rs) { rs.textContent = reason; rs.classList.toggle('ready', ok); }
@@ -1325,14 +1354,12 @@
       var n = approveRestIds(idx, name, marks).length;
       g.querySelector('.grp-count').textContent = mine.filter(function (d) { return done[d.id]; }).length + '/' + mine.length + ' resolved';
       var b = g.querySelector('.grp-approve'), gn = g.querySelector('.grp-n');
-      gn.textContent = n ? ' (' + n + ')' : '';
-      b.disabled = !n || !isEditable();
+      if (gn) gn.textContent = n ? ' (' + n + ')' : '';
+      if (b) b.disabled = !n || !isEditable();
     });
     updateGate();
-    var end = document.getElementById('dz-end'), gate = DOC && DOC.dec.gate;
-    var nextTxt = DOC && DOC.dec.next ? DOC.dec.next : '';
-    if (end && DOC) end.textContent = open ? open + ' of ' + idx.length + ' still open.' + (nextTxt ? ' Once all are decided → ' + nextTxt : '')
-      : 'All ' + idx.length + ' decided.' + (nextTxt ? ' Next → ' + nextTxt : '') + (isEditable() ? (gate && !gateState(idx, marks, gate).ready ? '' : gate ? ' Press ' + (gate.label || 'Start building') + ' when you’re ready, or Send notes.' : ' Press Send when you’re ready.') : '');
+    var end = document.getElementById('dz-end');
+    if (end && DOC) end.textContent = endLine(idx, marks, DOC.dec.gate, DOC.dec.next, isEditable());
   }
 
   var STATUS_TEXT = { approve: 'Approved', change: 'Change', skip: 'Skipped' };

@@ -12,6 +12,7 @@ class Node {
   removeAttribute(k) { delete this.attrs[k]; }
   appendChild(n) { if (n.parentNode) n.remove(); this.children.push(n); n.parentNode = this; return n; }
   get firstChild() { return this.children[0] || null; }
+  replaceChild(n, old) { old.replaceWith(n); return old; }
   remove() { if (this.parentNode) { const a = this.parentNode.children; a.splice(a.indexOf(this), 1); this.parentNode = null; } }
   replaceWith(n) { const p = this.parentNode; const i = p.children.indexOf(this); this.remove(); p.children.splice(i, 0, n); n.parentNode = p; }
   set textContent(v) { this.children = []; this.text = String(v); }
@@ -58,6 +59,8 @@ global.document = {
     }
     return el;
   },
+  createElementNS(ns, tag) { return new Node(tag); },
+  getElementById(id) { return (global.ROOT_NODE ? [global.ROOT_NODE, ...global.ROOT_NODE.querySelectorAll('*')] : []).find(n => n.getAttribute('id') === id) || null; },
   createTextNode(text) { return new Node('', text); }
 };
 vm.runInThisContext(input.functions);

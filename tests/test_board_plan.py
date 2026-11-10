@@ -11,7 +11,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SRC = (ROOT / 'mockreview/board/board.js').read_text(encoding='utf-8')
 NAMES = ['h', 'append', 'paras', 'entryKind', 'capCustom', 'isResolved', 'gateState', 'progressLine', 'isMarkableBlock',
-         'groupBlocks', 'approveRestIds', 'cleanMarks', 'answerText', 'payload', 'renderQuestion', 'renderPiece',
+         'groupBlocks', 'approveRestIds', 'groupHasBulk', 'gateIcon', 'endLine', 'icon', 'updateGate', 'cleanMarks', 'answerText', 'payload', 'renderQuestion', 'renderPiece',
          'renderSettled', 'renderAsked', 'renderNotesAnswered', 'markEmpty']
 
 
@@ -135,4 +135,82 @@ const na = renderNotesAnswered({blocks: [{id: 'p2', title: 'Conflicts'}], notes_
  {ref: 'p2', note: 'n', answer: 'a', status: 'second-look'}, {ref: 'p2', note: 'n', answer: 'a', status: 'needs-pick'}, {ref: 'p2', note: 'n', answer: 'a', status: 'done'}]});
 assert.deepEqual(na.querySelectorAll('.na-chip').map(c => c.textContent), ['Needs a second look', 'Needs a pick', 'Done']);
 assert.equal(renderNotesAnswered({blocks: [], notes_answered: []}), null);
+''')
+
+
+def test_group_has_bulk_only_for_actionable_kinds():
+    run('''
+const I = [{id: 'q1', kind: 'question', group: 'Q'}, {id: 'q2', kind: 'question', group: 'Q'}, {id: 'defaults', kind: 'defaults', group: 'Q'},
+ {id: 'p1', kind: 'piece', group: 'A'}, {id: 'd1', kind: 'decision', group: ''}, {id: 'r', kind: 'recap', group: 'R'}, {id: 'pr', kind: 'prototype', group: 'P'}];
+assert.equal(groupHasBulk(I, 'Q'), false);   // question-only (plus defaults): nothing to approve in bulk
+assert.equal(groupHasBulk(I, 'A'), true); assert.equal(groupHasBulk(I, ''), true); assert.equal(groupHasBulk(I, 'R'), true);
+assert.equal(groupHasBulk(I, 'P'), false); assert.equal(groupHasBulk(I, 'none'), false); assert.equal(groupHasBulk(null, 'A'), false);
+assert.equal(groupHasBulk([{id: 'd', layout: 'side'}], ''), true);   // old rounds have no kind: a decision
+''')
+
+
+def test_gate_icon_rule():
+    run('''
+assert.equal(gateIcon(true, true), 'send'); assert.equal(gateIcon(false, true), 'lock');
+assert.equal(gateIcon(true, false), 'lock'); assert.equal(gateIcon(false, false), 'lock');
+''')
+
+
+def test_update_gate_swaps_the_icon_with_the_marks():
+    run('''
+global.ICONS = {lock: '', send: ''};
+const btn = document.createElement('button'); btn.setAttribute('id', 'gate-btn');
+btn.appendChild(icon('lock')); const lab = document.createElement('span'); lab.setAttribute('class', 'gate-label'); btn.appendChild(lab);
+const rs = document.createElement('span'); rs.setAttribute('id', 'gate-reason');
+const root = document.createElement('div'); root.appendChild(btn); root.appendChild(rs); global.ROOT_NODE = root;
+const I = [{id: 'p1', kind: 'piece', group: 'A'}, {id: 'q1', kind: 'question', group: 'Q'}];
+const g = {label: 'Start building'}; let ed = true;
+global.S = {draft: {marks: {}}, sending: false}; global.DOC = {dec: {gate: g}}; global.viewed = () => ({decisions: I, gate: g}); global.isEditable = () => ed;
+const ico = () => btn.querySelectorAll('svg')[0].getAttribute('data-icon');
+updateGate(); assert.equal(ico(), 'lock'); assert.equal(btn.querySelectorAll('svg').length, 1);
+S.draft.marks = {p1: {status: 'approve'}, q1: {choice: 'recommended'}};
+updateGate(); assert.equal(ico(), 'send'); assert.equal(btn.children[0].tagName, 'SVG'); assert.equal(btn.querySelectorAll('svg').length, 1);
+assert.equal(rs.textContent, 'Nothing is open or on Change.'); assert.ok(rs.classList.contains('ready'));
+S.sending = true; updateGate(); assert.equal(ico(), 'send'); assert.equal(lab.textContent, 'Sending…');   // stays on send while sending
+S.sending = false; ed = false; updateGate(); assert.equal(ico(), 'lock');
+S.draft.marks = {p1: {status: 'change'}, q1: {choice: 'recommended'}}; ed = true; updateGate(); assert.equal(ico(), 'lock');
+''')
+
+
+NO_GATE = '''const I = [{id: 'p1', kind: 'piece'}, {id: 'q1', kind: 'question'}, {id: 'd1', kind: 'decision'}];
+const all = {p1: {status: 'approve'}, q1: {choice: 'recommended'}, d1: {status: 'skip'}};
+const NX = 'The sync engine comes first.';'''
+
+
+def test_end_line_without_a_gate_keeps_today_s_strings():
+    run(NO_GATE + '''
+const part = {p1: {status: 'approve'}, q1: {note: 'x'}};   // a note alone leaves the question open
+assert.equal(endLine(I, {}, null, '', true), '3 of 3 still open.');
+assert.equal(endLine(I, part, null, '', false), '2 of 3 still open.');
+assert.equal(endLine(I, part, null, NX, true), '2 of 3 still open. Once all are decided → ' + NX);
+assert.equal(endLine(I, all, null, '', true), 'All 3 decided. Press Send when you\u2019re ready.');
+assert.equal(endLine(I, all, null, NX, true), 'All 3 decided. Next → ' + NX + ' Press Send when you\u2019re ready.');
+assert.equal(endLine(I, all, null, '', false), 'All 3 decided.');
+assert.equal(endLine(I, all, null, NX, false), 'All 3 decided. Next → ' + NX);
+// a block on Change counts as decided without a gate, as it always did
+assert.equal(endLine(I, Object.assign({}, all, {p1: {status: 'change'}}), null, '', false), 'All 3 decided.');
+''')
+
+
+def test_end_line_with_a_gate_never_repeats_the_call_to_action():
+    run(NO_GATE + '''
+const g = {label: 'Start building'};
+assert.equal(endLine(I, {}, g, '', true), '3 of 3 still open.');
+assert.equal(endLine(I, {p1: {status: 'approve'}}, g, NX, true), '2 of 3 still open. Once all are decided → ' + NX);
+assert.equal(endLine(I, {p1: {status: 'change'}, q1: {choice: 'recommended'}}, g, '', true), '1 of 3 still open · 1 on Change.');
+assert.equal(endLine(I, {p1: {status: 'change'}}, g, NX, true), '2 of 3 still open · 1 on Change. Once all are decided → ' + NX);
+// nothing open, but one block is on Change: not "All decided"
+const chg = Object.assign({}, all, {p1: {status: 'change'}});
+assert.equal(endLine(I, chg, g, '', true), '1 of 3 on Change.');
+assert.equal(endLine(I, chg, g, NX, true), '1 of 3 on Change. Once all are decided → ' + NX);
+for (const ed of [true, false]) {
+  assert.equal(endLine(I, all, g, '', ed), 'All 3 decided.');
+  assert.equal(endLine(I, all, g, NX, ed), 'All 3 decided. Next → ' + NX);
+}
+for (const s of [endLine(I, all, g, NX, true), endLine(I, {}, g, NX, true), endLine(I, chg, g, NX, true)]) assert.ok(!/Press|ready/.test(s), s);
 ''')

@@ -1,8 +1,8 @@
 {
   "preset": "plan",
-  "intro": "Round 2 of the offline-sync plan for the Notebook app. Approve, change or skip each piece, pick the settings layout, and answer the open questions. Start building opens once nothing is left on Change and every question is answered.",
+  "intro": "The offline-sync plan for the Notebook app. Approve, change or skip each piece, pick the settings layout, and answer the open questions. Start building opens once nothing is left on Change and every question is answered.",
   "status": {
-    "label": "Round 2 · awaiting your approval · nothing has been built",
+    "label": "Round 1 · awaiting your approval · nothing has been built",
     "milestones": [
       {"label": "Plan agreed", "date": "Week 1"},
       {"label": "Sync engine", "date": "Week 2"},
@@ -42,7 +42,7 @@
       "text": "Longer history costs device storage; shorter history risks losing something.",
       "recommendation": {"answer": "30 days, then deleted for good", "why": "Matches what most note apps do and keeps storage bounded."},
       "group": "Open questions",
-      "revised": "New in round 2",
+      "revised": "New after the grill",
       "asked": "Is 30 days of history enough?",
       "answer": "It is the common default; pick a different number if your notes need longer."
     },
@@ -92,14 +92,14 @@
       "layout": "side",
       "text": "Pick the settings layout for the sync controls.",
       "group": "Settings screen",
-      "revised": "Updated from round 1",
+      "revised": "Updated after your brief",
       "options": [
         {"id": "a", "label": "Own page", "text": "Settings > Sync, one level down.", "html": "<div class=\"m\"><h4>Settings</h4><div class=\"row\"><span>Sync</span><span>›</span></div><div class=\"row\"><span>Appearance</span><span>›</span></div></div>"},
         {"id": "b", "label": "Main page", "text": "The toggle sits on the main settings page.", "recommended": true, "html": "<div class=\"m\"><h4>Settings</h4><div class=\"row\"><span>Sync</span><span class=\"pill\">On</span></div><div class=\"row\"><span>Appearance</span><span>›</span></div></div>"}
       ]
     }
   ],
-  "next": "Once you press Start building, the sync engine work begins; the settings screen follows in week 3.",
+  "next": "The sync engine comes first; the settings screen follows in week 3.",
   "gate": {
     "label": "Start building",
     "text": "Approves the whole plan as it stands. The agent starts with the sync engine and reports back after each milestone.",
