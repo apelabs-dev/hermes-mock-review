@@ -246,17 +246,27 @@ def get_feedback(review_id: str, round_n: Optional[int] = None) -> Dict[str, Any
             r = store.get_round(data, r["n"])
         except (ReviewError, ValueError, OSError) as e:   # the read itself must never fail on this
             log.warning("could not record the feedback read for %s round %s: %s", review_id, r["n"], e)
-    return {"review_id": data["id"], "title": data["title"], "round": r["n"], "status": data["status"],
-            "kind": r.get("kind", "variants"), "decisions": store.round_index(r),
-            "submission": r.get("submission"), "feedback": r.get("feedback"),
-            "feedback_path": service.feedback_path(data["id"], r["n"]) if r.get("feedback") else None,
-            "markdown": feedback.render_markdown(data, r)}
+    res = {"review_id": data["id"], "title": data["title"], "round": r["n"], "status": data["status"],
+           "kind": r.get("kind", "variants"), "decisions": store.round_index(r),
+           "submission": r.get("submission"), "feedback": r.get("feedback"),
+           "feedback_path": service.feedback_path(data["id"], r["n"]) if r.get("feedback") else None,
+           "markdown": feedback.render_markdown(data, r),
+           "action": (r.get("feedback") or {}).get("action", "send")}
+    # The build instruction only while it is still owed: an open review whose newest round is this one.
+    if res["action"] == "build" and data["status"] == "open" and r["n"] == data["rounds"][-1]["n"]:
+        label = (r.get("gate") or {}).get("label") or "Start building"
+        res["next_step"] = (f"The reviewer approved the whole round and pressed {label}. Build it now in this session. "
+                            "When done, call mock_review_add_round with the result (what you built, with notes_answered "
+                            "for every note) so the reviewer sees it on the same link. Do not ask for confirmation "
+                            "again.")
+    return res
 
 
 @_owned
 def ack(review_id: str, round_n: Optional[int] = None) -> Dict[str, Any]:
     """The session has handled a round's submission (answered in chat, or nothing more is coming): no stalled ping
-    for it. Once per submission; an amend is a new submission and needs its own ack."""
+    for it. Once per submission; an amend is a new submission and needs its own ack. A build (Start building) expects
+    round N+1, so the session builds and adds that round instead; an ack there only silences the ping."""
     with store.locked(review_id):
         data = store.load(review_id)
         r = store.get_round(data, round_n)

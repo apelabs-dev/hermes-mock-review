@@ -147,7 +147,8 @@ def tools() -> List[Dict[str, Any]]:
             "name": "mock_review_add_round",
             "description": "Add the next round to an open mock review (same link). Keeps the review's design profile; "
                            "pass project (absolute repo path) so a bound profile applies. Mocks must use the "
-                           "profile's colours and fonts, or the call fails.",
+                           "profile's colours and fonts, or the call fails. After Start building, post the "
+                           "build result here.",
             "inputSchema": {"type": "object", "properties": {
                 "review_id": {"type": "string"},
                 **round_props,
@@ -156,7 +157,8 @@ def tools() -> List[Dict[str, Any]]:
         },
         {
             "name": "mock_review_feedback",
-            "description": "Read a round's feedback (marks, pins, notes) as JSON + markdown.",
+            "description": "Read a round's feedback (marks, pins, notes) as JSON + markdown. action is send or build; "
+                           "on build, follow next_step.",
             "inputSchema": {"type": "object", "properties": {
                 "review_id": {"type": "string"},
                 "round": {"type": "integer", "description": "Default: current."},
@@ -164,7 +166,8 @@ def tools() -> List[Dict[str, Any]]:
         },
         {
             "name": "mock_review_ack",
-            "description": "Mark a round's feedback as handled (answered here, or no round coming): no stalled ping.",
+            "description": "Mark a round's feedback as handled (answered here, or no round coming): no stalled ping. "
+                           "Not instead of building after Start building.",
             "inputSchema": {"type": "object", "properties": {
                 "review_id": {"type": "string"},
                 "round": {"type": "integer", "description": "Default: current."},

@@ -381,8 +381,10 @@ def test_build_goes_through_service_submit_and_reaches_feedback_md(env, tmp_path
     assert r["feedback"]["action"] == "build"
     md = (config.data_root() / data["id"] / "rounds/1/feedback.md").read_text(encoding="utf-8")
     assert "**Start building pressed**" in md
-    assert service.nothing_to_build(r)                    # answered questions are resolved, not open
-    assert "approved 4, change 0, skip 1" in service.notice_text(store.load(data["id"]), r)
+    assert feedback.decision_counts(r["feedback"], r["decisions"])["open"] == 0   # answered questions are resolved
+    assert not service.nothing_to_build(r)                # a build expects round 2: the result
+    assert service.notice_text(store.load(data["id"]), r) == (
+        "📨 Plan: Got it — building round 1's plan now. The result lands as round 2 on the same link.")
 
 
 # ---------- gate_state ----------

@@ -87,11 +87,15 @@ config_schema:
   stale_after_minutes:
     type: float
     default: 15.0
-    description: "Minutes after a submitted round with no new round before the board server pings the origin chat that the agent may have stalled. No ping for a round with nothing to build (every decision approved or skipped, no pins, no general notes) or one the agent acknowledged (mockreview ack). 0 = never ping. Env: MOCKREVIEW_STALE_AFTER_MINUTES."
+    description: "Minutes after a submitted round with no new round before the board server pings the origin chat that the agent may have stalled. No ping for a round with nothing to build (every decision approved or skipped, no pins, no general notes, Start building not pressed) or one the agent acknowledged (mockreview ack). 0 = never ping. Env: MOCKREVIEW_STALE_AFTER_MINUTES."
   stale_after_read_minutes:
     type: float
     default: 60.0
     description: "Once the agent has read a submission's feedback (mock_review_feedback or mockreview feedback), minutes after that read with no new round before the stalled ping. 0 = no ping once the feedback was read. Env: MOCKREVIEW_STALE_AFTER_READ_MINUTES."
+  build_stale_factor:
+    type: float
+    default: 4.0
+    description: "A build takes longer than a feedback round: after Start building, stale_after_minutes and stale_after_read_minutes are multiplied by this before the stalled ping, and the ping names the longer wait. 1 = the same wait as Send. A wait of 0 stays off. Env: MOCKREVIEW_BUILD_STALE_FACTOR."
   wake_toolsets:
     type: list
     default: []

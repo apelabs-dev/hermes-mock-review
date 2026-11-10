@@ -52,7 +52,9 @@ takes `decisions`, `prototype`, `design`, `project`, `no_design`, `off_brand`, `
 
 `mock_review_feedback` reads a round's marks, pins and notes plus a markdown rendering. `review_id` is required and
 `round` is optional (default: the current round). Reading the newest round records that the agent has the feedback, so
-the stalled ping, if any, starts from that read.
+the stalled ping, if any, starts from that read. The result carries `action` (`send`, or `build` after Start building).
+While a build round is the newest round of an open review, it also carries `next_step`: build now and post the result
+with `mock_review_add_round`.
 
 `mock_review_ack` marks a round's feedback as handled, so no stalled ping is sent for it. `review_id` is required and
 `round` is optional. It fails when the round has no submitted feedback.

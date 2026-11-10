@@ -48,6 +48,9 @@ def notice_text(data: Dict[str, Any], round_: Dict[str, Any]) -> str:
     """The instant ack sent to the origin chat on an accepted submit. Counts and title only, never reviewer text."""
     fb = round_.get("feedback") or {}
     n = round_["n"]
+    if is_build(round_):
+        return (f"📨 {data['title']}: Got it — building round {n}'s plan now. "
+                f"The result lands as round {n + 1} on the same link.")
     detail = ""
     if fb.get("kind") == "decisions":
         from .store import round_index
@@ -68,13 +71,20 @@ def stalled_text(data: Dict[str, Any], round_: Dict[str, Any], minutes: float,
             f"The agent may have stalled; ask in this chat or resend from the board.")
 
 
+def is_build(round_: Dict[str, Any]) -> bool:
+    """True when the round's submission pressed the gate ("Start building"): the agent builds and posts round N+1."""
+    return (round_.get("feedback") or {}).get("action") == "build"
+
+
 def nothing_to_build(round_: Dict[str, Any]) -> bool:
     """True when a submitted decisions round asks for no further work: every decision is Approved or Skipped (a note
-    on an approve or skip is fine), with no pins and no general notes. The agent is only expected to close then, so
-    no round N+1 will come and a stalled ping would be wrong."""
+    on an approve or skip is fine), with no pins and no general notes, and the gate was not pressed. The agent is only
+    expected to close then, so no round N+1 will come and a stalled ping would be wrong. A build is the opposite: the
+    whole round is approved precisely so that round N+1 (the result) comes."""
     from .store import round_index
     fb = round_.get("feedback") or {}
-    if fb.get("kind") != "decisions" or fb.get("pins") or (fb.get("guidelines") or "").strip():
+    if fb.get("kind") != "decisions" or fb.get("action") == "build" or fb.get("pins") \
+            or (fb.get("guidelines") or "").strip():
         return False
     index = round_index(round_)
     c = feedback.decision_counts(fb, index)
@@ -174,6 +184,7 @@ def _build_payload(data: Dict[str, Any], round_: Dict[str, Any]) -> Dict[str, An
         "review_url": store.review_url(data),
         "mode": data["mode"],
         "amended": (round_.get("submission") or {}).get("seq", 1) > 1,
+        "action": (round_.get("feedback") or {}).get("action", "send"),
     }
 
 
@@ -267,7 +278,8 @@ def _deliver_notice(review_id: str, round_n: int, key: str, url: Optional[str] =
     permanent: the payload cannot be built, or the gateway rejected it with 400/413/422); no_route (the gateway has no
     such route, 404: re-run `hermes mockreview setup`); skipped (the stalled ping only: nothing to build, or the
     session acknowledged the submission). The ack also waits for the wake to be accepted, because
-    "Hermes is working on it" is only true then."""
+    "Hermes is working on it" is only true then. After Start building the stalled ping waits build_stale_factor times
+    longer."""
     if owner.is_bound():
         return False, "not the owner service: only the board server delivers notices"
     now = time.time() if now is None else now
@@ -303,11 +315,16 @@ def _deliver_notice(review_id: str, round_n: int, key: str, url: Optional[str] =
                 sub[key] = state
                 store.save(review_id, data)
                 return False, f"skipped: {skip}"
+            # A build takes longer than a feedback round: both waits stretch by build_stale_factor, and the ping
+            # names the wait that applied.
+            factor = settings.get("build_stale_factor") if is_build(r) else 1
+            minutes *= factor
             read = _parse_iso(sub.get("read_at"))
             if read is not None:
                 read_minutes = settings.get("stale_after_read_minutes")
                 if not read_minutes:
                     return False, "the feedback was read; read pings are off"
+                read_minutes *= factor
                 if now - read < read_minutes * 60.0:
                     return False, "read, not stale yet"
             else:

@@ -179,7 +179,8 @@ Outbound network calls:
 - The same local webhook again, on a second route (`<webhook_route>-<platform>-notice`): up to two more signed POSTs,
   still loopback only. One right after the wake-up is accepted (an instant "got it, working on round N" in the origin
   chat, also mirrored into that chat's session), and one later, only when a sent round gets no new round within
-  `stale_after_minutes` (or `stale_after_read_minutes` after the agent read it), to say the agent may have stalled. No
+  `stale_after_minutes` (or `stale_after_read_minutes` after the agent read it; both times `build_stale_factor` after
+  Start building), to say the agent may have stalled. No
   ping for a round with nothing left to build, one the agent acknowledged, or a closed review. Both carry the review title and counts, never your notes, and
   use the same signing secret as the wake-up.
 - here.now (`https://here.now/api/v1`), only for reviews you host with `herenow`: the plugin publishes the board and

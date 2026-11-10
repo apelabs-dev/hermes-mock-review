@@ -84,11 +84,14 @@ SPEC: List[Setting] = [
             lo=0, hi=86400),
     Setting("stale_after_minutes", "float", 15.0, "Minutes after a submitted round with no new round before the "
             "board server pings the origin chat that the agent may have stalled. No ping for a round with nothing to "
-            "build (every decision approved or skipped, no pins, no general notes) or one the agent acknowledged "
-            "(mockreview ack). 0 = never ping.", "feedback", lo=0, hi=10080),
+            "build (every decision approved or skipped, no pins, no general notes, Start building not pressed) or one "
+            "the agent acknowledged (mockreview ack). 0 = never ping.", "feedback", lo=0, hi=10080),
     Setting("stale_after_read_minutes", "float", 60.0, "Once the agent has read a submission's feedback "
             "(mock_review_feedback or mockreview feedback), minutes after that read with no new round before the "
             "stalled ping. 0 = no ping once the feedback was read.", "feedback", lo=0, hi=10080),
+    Setting("build_stale_factor", "float", 4.0, "A build takes longer than a feedback round: after Start building, "
+            "stale_after_minutes and stale_after_read_minutes are multiplied by this before the stalled ping, and the "
+            "ping names the longer wait. 1 = the same wait as Send. A wait of 0 stays off.", "feedback", lo=1, hi=24),
     Setting("wake_toolsets", "list", [], "Hermes toolsets the session woken by Send may use, for example mock-review, "
             "terminal, file (the list replaces Hermes's webhook default). hermes mockreview setup prints the toolsets line to add by hand to the wake "
             "route in webhook_subscriptions.json; add it again after every setup run. Empty: Hermes's safe webhook tools only, and "

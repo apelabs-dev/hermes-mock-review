@@ -144,7 +144,8 @@ Send does three things, so a chat that stays silent is a real signal:
    "Got your feedback on `<title>`, round N ... Hermes is working on round N+1".
 3. If no new round appears within `stale_after_minutes` (default 15), a ping posts to the same chat saying the agent may
    have stalled. Once the session has read the feedback (`mock_review_feedback`), the ping waits
-   `stale_after_read_minutes` (default 60) from that read instead and says Hermes read it and posted no round.
+   `stale_after_read_minutes` (default 60) from that read instead and says Hermes read it and posted no round. After
+   Start building both waits are multiplied by `build_stale_factor` (default 4), and the ack says the build started.
 
 Check them in order:
 
@@ -160,7 +161,8 @@ Check them in order:
 - The ping only fires while the board server runs, for open reviews with wake on, once per submission, and only if no
   newer round exists. `stale_after_minutes` 0 turns it off. The board shows the same hint.
 - No ping is expected (the stored submission's `stalled_notice` shows `skipped`) when the round asks for no more work:
-  every decision Approved or Skipped, with no pins and no general notes. Close the review when you are done.
+  every decision Approved or Skipped, with no pins, no general notes and no Start building. Close the review when you
+  are done.
 - The session can mark a submission as handled with `mockreview ack <review id> [--round N]` (tool `mock_review_ack`),
   for example when it answered in chat: no ping for that submission. An amend is a new submission with its own clock.
 - Closing a review, by hand or by `auto_close_idle_days`, drops any ping not yet sent (`dropped`, reason
