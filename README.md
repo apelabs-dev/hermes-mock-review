@@ -27,7 +27,7 @@ To see a plan board without an agent, create the demo from a checkout with a boa
 
 `examples/plan-demo/decisions.json` uses every 1.2 block; the printed link opens round 1.
 
-<img src="docs/img/plan-board.png" alt="The plan demo board: a plan section with a decision card, and the Start building gate ready" width="100%">
+<img src="docs/img/plan-board.png" alt="The plan demo board: status and milestones, your notes answered, already decided, two question cards (one with a typed answer), and the Start building gate ready" width="100%">
 
 <img src="docs/img/showcase.jpg" alt="mock-review: a Discord thread next to a review board showing a Cash Flow decision" width="100%">
 
