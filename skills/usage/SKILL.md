@@ -50,6 +50,10 @@ The feedback then has `action: "build"` and a `next_step`. The plugin already po
 appear in the tally or the marks. For a planning task use `"preset": "plan"` with `settled`, `defaults`, `question` and
 `piece` blocks; use the design preset (the default) with `decision` blocks for visual options.
 
+Question or decision: if you can list the answers, use a `decision` with two or three options (plan boards take them
+too). Use a `question` only for a value or policy the user owns (a number, a limit, a name) or an answer too open to
+list, and put your best answer in `recommendation`. Never make the user type an option you could have listed.
+
 - `text` `{title?, text}`: prose that frames the round.
 - `callout` `{tone, title?, text}`: one constraint or risk. tone is neutral, ok, warn, err or accent.
 - `cards` `{title?, items: [{title, text?, pill?, tone?}]}`: 1 to 12 items, for "what is changing".

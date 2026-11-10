@@ -1275,10 +1275,8 @@
     if (pressed) {
       append(card, h('p', { class: 'gate-done', role: 'status' }, icon('check'), label + ' pressed' + (pressedAt(r) ? ' · ' + pressedAt(r) : '')));
     } else {
-      append(card, h('div', { class: 'gate-actions' },
-        h('button', { class: 'btn btn-primary btn-gate', id: 'gate-btn', onclick: function () { if (gateState(r.decisions, S.draft.marks, g).ready && isEditable()) send('build'); } },
-          icon(gateIcon(false, true)), h('span', { class: 'gate-label', text: label })),
-        h('span', { class: 'gate-reason', id: 'gate-reason' })));
+      // the Build button itself lives in the footer, in the Send slot; the card keeps the live reason
+      append(card, h('div', { class: 'gate-actions' }, icon('lock'), h('span', { class: 'gate-reason', id: 'gate-reason' })));
     }
     var after = g.after || [], later = g.later || [];
     var lists = after.length || later.length ? h('div', { class: 'gate-lists' },
@@ -1288,20 +1286,30 @@
     setTimeout(updateGate, 0);
     return sec;
   }
+  var GATE_BTN = 'Build';   // short, so it fits the footer's Send slot on a phone
+  function gateReason(gs, ed) {
+    return !ed ? 'This round is locked.' : S.sending ? 'Sending…' : gs.ready ? 'Nothing is open or on Change.' : gs.reason;
+  }
   function updateGate() {
-    var btn = document.getElementById('gate-btn'); if (!btn) return;
     var r = viewed(), g = r.gate || (DOC && DOC.dec.gate); if (!g) return;
     var gs = gateState(r.decisions, S.draft.marks, g), ed = isEditable();
     var ok = gs.ready && ed && !S.sending;
-    var reason = !ed ? 'This round is locked.' : S.sending ? 'Sending…' : gs.ready ? 'Nothing is open or on Change.' : gs.reason;
+    var reason = gateReason(gs, ed);
+    var rs = document.getElementById('gate-reason');
+    if (rs) {
+      rs.textContent = gs.ready && ed && !S.sending ? reason + ' Press ' + GATE_BTN + ' below.' : reason;
+      rs.classList.toggle('ready', ok);
+      var gi = rs.parentNode ? Array.prototype.filter.call(rs.parentNode.children, function (c) { return /^svg$/i.test(c.tagName); })[0] : null;
+      var want0 = ok ? 'check' : 'lock';
+      if (gi && gi.getAttribute('data-icon') !== want0) gi.replaceWith(icon(want0));
+    }
+    var btn = document.getElementById('gate-btn'); if (!btn) return;
     btn.setAttribute('aria-disabled', ok ? 'false' : 'true');
     btn.title = ok ? (g.label || 'Start building') + ': send the approved plan to Hermes' : reason;
     btn.classList.toggle('is-disabled', !ok);
     var want = gateIcon(gs.ready, ed), cur = btn.querySelector('svg.ico');
     if (cur && cur.getAttribute('data-icon') !== want) { btn.replaceChild(icon(want), cur); }
-    var lab = btn.querySelector('.gate-label'); if (lab) lab.textContent = S.sending ? 'Sending…' : (g.label || 'Start building');
-    var rs = document.getElementById('gate-reason');
-    if (rs) { rs.textContent = reason; rs.classList.toggle('ready', ok); }
+    var lab = btn.querySelector('.gate-label'); if (lab) lab.textContent = S.sending ? 'Sending…' : GATE_BTN;
   }
 
   function renderTally(r) {   // lives in the footer
@@ -1939,10 +1947,17 @@
     }
     if (missing.length && !S.error) setFootMsg('warn', 'Add a note to each Change before sending:', '', missing);
     var ready = hasContent(S.draft) && !S.sending && !missing.length;
-    var gated = isNew(r) && !!r.gate;   // a round with a gate: Send is the secondary "Send notes", the gate is primary
+    var gated = isNew(r) && !!r.gate && !S.amending;   // a gate round: one slot, Send notes until the gate is ready, then Build
+    var gs = gated ? gateState(r.decisions, S.draft.marks, r.gate) : null;
+    if (gated && gs.ready && isEditable()) {
+      inner.appendChild(h('button', { class: 'btn btn-primary btn-send btn-gate', id: 'gate-btn',
+        onclick: function () { send('build'); }, title: (r.gate.label || 'Start building') + ': send the approved plan to Hermes' },
+        S.sending ? h('span', { class: 'spinner' }) : icon('send'), h('span', { class: 'gate-label', text: S.sending ? 'Sending…' : GATE_BTN })));
+      return;
+    }
     inner.appendChild(h('button', {
-      class: 'btn btn-send' + (gated ? '' : ' btn-primary'), disabled: ready ? null : true, onclick: function () { send(); },
-      title: missing.length ? 'Every Change needs a note first' : hasContent(S.draft) ? 'Send this round’s feedback to Hermes' : (isNew(r) ? 'Mark a decision, pin a mock or write a note first' : 'Pick a variant, drop a pin or write a note first')
+      class: 'btn btn-send btn-primary', disabled: ready ? null : true, onclick: function () { send(); },
+      title: missing.length ? 'Every Change needs a note first' : gated && !hasContent(S.draft) ? 'Mark a block, answer a question or write a note first. ' + GATE_BTN + ' takes this spot once nothing is open or on Change' : hasContent(S.draft) ? 'Send this round’s feedback to Hermes' : (isNew(r) ? 'Mark a decision, pin a mock or write a note first' : 'Pick a variant, drop a pin or write a note first')
     }, S.sending ? h('span', { class: 'spinner' }) : icon('send'), S.sending ? 'Sending…' : (S.amending ? 'Send amendment' : (gated ? 'Send notes' : isNew(r) ? 'Send' : 'Send to Hermes'))));
   }
 

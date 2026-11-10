@@ -494,7 +494,7 @@ figure.ctx-fig { margin-top: 16px; }
   .t-count .ts { display: inline; }
   .dz { padding: 0 14px 32px; }
   .doc-head { padding-top: 22px; }
-  .dnav { position: static; }
+  .dnav { margin: 12px 0 6px; padding: 8px 0; }   /* stays sticky on a phone: the section jumps are the way around a long plan */
   .blk { padding: 24px 0 22px; }
   .ihead h3 { font-size: 18px; }
   .decide .grp { flex: 1 1 auto; justify-content: space-between; }
@@ -562,8 +562,9 @@ figure.ctx-fig { margin-top: 16px; }
 .gate { border-bottom: 0; }
 .gate-card { padding: 18px 20px; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--surface); box-shadow: var(--shadow-sm); }
 .gate-card h2 { margin: 0 0 6px; }
-.gate-actions { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap; margin-top: 16px; }
-.btn-gate { height: 44px; padding: 0 20px; font-size: 15px; border-radius: 12px; }
+.gate-actions { display: flex; align-items: center; gap: 8px; margin-top: 14px; color: var(--warn); }
+.gate-actions svg.ico { flex: none; }
+.gate-actions:has(.ready) { color: var(--ok); }
 .btn-gate[aria-disabled=true] { opacity: .45; cursor: not-allowed; }
 .btn-gate[aria-disabled=true]:hover { background: var(--accent); border-color: var(--accent); }
 .gate-reason { min-width: 0; font-size: 13.5px; font-weight: 600; color: var(--warn); overflow-wrap: anywhere; }
@@ -584,5 +585,4 @@ figure.ctx-fig { margin-top: 16px; }
   .qdecide .qbtn { flex: 1 1 auto; }
   .qresult { flex-basis: 100%; }
   .gate-card { padding: 16px; }
-  .btn-gate { width: 100%; }
 }

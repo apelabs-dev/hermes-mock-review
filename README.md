@@ -10,11 +10,12 @@ inline mocks at desktop, tablet and phone widths, in light and dark, and wear a 
 A `plan` preset round uses the same fixed skeleton as a design board: a status line, "Already decided", a defaults card,
 the plan grouped by section, then a final approval. Questions carry a recommendation (go with it, or type a different
 answer); pieces, defaults and decisions are approved, changed or skipped, and "Approve the rest" fills a section in one
-press. The "Start building" gate stays locked until every question is answered, everything else is approved or skipped,
-and nothing is on Change.
+press. The footer button reads "Send notes" until every question is answered, everything else is approved or skipped
+and nothing is on Change; then it turns into "Build". The section bar stays pinned under the header, so a long plan is
+one tap from any section.
 
-Start building wakes the same chat session with the approved plan. The agent builds there, and the result arrives as the
-next round on the same link, with "Your notes, answered" and Revised badges on the blocks that changed.
+Build wakes Hermes on the chat the board came from, with the approved plan. The agent builds, and the result arrives as
+the next round on the same link, with "Your notes, answered" and Revised badges on the blocks that changed.
 
 A design profile is bound to a project once, with `hermes mockreview design bind <name> <abs project path>`. It then
 auto-applies to every create and add-round in that project (or its git repository and worktrees). A round whose mocks use
@@ -27,7 +28,7 @@ To see a plan board without an agent, create the demo from a checkout with a boa
 
 `examples/plan-demo/decisions.json` uses every 1.2 block; the printed link opens round 1.
 
-<img src="docs/img/plan-board.png" alt="The plan demo board: status and milestones, your notes answered, already decided, two question cards (one with a typed answer), and the Start building gate ready" width="100%">
+<img src="docs/img/plan-board.png" alt="The plan demo board: status and milestones, your notes answered, already decided, two question cards (one with a typed answer), the gate cleared and Build in the footer" width="100%">
 
 <img src="docs/img/showcase.jpg" alt="mock-review: a Discord thread next to a review board showing a Cash Flow decision" width="100%">
 

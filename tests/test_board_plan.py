@@ -11,7 +11,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SRC = (ROOT / 'mockreview/board/board.js').read_text(encoding='utf-8')
 NAMES = ['h', 'append', 'paras', 'entryKind', 'capCustom', 'isResolved', 'gateState', 'progressLine', 'isMarkableBlock',
-         'groupBlocks', 'approveRestIds', 'groupHasBulk', 'gateIcon', 'endLine', 'icon', 'updateGate', 'cleanMarks', 'answerText', 'payload', 'renderQuestion', 'renderPiece',
+         'groupBlocks', 'approveRestIds', 'groupHasBulk', 'gateIcon', 'endLine', 'icon', 'updateGate', 'gateReason', 'cleanMarks', 'answerText', 'payload', 'renderQuestion', 'renderPiece',
          'renderSettled', 'renderAsked', 'renderNotesAnswered', 'markEmpty', 'submittedFeedback', 'watchWindowMs']
 
 
@@ -21,7 +21,8 @@ def run(test):
         pytest.skip('Node is needed for executed board DOM tests')
     parts = [re.search(r'^  var LIMIT = .*$', SRC, re.M).group(0), "var PROGRESS = " + re.search(r'^  var PROGRESS = (.*);$', SRC, re.M).group(1) + ";",
              "var NOTE_CHIP = " + re.search(r'^  var NOTE_CHIP = (.*);$', SRC, re.M).group(1) + ";",
-             "var WATCH_EVERY = " + re.search(r'^  var WATCH_EVERY = (.*);$', SRC, re.M).group(1) + ";"]
+             "var WATCH_EVERY = " + re.search(r'^  var WATCH_EVERY = (.*);$', SRC, re.M).group(1) + ";",
+             "var GATE_BTN = " + re.search(r"^  var GATE_BTN = ([^;]*);", SRC, re.M).group(1) + ";"]
     for name in NAMES:
         start = re.search(r'^  function ' + name + r'\(', SRC, re.M)
         assert start, name
@@ -171,7 +172,8 @@ const ico = () => btn.querySelectorAll('svg')[0].getAttribute('data-icon');
 updateGate(); assert.equal(ico(), 'lock'); assert.equal(btn.querySelectorAll('svg').length, 1);
 S.draft.marks = {p1: {status: 'approve'}, q1: {choice: 'recommended'}};
 updateGate(); assert.equal(ico(), 'send'); assert.equal(btn.children[0].tagName, 'SVG'); assert.equal(btn.querySelectorAll('svg').length, 1);
-assert.equal(rs.textContent, 'Nothing is open or on Change.'); assert.ok(rs.classList.contains('ready'));
+assert.equal(rs.textContent, 'Nothing is open or on Change. Press Build below.'); assert.ok(rs.classList.contains('ready'));
+assert.equal(lab.textContent, 'Build');   // short label: it shares the footer slot with Send notes
 S.sending = true; updateGate(); assert.equal(ico(), 'send'); assert.equal(lab.textContent, 'Sending…');   // stays on send while sending
 S.sending = false; ed = false; updateGate(); assert.equal(ico(), 'lock');
 S.draft.marks = {p1: {status: 'change'}, q1: {choice: 'recommended'}}; ed = true; updateGate(); assert.equal(ico(), 'lock');
@@ -226,4 +228,21 @@ assert.equal(watchWindowMs({n: 2, feedback: {action: 'build'}}), 8 * 3600 * 1000
 assert.equal(watchWindowMs({n: 2, feedback: {action: 'send'}}), 2 * 3600 * 1000);
 assert.equal(watchWindowMs({n: 2, feedback: {}}), 2 * 3600 * 1000);
 assert.equal(watchWindowMs({n: 2}), 2 * 3600 * 1000);   // no feedback yet: the ordinary window
+''')
+
+
+def test_gate_card_has_no_button_and_its_reason_still_updates():
+    run('''
+global.ICONS = {lock: '', send: '', check: ''};
+const row = document.createElement('div'); row.appendChild(icon('lock'));
+const rs = document.createElement('span'); rs.setAttribute('id', 'gate-reason'); row.appendChild(rs);
+global.ROOT_NODE = row;
+const I = [{id: 'p1', kind: 'piece', group: 'A'}, {id: 'q1', kind: 'question', group: 'Q'}];
+const g = {label: 'Start building'};
+global.S = {draft: {marks: {}}, sending: false}; global.DOC = {dec: {gate: g}}; global.viewed = () => ({decisions: I, gate: g}); global.isEditable = () => true;
+updateGate(); assert.ok(/still open/.test(rs.textContent), rs.textContent); assert.ok(!rs.classList.contains('ready'));
+assert.equal(row.children[0].getAttribute('data-icon'), 'lock');
+S.draft.marks = {p1: {status: 'approve'}, q1: {choice: 'recommended'}};
+updateGate(); assert.equal(rs.textContent, 'Nothing is open or on Change. Press Build below.'); assert.ok(rs.classList.contains('ready'));
+assert.equal(row.children[0].getAttribute('data-icon'), 'check'); assert.equal(row.children.length, 2);
 ''')

@@ -47,8 +47,9 @@ id of a block in this file (any block with an id, including a recap). `note` (th
 
     {"ref": "p2", "note": "What if two devices edit the same note?", "answer": "The newer edit wins; see the revised piece.", "status": "second-look"}
 
-`gate`: the locked final approval. The board opens its button only when nothing is left on Change, every markable block
-is approved or skipped and every question is answered. Pressing it sends the review with the action `build`.
+`gate`: the locked final approval. The gate card shows what is still open; the footer's Send button reads "Send notes"
+until nothing is left on Change, every markable block is approved or skipped and every question is answered, and then
+turns into "Build". Pressing Build sends the review with the action `build`.
 
 - `label` is 40 characters and defaults to `Start building`.
 - `text` (600) says what happens when it is pressed.
@@ -119,6 +120,12 @@ different answer (280 characters), and may add a note. `title` is required (200 
 `recommendation` is required: `answer` (300 characters, required) and `why` (600).
 
     {"type": "question", "id": "q1", "title": "How long do deleted notes stay recoverable?", "recommendation": {"answer": "30 days", "why": "Keeps storage bounded."}, "group": "Open questions"}
+
+Question or decision? If you can write the answers down, it is a `decision`: two or three concrete alternatives the
+reviewer compares and picks with one tap, with or without a mock (the plan preset accepts decisions too). Use a
+`question` only when the answer is a value or policy the reviewer owns (a number, a limit, a name) or the range is too
+open to list; the recommendation is the one-tap default. Never make the reviewer type out an option you could have
+listed.
 
 `piece`: one piece of a plan, marked approve / change / skip with a note. `title` is required. `tag` (80), `text` (2000)
 and `items` (0 to 30 strings of 600 characters) are optional. `html` is an optional mock, cleaned exactly like a `mock`
