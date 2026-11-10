@@ -206,3 +206,4 @@ def test_mock_links_receive_pointer_events():
     assert re.search(r'\.cq\{[^}]*pointer-events:\s*none', css), 'expected the mock to block pointer events'
     rule = re.search(r'([^{}]*a\[href\][^{}]*)\{([^}]*)\}', css)
     assert rule and re.search(r'pointer-events:\s*auto', rule.group(2)), 'links in mocks must get pointer-events:auto'
+    assert re.search(r':host\(\.use\) \.cq\{pointer-events:\s*auto\}', css), 'Tap must let the mock take pointer events'

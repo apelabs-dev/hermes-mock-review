@@ -68,7 +68,8 @@ HANDOFF_LINE = "Round {round} feedback is saved; the build continues in this thr
 # The wake prompt Hermes renders for an inbound round. `{...}` placeholders are filled by Hermes from the payload.
 PROMPT_TEMPLATE = (
     "Mock review feedback is ready: {review_id} round {round} — {title}. "
-    "Read it with mock_review_feedback(review_id='{review_id}', round={round}), then act on the notes. "
+    "Read it with mock_review_feedback(review_id='{review_id}', round={round}), then act on the notes, "
+    "or build if Build was pressed. "
     "If this session has no mock_review_feedback tool or cannot write files, do not explain what is missing: reply "
     f"with exactly this one line and stop: {HANDOFF_LINE} "
     "Board: {review_url}"
@@ -1027,7 +1028,7 @@ def _run(args: argparse.Namespace) -> int:
                 dec.write_text(json.dumps({"blocks": [{"type": "text", "title": "Setup", "text": TEST_TITLE}]}), encoding="utf-8")
                 try:
                     res = api.create(title=TEST_TITLE, origin=None, brief=SETUP_BRIEF,
-                                     mode="local", decisions=str(dec), wake=False)
+                                     mode="local", decisions=str(dec), wake=False, no_design=True)
                 except (ReviewError, settings.SettingsError) as e:
                     msg = getattr(e, "message", None) or str(e)
                     print(f"test review pending: {msg}")

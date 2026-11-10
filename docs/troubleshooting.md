@@ -90,6 +90,20 @@ found, install one or set `MOCKREVIEW_BROWSER` to its executable; the board stay
 `decisions.json: ...` or `blocks[n]: ...`. The file failed validation. The message names the block. See
 [decisions-format.md](decisions-format.md).
 
+A create or add-round is refused as off-brand. A design profile is in effect (given, inherited by the round, or bound to
+the project) and the mocks use a colour or font it does not allow. Nothing was written. The message starts
+`Off-brand mock: N value(s) outside the design profile <name>. Nothing was written.` and lists each value with its exact
+location, once each:
+
+    blocks[3].options[b].html: color #ff6b00 is not in profile acme
+    blocks[1].html: font-family "Comic Sans MS" is not in profile acme
+
+Fix the mock to use the profile's tokens (`var(--accent)`, `var(--text)`, `var(--surface)`, `var(--font)`, ...), add the
+value to the profile's `mock.css` or `fonts.css`, or, when the round is off-brand on purpose, pass
+`--off-brand "<reason>"` (tools and MCP: `off_brand`). That is the only bypass: the reason (1 to 200 characters) is
+recorded on the round and on the review. See
+[decisions-format.md](decisions-format.md#brand-enforcement).
+
 ## Server and links
 
 `mock-review: http://127.0.0.1:8790 is already in use`. Another board server holds the port. It is often the one inside
@@ -144,7 +158,8 @@ Send does three things, so a chat that stays silent is a real signal:
    "Got your feedback on `<title>`, round N ... Hermes is working on round N+1".
 3. If no new round appears within `stale_after_minutes` (default 15), a ping posts to the same chat saying the agent may
    have stalled. Once the session has read the feedback (`mock_review_feedback`), the ping waits
-   `stale_after_read_minutes` (default 60) from that read instead and says Hermes read it and posted no round.
+   `stale_after_read_minutes` (default 60) from that read instead and says Hermes read it and posted no round. After
+   Build both waits are multiplied by `build_stale_factor` (default 4), and the ack says the build started.
 
 Check them in order:
 
@@ -160,7 +175,9 @@ Check them in order:
 - The ping only fires while the board server runs, for open reviews with wake on, once per submission, and only if no
   newer round exists. `stale_after_minutes` 0 turns it off. The board shows the same hint.
 - No ping is expected (the stored submission's `stalled_notice` shows `skipped`) when the round asks for no more work:
-  every decision Approved or Skipped, with no pins and no general notes. Close the review when you are done.
+  every decision Approved or Skipped, every question on its recommendation, with no pins, no general notes and no
+  Build. A typed answer that overrides a recommendation means the plan changes, so it keeps the ping. Close
+  the review when you are done.
 - The session can mark a submission as handled with `mockreview ack <review id> [--round N]` (tool `mock_review_ack`),
   for example when it answered in chat: no ping for that submission. An amend is a new submission with its own clock.
 - Closing a review, by hand or by `auto_close_idle_days`, drops any ping not yet sent (`dropped`, reason
@@ -168,6 +185,18 @@ Check them in order:
 - A notice that can never be delivered goes `dropped` with one warning in the server log and is not retried: a review
   whose origin has no chat id (created before chat ids were required), or a gateway answer of 400, 413 or 422. 401, 403,
   429 and 5xx answers are retried every `retry_seconds`.
+
+### Build pressed but nothing came back
+
+Build is a Send with `action: "build"`, so the three steps above apply: check the wake route first with
+`hermes mockreview owner` (it reports whether the board server runs and whether a create would pass the wake-route
+check, and sends nothing), then the ack, then the ping. The ack reads "Got it — building round N's plan now".
+
+The build gets longer clock than a feedback round: the stalled ping waits `stale_after_minutes x build_stale_factor` after
+the submit (defaults: 15 x 4 = 60 minutes), and once the session has read the feedback (`mock_review_feedback`) it waits
+`stale_after_read_minutes x build_stale_factor` from that read (defaults: 60 x 4 = 240 minutes). The feedback result
+carries `action: "build"` and a `next_step`; an ack only silences the ping, so a session that acknowledges instead of
+building posts no round. See [settings.md](settings.md) for the three settings.
 
 ## Multiplexing gateways
 

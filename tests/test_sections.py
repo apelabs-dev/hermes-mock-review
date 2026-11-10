@@ -264,7 +264,7 @@ def test_submit_end_to_end_markdown_and_webhook_have_only_decisions_plus_context
     for word in ("Constraint", "What's changing", "Compare", "callout", "cards"):
         assert word not in md
     counts = feedback.decision_counts(store.load(data["id"])["rounds"][0]["feedback"], store.round_index(store.load(data["id"])["rounds"][0]))
-    assert counts == {"approve": 1, "change": 1, "skip": 0, "open": 3}
+    assert counts == {"approve": 1, "change": 1, "skip": 0, "answered": 0, "open": 3}   # answered: questions (1.2)
     assert service.build_payload(store.load(data["id"]), store.load(data["id"])["rounds"][0]).keys() == payload.keys()
 
 

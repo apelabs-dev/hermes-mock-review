@@ -84,11 +84,13 @@ secret and sent to the same local webhook:
 
 - The ack. Send posts the wake-up first, and once the gateway has accepted it, posts the ack: "Got your feedback on
   `<title>`, round N (approved X, change Y, skip Z). Hermes is working on round N+1; the link lands here when it's
-  ready." (The counts appear for decision boards only.) If the wake-up fails, no ack is sent; it follows right after the
-  wake-up lands on a retry. An ack that fails is retried every `retry_seconds` (with a new delivery id after a gateway
-  error, because Hermes keeps the failed id as seen for an hour), and is dropped once a newer round exists or the review
-  closes.
-- The stalled ping. If a sent round gets no new round within `stale_after_minutes` (default 15, 0 turns it off), the board
+  ready." (The counts appear for decision boards only.) After Build it says "`<title>`: Got it — building round
+  N's plan now. The result lands as round N+1 on the same link." If the wake-up fails, no ack is sent; it follows right
+  after the wake-up lands on a retry. An ack that fails is retried every `retry_seconds` (with a new delivery id after a
+  gateway error, because Hermes keeps the failed id as seen for an hour), and is dropped once a newer round exists or the
+  review closes.
+- The stalled ping. If a sent round gets no new round within `stale_after_minutes` (default 15, 0 turns it off; times
+  `build_stale_factor`, default 4, after Build), the board
   server posts "No round N+1 yet ... The agent may have stalled" to the same chat, once per submission (an amend is a new
   submission). Only the board server runs this check, and only for open reviews with wake on. The board shows the same
   hint, and it polls every 30 seconds for up to two hours while a sent round has no successor, so the hint and the next

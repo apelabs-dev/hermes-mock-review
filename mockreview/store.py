@@ -189,12 +189,22 @@ TOKEN_KEYS = ("bg", "surface", "surface2", "line", "line2", "text", "muted", "fa
 COLOR_RE = re.compile(r"^(#[0-9a-fA-F]{3,8}|rgba?\([0-9.,\s%/]+\))$")
 FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
 LAYOUTS = ("side", "switch", "steps", "before-after")
-BLOCK_TYPES = ("text", "recap", "decision", "cards", "callout", "mock", "table")
+BLOCK_TYPES = ("text", "recap", "decision", "cards", "callout", "mock", "table", "settled", "defaults", "question", "piece")
+ID_BLOCKS = ("decision", "mock", "question", "piece", "defaults")   # one id namespace (recaps join it via the clash check)
 TONES = ("neutral", "ok", "warn", "err", "accent")
 BLOCK_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,23}")
 MAX_CARDS = 12
 MAX_COLUMNS = 6
 MAX_ROWS = 30
+PRESETS = ("design", "plan")
+NOTE_STATUSES = ("done", "second-look", "needs-pick")
+GATE_LABEL = "Build"
+MAX_ITEMS = 30
+MAX_MILESTONES = 6
+MAX_NOTES_ANSWERED = 40
+MAX_GATE_AFTER = 12
+MAX_GATE_LATER = 20
+MAX_PROJECTS = 50
 
 
 def designs_root() -> Path:
@@ -249,11 +259,124 @@ def validate_design(d: Path) -> Dict[str, Any]:
             if not (d / v).is_file():
                 raise ReviewError(f"design.json: {key} file not found: {v}")
             out[key] = v
+    out["projects"] = _clean_projects(raw.get("projects"))
     return out
 
 
+def _clean_projects(v: Any) -> List[str]:
+    """design.json `projects`: absolute directory paths the profile is bound to (deduplicated, at most MAX_PROJECTS)."""
+    if v is None:
+        return []
+    if not isinstance(v, list):
+        raise ReviewError("design.json: projects must be a list of absolute paths")
+    out: List[str] = []
+    seen = set()
+    for p in v:
+        if not isinstance(p, str) or not p.strip() or len(p) > 500 or not Path(p.strip()).is_absolute():
+            raise ReviewError(f"design.json: projects must hold absolute paths, got {p!r}")
+        p = p.strip()
+        key = os.path.normcase(os.path.normpath(p))
+        if key not in seen:
+            seen.add(key)
+            out.append(p)
+    if len(out) > MAX_PROJECTS:
+        raise ReviewError(f"design.json: at most {MAX_PROJECTS} projects per profile")
+    return out
+
+
+@contextlib.contextmanager
+def designs_locked() -> Iterator[None]:
+    """Serialises every edit of a saved profile (save, bind, unbind) so none loses another's `projects`."""
+    designs_root().mkdir(parents=True, exist_ok=True)
+    with locks.exclusive(designs_root() / ".lock"):
+        yield
+
+
+def _read_projects(d: Path) -> List[str]:
+    """The `projects` of a saved profile dir, [] when it has none or cannot be read."""
+    try:
+        return _clean_projects(json.loads((d / "design.json").read_text(encoding="utf-8")).get("projects"))
+    except (OSError, ValueError, ReviewError, AttributeError):
+        return []
+
+
+def project_bindings() -> Dict[str, List[str]]:
+    """{profile name: bound project paths} over the saved profiles that have any."""
+    out: Dict[str, List[str]] = {}
+    root = designs_root()
+    if root.is_dir():
+        for d in sorted(root.iterdir()):
+            if d.is_dir() and DESIGN_RE.match(d.name):
+                projects = _read_projects(d)
+                if projects:
+                    out[d.name] = projects
+    return out
+
+
+def _same_path(a: str, b: str) -> bool:
+    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+
+
+def _write_projects(d: Path, projects: List[str]) -> None:
+    raw = json.loads((d / "design.json").read_text(encoding="utf-8"))
+    raw["projects"] = projects
+    atomic_write(d / "design.json", json.dumps(raw, indent=2, ensure_ascii=False))
+
+
+def _saved_design(name: str) -> Path:
+    if not DESIGN_RE.match(name or ""):
+        raise ReviewError("design name must be lowercase letters, digits and dashes")
+    d = designs_root() / name
+    if not d.is_dir():
+        raise ReviewError(f"unknown design {name!r} (save it first with `mockreview design save`)")
+    validate_design(d)
+    return d
+
+
+def _conflict(path: str, name: str, bindings: Dict[str, List[str]]) -> None:
+    for other, paths in bindings.items():
+        if other != name and any(_same_path(path, p) for p in paths):
+            raise ReviewError(f"{path} is already bound to design {other!r}; unbind it there first "
+                              f"(`hermes mockreview design unbind {other} {path}`)")
+
+
+def bind_design(name: str, path: str) -> List[str]:
+    """Bind a project directory to a saved profile. Returns the profile's project list."""
+    if not isinstance(path, str) or not Path(path).is_absolute():
+        raise ReviewError(f"project path must be absolute: {path}")
+    if not Path(path).is_dir():
+        raise ReviewError(f"project directory not found: {path}")
+    real = os.path.realpath(path)
+    with designs_locked():
+        d = _saved_design(name)
+        _conflict(real, name, project_bindings())
+        projects = _read_projects(d)
+        if any(_same_path(real, p) for p in projects):
+            return projects
+        if len(projects) >= MAX_PROJECTS:
+            raise ReviewError(f"design {name!r} already has {MAX_PROJECTS} projects")
+        projects.append(real)
+        _write_projects(d, projects)
+        return projects
+
+
+def unbind_design(name: str, path: str) -> List[str]:
+    """Remove a project directory from a saved profile. Returns the profile's project list."""
+    if not isinstance(path, str) or not Path(path).is_absolute():
+        raise ReviewError(f"project path must be absolute: {path}")
+    with designs_locked():
+        d = _saved_design(name)
+        projects = _read_projects(d)
+        kept = [p for p in projects if not _same_path(path, p)]
+        if len(kept) == len(projects):
+            raise ReviewError(f"{path} is not bound to design {name!r}")
+        _write_projects(d, kept)
+        return kept
+
+
 def save_design(name: str, src: Path) -> Dict[str, Any]:
-    """Copy a design profile dir into designs/<name>/ (replacing the old one)."""
+    """Copy a design profile dir into designs/<name>/ (replacing the old one). The project bindings of the profile being
+    replaced carry over unless the source design.json brings its own `projects`."""
     if not DESIGN_RE.match(name):
         raise ReviewError("design name must be lowercase letters, digits and dashes")
     src = Path(src).expanduser()
@@ -262,13 +385,22 @@ def save_design(name: str, src: Path) -> Dict[str, Any]:
     info = validate_design(src)
     dest = designs_root() / name
     tmp = designs_root() / f".{name}.tmp"
-    if tmp.exists():
-        shutil.rmtree(tmp)
-    tmp.mkdir(parents=True)
-    _copy_assets(src, tmp)
-    if dest.exists():
-        shutil.rmtree(dest)
-    tmp.rename(dest)
+    with designs_locked():
+        if tmp.exists():
+            shutil.rmtree(tmp)
+        tmp.mkdir(parents=True)
+        _copy_assets(src, tmp)
+        own = "projects" in json.loads((src / "design.json").read_text(encoding="utf-8"))
+        projects = info["projects"] if own else (_read_projects(dest) if dest.is_dir() else [])
+        others = project_bindings()
+        for p in projects:
+            _conflict(p, name, others)
+        if projects != info["projects"] or (own and not projects):
+            _write_projects(tmp, projects)
+        info["projects"] = projects
+        if dest.exists():
+            shutil.rmtree(dest)
+        tmp.rename(dest)
     return info
 
 
@@ -284,6 +416,14 @@ def design_dir(name_or_path: str) -> Path:
         raise ReviewError(f"design profile not found: {name_or_path} (save one with `mockreview design save`)")
     validate_design(d)
     return d
+
+
+def saved_design_names() -> List[str]:
+    """The names a profile is saved under (its directory names, the ones `design=` takes), sorted."""
+    root = designs_root()
+    if not root.is_dir():
+        return []
+    return sorted(d.name for d in root.iterdir() if d.is_dir() and DESIGN_RE.match(d.name))
 
 
 def list_designs() -> List[Dict[str, Any]]:
@@ -369,9 +509,124 @@ def _table(b: Dict[str, Any], where: str) -> Dict[str, Any]:
     return {"columns": columns, "rows": out_rows, "highlight_col": hl}
 
 
+def _line(v: Any, limit: int) -> str:
+    return _clean_line(v, limit) if isinstance(v, str) else ""
+
+
+def _obj(v: Any, where: str, shape: str) -> Dict[str, Any]:
+    if not isinstance(v, dict):
+        raise ReviewError(f"{where}: must be an object {shape}")
+    return v
+
+
+def _list(v: Any, where: str, lo: int, hi: int, what: str) -> List[Any]:
+    if v is None and lo == 0:
+        return []
+    if not isinstance(v, list) or not lo <= len(v) <= hi:
+        raise ReviewError(f"{where}: {what} must be a list of {lo}-{hi}")
+    return v
+
+
+def _strings(v: Any, where: str, lo: int, hi: int, limit: int, what: str = "items") -> List[str]:
+    out = []
+    for j, x in enumerate(_list(v, where, lo, hi, what)):
+        s = _line(x, limit)
+        if not s:
+            raise ReviewError(f"{where}.{what}[{j}]: must be non-empty text")
+        out.append(s)
+    return out
+
+
+def _markable_extras(b: Dict[str, Any]) -> Dict[str, str]:
+    """revised / asked / answer / group: the round 2+ badges and strip, and the plan preset's section label."""
+    return {"revised": _line(b.get("revised"), 40), "asked": _txt(b.get("asked"), 600),
+            "answer": _txt(b.get("answer"), 600), "group": _line(b.get("group"), 40)}
+
+
+def _settled(b: Dict[str, Any], where: str) -> Dict[str, Any]:
+    out = []
+    for j, it in enumerate(_list(b.get("items"), where, 1, MAX_ITEMS, "settled items")):
+        w = f"{where}.items[{j}]"
+        it = _obj(it, w, "{title, quote?, rule?}")
+        title = _line(it.get("title"), 120)
+        if not title:
+            raise ReviewError(f"{w}: title is required")
+        out.append({"title": title, "quote": _txt(it.get("quote"), 600), "rule": _txt(it.get("rule"), 1200)})
+    return {"items": out}
+
+
+def _question(b: Dict[str, Any], where: str, title: str) -> Dict[str, Any]:
+    if not title:
+        raise ReviewError(f"{where}: question needs a title")
+    rec = _obj(b.get("recommendation"), f"{where}.recommendation", "{answer, why?}")
+    answer = _line(rec.get("answer"), 300)
+    if not answer:
+        raise ReviewError(f"{where}.recommendation: answer is required")
+    return {"text": _txt(b.get("text"), 2000), "recommendation": {"answer": answer, "why": _txt(rec.get("why"), 600)}}
+
+
+def _piece(b: Dict[str, Any], where: str, title: str) -> Dict[str, Any]:
+    if not title:
+        raise ReviewError(f"{where}: piece needs a title")
+    out: Dict[str, Any] = {"tag": _line(b.get("tag"), 80), "text": _txt(b.get("text"), 2000),
+                           "items": _strings(b.get("items"), where, 0, MAX_ITEMS, 600)}
+    if b.get("html") is not None:
+        if not isinstance(b["html"], str) or not b["html"].strip():
+            raise ReviewError(f"{where}: piece html must be a non-empty html string")
+        out.update(html=b["html"], desktop_width=_width(b, where))
+    return out
+
+
+def _status(v: Any) -> Optional[Dict[str, Any]]:
+    if v is None:
+        return None
+    v = _obj(v, "decisions.json: status", "{label?, milestones?}")
+    ms = []
+    for j, m in enumerate(_list(v.get("milestones"), "decisions.json: status", 0, MAX_MILESTONES, "milestones")):
+        w = f"decisions.json: status.milestones[{j}]"
+        m = _obj(m, w, "{label, date?}")
+        label = _line(m.get("label"), 40)
+        if not label:
+            raise ReviewError(f"{w}: label is required")
+        ms.append({"label": label, "date": _line(m.get("date"), 40)})
+    return {"label": _line(v.get("label"), 120), "milestones": ms}
+
+
+def _notes_answered(v: Any, ids: set) -> List[Dict[str, str]]:
+    out = []
+    for j, n in enumerate(_list(v, "decisions.json: notes_answered", 0, MAX_NOTES_ANSWERED, "notes_answered")):
+        w = f"decisions.json: notes_answered[{j}]"
+        n = _obj(n, w, "{ref, note, answer, status?}")
+        ref = n.get("ref")
+        if not isinstance(ref, str) or ref not in ids:
+            raise ReviewError(f"{w}: ref must be the id of a block in this file, got {ref!r}")
+        note, answer = _txt(n.get("note"), 600), _txt(n.get("answer"), 600)
+        if not note or not answer:
+            raise ReviewError(f"{w}: note and answer are required")
+        status = n.get("status") or "done"
+        if status not in NOTE_STATUSES:
+            raise ReviewError(f"{w}: status must be one of {NOTE_STATUSES}")
+        out.append({"ref": ref, "note": note, "answer": answer, "status": status})
+    return out
+
+
+def _gate(v: Any, preset: str) -> Optional[Dict[str, Any]]:
+    """The locked final approval. Opt-in on a design board, on by default on a plan board."""
+    if v is None:
+        if preset != "plan":
+            return None
+        v = {}
+    v = _obj(v, "decisions.json: gate", "{label?, text?, after?, later?}")
+    w = "decisions.json: gate"
+    return {"label": _line(v.get("label"), 40) or GATE_LABEL, "text": _txt(v.get("text"), 600),
+            "after": _strings(v.get("after"), w, 0, MAX_GATE_AFTER, 300, "after"),
+            "later": _strings(v.get("later"), w, 0, MAX_GATE_LATER, 300, "later")}
+
+
 def validate_decisions(raw: Any) -> Dict[str, Any]:
     """decisions.json: the content of a decision round. The board renders it; mocks are static HTML strings.
-    Only `decision` blocks (and a markable `recap`) are voted on; text / cards / callout / mock / table are context."""
+    Markable blocks (decision, question, piece, defaults and a markable `recap`) are voted on; text / cards / callout /
+    mock / table / settled are context."""
     if not isinstance(raw, dict):
         raise ReviewError("decisions.json must be an object")
     blocks = raw.get("blocks")
@@ -379,8 +634,12 @@ def validate_decisions(raw: Any) -> Dict[str, Any]:
         raise ReviewError("decisions.json: blocks must be a non-empty list")
     if len(blocks) > MAX_BLOCKS:
         raise ReviewError(f"decisions.json: at most {MAX_BLOCKS} blocks")
-    ids = set()   # decision + context-mock ids: one namespace (pins, DOM ids)
+    preset = raw.get("preset") or "design"
+    if preset not in PRESETS:
+        raise ReviewError(f"decisions.json: preset must be one of {PRESETS}")
+    ids = set()   # decision, question, piece, defaults and context-mock ids: one namespace (pins, DOM ids)
     recap_ids = set()
+    all_recap_ids = set()
     out_blocks = []
     for i, b in enumerate(blocks):
         where = f"blocks[{i}]"
@@ -388,8 +647,8 @@ def validate_decisions(raw: Any) -> Dict[str, Any]:
             raise ReviewError(f"{where}: type must be one of {BLOCK_TYPES}")
         t = b["type"]
         ob: Dict[str, Any] = {"type": t, "title": _clean_line(b.get("title") or "", 200)}
-        if t in ("decision", "mock"):
-            did = b.get("id")
+        if t in ID_BLOCKS:
+            did = b.get("id") or ("defaults" if t == "defaults" else None)
             if not isinstance(did, str) or not BLOCK_ID_RE.fullmatch(did):
                 raise ReviewError(f"{where}: {t} id must be short lowercase (d1, d2, ...)")
             if did in ids:
@@ -402,14 +661,25 @@ def validate_decisions(raw: Any) -> Dict[str, Any]:
             ob["items"] = [_clean_line(x, 600) for x in items if isinstance(x, str)][:40]
             ob["id"] = _clean_line(b.get("id") or "recap", 24)
             ob["markable"] = bool(b.get("markable", True))
+            all_recap_ids.add(ob["id"])
             if ob["markable"]:
                 recap_ids.add(ob["id"])
+                ob.update(_markable_extras(b))
         elif t == "cards":
             ob.update(_cards(b, where))
         elif t == "callout":
             ob.update(_callout(b, where))
         elif t == "table":
             ob.update(_table(b, where))
+        elif t == "settled":
+            ob.update(_settled(b, where))
+        elif t == "defaults":
+            ob.update({"id": did, "text": _txt(b.get("text"), 1200),
+                       "items": _strings(b.get("items"), where, 1, MAX_ITEMS, 600)}, **_markable_extras(b))
+        elif t == "question":
+            ob.update({"id": did}, **_question(b, where, ob["title"]), **_markable_extras(b))
+        elif t == "piece":
+            ob.update({"id": did}, **_piece(b, where, ob["title"]), **_markable_extras(b))
         elif t == "mock":
             if not isinstance(b.get("html"), str) or not b["html"].strip():
                 raise ReviewError(f"{where}: mock needs an html string")
@@ -435,28 +705,50 @@ def validate_decisions(raw: Any) -> Dict[str, Any]:
                            "html": o["html"]})
             ob.update({"id": did, "tag": _clean_line(b.get("tag") or "", 80), "nav": _clean_line(b.get("nav") or "", 24),
                        "today": _txt(b.get("today"), 1200), "text": _txt(b.get("text"), 2000), "layout": layout,
-                       "options": oo, "desktop_width": _width(b, where)})
+                       "options": oo, "desktop_width": _width(b, where)}, **_markable_extras(b))
         out_blocks.append(ob)
     clash = ids & recap_ids
     if clash:
         raise ReviewError(f"decisions.json: block id {sorted(clash)[0]} is used twice (a recap and a decision/mock)")
     return {"intro": _txt(raw.get("intro"), 3000), "next": _txt(raw.get("next"), 600),
             "extra_css": raw.get("extra_css") if isinstance(raw.get("extra_css"), str) else "",
+            "preset": preset, "status": _status(raw.get("status")),
+            "notes_answered": _notes_answered(raw.get("notes_answered"), ids | all_recap_ids),
+            "gate": _gate(raw.get("gate"), preset),
             "blocks": out_blocks}
 
 
+def _entry(b: Dict[str, Any], kind: str, **extra: Any) -> Dict[str, Any]:
+    e = {"id": b["id"], "title": b["title"], "tag": "", "nav": "", "layout": kind, "options": [], "kind": kind,
+         "group": b.get("group", ""), "revised": b.get("revised", ""), "pinnable": False}
+    e.update(extra)
+    return e
+
+
 def decision_index(dec: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """What feedback validation + markdown need: every markable block, its title and its options."""
+    """What feedback validation + markdown need: every markable block, its title and its options. `kind` says which
+    control the block takes (decision, recap, piece, defaults: approve/change/skip; question: a choice); `pinnable`
+    says whether pins may land on it. Rounds stored before 1.2 lack both (see entry_kind / feedback)."""
     out: List[Dict[str, Any]] = []
     for b in dec["blocks"]:
         if b["type"] == "decision":
-            out.append({"id": b["id"], "title": b["title"], "tag": b["tag"], "nav": b["nav"], "layout": b["layout"],
-                        "options": [{"id": o["id"], "label": o["label"], "recommended": o["recommended"]}
-                                    for o in b["options"]]})
+            out.append(_entry(b, "decision", tag=b["tag"], nav=b["nav"], layout=b["layout"], pinnable=True,
+                              options=[{"id": o["id"], "label": o["label"], "recommended": o["recommended"]}
+                                       for o in b["options"]]))
         elif b["type"] == "recap" and b.get("markable"):
-            out.append({"id": b["id"], "title": b["title"] or "Recap", "tag": "", "nav": "Recap", "layout": "recap",
-                        "options": []})
+            out.append(_entry(b, "recap", title=b["title"] or "Recap", nav="Recap", pinnable=True))
+        elif b["type"] == "defaults":
+            out.append(_entry(b, "defaults", title=b["title"] or "How I read the rest"))
+        elif b["type"] == "question":
+            out.append(_entry(b, "question", recommendation=dict(b["recommendation"])))
+        elif b["type"] == "piece":
+            out.append(_entry(b, "piece", tag=b["tag"], pinnable="html" in b))
     return out
+
+
+def entry_kind(e: Dict[str, Any]) -> str:
+    """An index entry's kind, also for rounds stored before format 1.2 (no `kind` key)."""
+    return e.get("kind") or {"recap": "recap", "prototype": "prototype"}.get(e.get("layout"), "decision")
 
 
 def mock_index(dec: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -468,7 +760,8 @@ def round_mocks(r: Dict[str, Any]) -> List[Dict[str, Any]]:
     return (r.get("mocks") or []) if r.get("kind") == "decisions" else []
 
 
-PROTOTYPE_INDEX = [{"id": "proto", "title": "Prototype", "tag": "", "nav": "", "layout": "prototype", "options": []}]
+PROTOTYPE_INDEX = [{"id": "proto", "title": "Prototype", "tag": "", "nav": "", "layout": "prototype", "options": [],
+                    "kind": "prototype", "group": "", "revised": "", "pinnable": True}]
 
 
 def round_index(r: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -564,7 +857,21 @@ def _install_round(review_id: str, n: int, spec: Dict[str, Any]) -> List[Dict[st
                              "file": f"rounds/{n}/{vid}/index.html", "source": str(p["src"])})
     if spec.get("design"):
         _copy_assets(spec["design"], base / "a" / "design")
+        _strip_projects(base / "a" / "design")
     return variants
+
+
+def _strip_projects(d: Path) -> None:
+    """A round's copy of a profile never carries its `projects`: the board serves that folder, and the paths are the
+    owner's, not the reviewer's."""
+    f = d / "design.json"
+    try:
+        raw = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if isinstance(raw, dict) and "projects" in raw:
+        del raw["projects"]
+        atomic_write(f, json.dumps(raw, indent=2, ensure_ascii=False))
 
 
 def _round_record(n: int, spec: Dict[str, Any], variants: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -575,8 +882,14 @@ def _round_record(n: int, spec: Dict[str, Any], variants: List[Dict[str, Any]]) 
         mocks = mock_index(spec["decisions"])
         if mocks:
             r["mocks"] = mocks
+        r["preset"] = spec["decisions"].get("preset") or "design"
+        if spec["decisions"].get("gate"):
+            r["gate"] = spec["decisions"]["gate"]   # feedback.gate_state / the build action read it from here
     if spec.get("design"):
         r["design"] = validate_design(spec["design"])
+        r["design"].pop("projects", None)
+    if spec.get("off_brand"):
+        r["off_brand"] = spec["off_brand"]
     return r
 
 
@@ -636,6 +949,10 @@ def create_review(title: str, brief: str, origin: Any, mode: str, spec: Any,
         }
         if look:
             data["settings"] = dict(look)
+        if spec.get("no_design"):
+            data["no_design"] = True       # later rounds need not repeat it (see api.add_round)
+        if spec.get("off_brand"):
+            data["off_brand"] = spec["off_brand"]
         if not wake:
             data["wake"] = False       # a board nobody is woken by: Send stores feedback, sends nothing
         if mode == "herenow":
@@ -647,6 +964,12 @@ def create_review(title: str, brief: str, origin: Any, mode: str, spec: Any,
     return data
 
 
+def inherited_design(review_id: str, data: Dict[str, Any]) -> Optional[Path]:
+    """The design dir the next round of this review inherits (the newest round's copy), or None."""
+    prev = review_dir(review_id) / "rounds" / str(len(data["rounds"])) / "a" / "design"
+    return prev if prev.is_dir() else None
+
+
 def add_round(review_id: str, spec: Any, look: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """`look`: replaces the review's stored settings (only when the caller passed per-review overrides)."""
     spec = _as_spec(spec)
@@ -656,11 +979,13 @@ def add_round(review_id: str, spec: Any, look: Optional[Dict[str, Any]] = None) 
             raise ReviewError("review is closed", 409)
         n = len(data["rounds"]) + 1
         if not spec.get("design"):
-            prev = review_dir(review_id) / "rounds" / str(n - 1) / "a" / "design"
-            if prev.is_dir():
+            prev = inherited_design(review_id, data)
+            if prev:
                 spec = dict(spec, design=prev)   # a new round keeps the review's design unless told otherwise
         variants = _install_round(review_id, n, spec)
         data["rounds"].append(_round_record(n, spec, variants))
+        if spec.get("off_brand"):
+            data["off_brand"] = spec["off_brand"]
         if look:
             data["settings"] = dict(look)
         save(review_id, data)
@@ -721,6 +1046,8 @@ def public_state(data: Dict[str, Any], submit_kind: str = "local") -> Dict[str, 
             "kind": r.get("kind", "variants"),
             "design": r.get("design"),
             "decisions": round_index(r),
+            "preset": r.get("preset", "design"),
+            "gate": r.get("gate"),
             "created_at": r["created_at"],
             "variants": [{k: v[k] for k in ("id", "label", "stance", "file")} for v in r["variants"]],
             "feedback": r.get("feedback"),

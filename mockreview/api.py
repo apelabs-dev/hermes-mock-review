@@ -10,12 +10,13 @@ import calendar
 import functools
 import json
 import logging
+import re
 import shutil
 import time
 import urllib.request
 from typing import Any, Dict, List, Optional
 
-from . import bundle, config, feedback, herenow, locks, owner, service, settings, store, wakeguard
+from . import brand, bundle, config, feedback, herenow, locks, owner, service, settings, store, wakeguard
 from .store import ReviewError
 
 log = logging.getLogger("mockreview.api")
@@ -62,6 +63,43 @@ def _spec(decisions: Optional[str], prototype: Optional[str], design: Optional[s
     return spec
 
 
+def _brand_round(spec: Dict[str, Any], project: Optional[str], no_design: bool, reason: Optional[str],
+                 review: Optional[Dict[str, Any]] = None) -> Any:
+    """Settle which design profile a round wears and, when one does, check the mocks against it. Runs before anything
+    is written. Order: the explicit design, the review's own (add-round), the project's bound profile, a review made
+    with no_design, then refuse when saved profiles exist. Returns (spec, extra result keys)."""
+    extra: Dict[str, Any] = {}
+    d = spec.get("design")
+    if not d and review is not None:
+        d = store.inherited_design(review["id"], review)    # store.add_round applies it
+    if not d:
+        name = brand.project_profile(project) if project else None
+        if name:
+            d = store.design_dir(name)
+            spec = dict(spec, design=d)
+            extra["design_auto"] = name
+        elif not (no_design or (review or {}).get("no_design")):
+            names = store.saved_design_names()
+            if names:
+                raise ReviewError(brand.refusal(project, names))
+    if no_design:
+        spec = dict(spec, no_design=True)
+    if reason:
+        spec = dict(spec, off_brand=reason)
+        extra["off_brand"] = reason
+    elif d and spec.get("kind") == "decisions":
+        brand.enforce(spec["decisions"], d)    # prototype rounds are whole apps: not scanned
+    return spec, extra
+
+
+def _brand_args(design: Optional[str], project: Any, no_design: Any, off_brand: Any):
+    """Validate the three brand arguments up front: (project, no_design, reason)."""
+    reason = brand.clean_off_brand(off_brand)
+    if design and no_design:
+        raise ReviewError("design and no_design contradict each other: pass one")
+    return brand.clean_project(project), bool(no_design), reason
+
+
 def check_wake_toolsets(mode: str, wake: bool, password: bool = False) -> None:
     """Refuse a board that wakes Hermes while wake_toolsets grants the woken session tools and the way to its Send button
     is not gated: a here.now board without its password, or any board while the server listens beyond loopback. Every
@@ -83,8 +121,13 @@ def _owned(fn):
 def create(title: str, origin: Optional[Dict[str, str]] = None, brief: str = "", mode: Optional[str] = None,
            decisions: Optional[str] = None,
            prototype: Optional[str] = None, design: Optional[str] = None, allow_live_demo: Optional[bool] = None,
-           wake: Optional[bool] = None, password: Optional[bool] = None, **look: Any) -> Dict[str, Any]:
+           wake: Optional[bool] = None, password: Optional[bool] = None, project: Optional[str] = None,
+           no_design: Optional[bool] = None, off_brand: Optional[str] = None, **look: Any) -> Dict[str, Any]:
     """Create a review; `look` = per-review overrides (devices, default_device, default_theme, ...).
+
+    Design: `design`, else the profile bound to `project` (an absolute path; design_auto in the result), else refused
+    when saved profiles exist unless `no_design`. Decision-round mocks must stay inside the profile unless `off_brand`
+    carries a reason (see brand.py).
 
     Preflight, all before anything is published: the owning board server is found (or this process's store is the
     one it watches), its wake route works (unless wake is off), and after the board is written the server can load
@@ -93,6 +136,7 @@ def create(title: str, origin: Optional[Dict[str, str]] = None, brief: str = "",
     unknown = set(look) - set(settings.REVIEW_KEYS)
     if unknown:
         raise ReviewError(f"unknown setting(s): {', '.join(sorted(unknown))}")
+    project, no_design, reason = _brand_args(design, project, no_design, off_brand)
     mode = resolve_mode(mode)
     try:
         stored = settings.review_settings(look)
@@ -111,6 +155,7 @@ def create(title: str, origin: Optional[Dict[str, str]] = None, brief: str = "",
     if mode == "herenow" and ctx.state == "unreachable":
         raise owner.OwnerError(f"refusing to publish a public board: {ctx.why}. Nothing would poll its feedback.", 503)
     with owner.bound(ctx):
+        spec, extra = _brand_round(spec, project, no_design, reason)
         data = store.create_review(title, brief, origin, mode, spec, look=stored, wake=want_wake, password=want_password)
         if not owner.confirm_visible(data["id"], ctx):
             owner.discard_created(data["id"])
@@ -118,7 +163,7 @@ def create(title: str, origin: Optional[Dict[str, str]] = None, brief: str = "",
                 f"the board server on {config.local_base()} could not load the review it was just given "
                 f"(store {ctx.data_root}); it was removed and nothing was published.", 502)
         res: Dict[str, Any] = {"review_id": data["id"], "url": None, "mode": data["mode"], "round": 1,
-                               "settings": stored, "owner": ctx.as_dict()}
+                               "settings": stored, "owner": ctx.as_dict(), **extra}
         if not want_wake:
             res["wake"] = False
         if mode == "herenow":
@@ -138,14 +183,35 @@ def create(title: str, origin: Optional[Dict[str, str]] = None, brief: str = "",
                                "other devices on your network.")
         res.update(herenow.password_result(data))
         res["url"] = store.review_url(data)
+        res.update(_interactive_hint(spec, stored))
     return res
 
 
+_CONTROL = re.compile(r"<(select|details|input|textarea)\b", re.I)
+INTERACTIVE_HINT = ("interactive_elements is on, but no mock in this round has a working control (select, details, "
+                    "input, textarea). Build the controls the mocks show so they respond, or create the review with "
+                    "interactive_elements off for static mocks.")
+
+
+def _interactive_hint(spec: Dict[str, Any], look: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """{"hint": ...} for a decisions round whose mocks are all static while the review asks for working controls."""
+    if not (look or {}).get("interactive_elements") or not isinstance(spec.get("decisions"), dict):
+        return {}
+    html = [o.get("html") or "" for b in spec["decisions"].get("blocks") or [] for o in [b] + list(b.get("options") or [])]
+    if not any(html) or any(_CONTROL.search(x) for x in html):
+        return {}
+    return {"hint": INTERACTIVE_HINT}
+
+
 def add_round(review_id: str, decisions: Optional[str] = None, prototype: Optional[str] = None,
-              design: Optional[str] = None, allow_live_demo: Optional[bool] = None, **look: Any) -> Dict[str, Any]:
+              design: Optional[str] = None, allow_live_demo: Optional[bool] = None, project: Optional[str] = None,
+              no_design: Optional[bool] = None, off_brand: Optional[str] = None, **look: Any) -> Dict[str, Any]:
+    """Add the next round. Design: `design`, else the review's own, else the profile bound to `project`, else refused
+    when saved profiles exist (unless `no_design`, or the review was created with it). See create()."""
     unknown = set(look) - set(settings.REVIEW_KEYS)
     if unknown:
         raise ReviewError(f"unknown setting(s): {', '.join(sorted(unknown))}")
+    project, no_design, reason = _brand_args(design, project, no_design, off_brand)
     spec = _spec(decisions, prototype, design, allow_live_demo)
     ctx = owner.resolve_soft()
     with owner.bound(ctx):
@@ -164,11 +230,13 @@ def add_round(review_id: str, decisions: Optional[str] = None, prototype: Option
                 raise _settings_error(e)
         if existing["mode"] == "herenow" and wakeguard.password_on(existing):
             spec = bundle.bundle_spec(spec)   # see create(): only gated here.now prototype rounds are bundled
+        spec, extra = _brand_round(spec, project, no_design, reason, review=existing)
         data = store.add_round(review_id, spec, look=new_look)
         if data["mode"] == "herenow":
             data = herenow.publish(review_id)
         return {"review_id": review_id, "round": data["rounds"][-1]["n"], "url": store.review_url(data),
-                "mode": data["mode"], "owner": ctx.as_dict(), **herenow.password_result(data)}
+                "mode": data["mode"], "owner": ctx.as_dict(), **extra, **herenow.password_result(data),
+                **_interactive_hint(spec, new_look or existing.get("settings"))}
 
 
 def _record_read(review_id: str, round_n: int) -> None:
@@ -197,17 +265,27 @@ def get_feedback(review_id: str, round_n: Optional[int] = None) -> Dict[str, Any
             r = store.get_round(data, r["n"])
         except (ReviewError, ValueError, OSError) as e:   # the read itself must never fail on this
             log.warning("could not record the feedback read for %s round %s: %s", review_id, r["n"], e)
-    return {"review_id": data["id"], "title": data["title"], "round": r["n"], "status": data["status"],
-            "kind": r.get("kind", "variants"), "decisions": store.round_index(r),
-            "submission": r.get("submission"), "feedback": r.get("feedback"),
-            "feedback_path": service.feedback_path(data["id"], r["n"]) if r.get("feedback") else None,
-            "markdown": feedback.render_markdown(data, r)}
+    res = {"review_id": data["id"], "title": data["title"], "round": r["n"], "status": data["status"],
+           "kind": r.get("kind", "variants"), "decisions": store.round_index(r),
+           "submission": r.get("submission"), "feedback": r.get("feedback"),
+           "feedback_path": service.feedback_path(data["id"], r["n"]) if r.get("feedback") else None,
+           "markdown": feedback.render_markdown(data, r),
+           "action": (r.get("feedback") or {}).get("action", "send")}
+    # The build instruction only while it is still owed: an open review whose newest round is this one.
+    if res["action"] == "build" and data["status"] == "open" and r["n"] == data["rounds"][-1]["n"]:
+        label = (r.get("gate") or {}).get("label") or "Build"
+        res["next_step"] = (f"The reviewer approved the whole round and pressed {label}. Build it now in this session. "
+                            "When done, call mock_review_add_round with the result (what you built, with notes_answered "
+                            "for every note) so the reviewer sees it on the same link. Do not ask for confirmation "
+                            "again.")
+    return res
 
 
 @_owned
 def ack(review_id: str, round_n: Optional[int] = None) -> Dict[str, Any]:
     """The session has handled a round's submission (answered in chat, or nothing more is coming): no stalled ping
-    for it. Once per submission; an amend is a new submission and needs its own ack."""
+    for it. Once per submission; an amend is a new submission and needs its own ack. A build (Build) expects
+    round N+1, so the session builds and adds that round instead; an ack there only silences the ping."""
     with store.locked(review_id):
         data = store.load(review_id)
         r = store.get_round(data, round_n)

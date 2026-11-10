@@ -68,6 +68,15 @@ config_schema:
     type: int
     default: 40
     description: "Most pins per round. Env: MOCKREVIEW_MAX_PINS."
+  footer_button:
+    type: str
+    default: "build"
+    enum: ["send", "build"]
+    description: "The one button in the footer of a round that has a gate (every plan board): build or send. build: Build, locked until nothing is open or on Change, with the reason in its tooltip; a block on Change turns it into Send for that round's notes. send: Send only, and the board never offers Build. A round with no gate always has Send. Env: MOCKREVIEW_FOOTER_BUTTON."
+  interactive_elements:
+    type: bool
+    default: true
+    description: "Mocks carry working controls. On: build every control in a mock so it responds (a dropdown opens, a switch flips, a tab changes, a field takes text), and the board opens on Tap so taps reach the mock; the reviewer switches to Pin in the header to comment. Off: mocks are static pictures and the board opens on Pin. Env: MOCKREVIEW_INTERACTIVE_ELEMENTS."
   webhook_url:
     type: str
     default: "http://localhost:8644/webhooks/mock-review"
@@ -87,11 +96,15 @@ config_schema:
   stale_after_minutes:
     type: float
     default: 15.0
-    description: "Minutes after a submitted round with no new round before the board server pings the origin chat that the agent may have stalled. No ping for a round with nothing to build (every decision approved or skipped, no pins, no general notes) or one the agent acknowledged (mockreview ack). 0 = never ping. Env: MOCKREVIEW_STALE_AFTER_MINUTES."
+    description: "Minutes after a submitted round with no new round before the board server pings the origin chat that the agent may have stalled. No ping for a round with nothing to build (every decision approved or skipped, every question on its recommendation, no pins, no general notes, Build not pressed) or one the agent acknowledged (mockreview ack). 0 = never ping. Env: MOCKREVIEW_STALE_AFTER_MINUTES."
   stale_after_read_minutes:
     type: float
     default: 60.0
     description: "Once the agent has read a submission's feedback (mock_review_feedback or mockreview feedback), minutes after that read with no new round before the stalled ping. 0 = no ping once the feedback was read. Env: MOCKREVIEW_STALE_AFTER_READ_MINUTES."
+  build_stale_factor:
+    type: float
+    default: 4.0
+    description: "A build takes longer than a feedback round: after Build, stale_after_minutes and stale_after_read_minutes are multiplied by this before the stalled ping, and the ping names the longer wait. 1 = the same wait as Send. A wait of 0 stays off. Env: MOCKREVIEW_BUILD_STALE_FACTOR."
   wake_toolsets:
     type: list
     default: []

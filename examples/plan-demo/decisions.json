@@ -1,0 +1,109 @@
+{
+  "preset": "plan",
+  "intro": "The offline-sync plan for the Notebook app. Approve, change or skip each piece, pick the settings layout, and answer the open questions. Build opens once nothing is left on Change and every question is answered.",
+  "status": {
+    "label": "Round 1 · awaiting your approval · nothing has been built",
+    "milestones": [
+      {"label": "Plan agreed", "date": "Week 1"},
+      {"label": "Sync engine", "date": "Week 2"},
+      {"label": "Settings screen", "date": "Week 3"}
+    ]
+  },
+  "notes_answered": [
+    {"ref": "p2", "note": "What happens when two devices edit the same note?", "answer": "The newer edit wins per paragraph and the older one is kept as a conflict copy. See the revised piece.", "status": "done"},
+    {"ref": "q1", "note": "Is 30 days of history enough?", "answer": "I turned this into a question with a recommendation, since it changes storage size.", "status": "needs-pick"},
+    {"ref": "d1", "note": "The settings toggle felt hidden.", "answer": "Option B now puts it on the main settings page. Worth a second look.", "status": "second-look"}
+  ],
+  "extra_css": ".m{font:14px/1.4 system-ui,sans-serif;padding:16px;background:#f7f7f5;color:#1d1d1f}.m h4{margin:0 0 8px;font-size:15px}.row{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;margin:6px 0;background:#fff;border:1px solid #e3e3e0;border-radius:8px}.pill{font-size:12px;padding:2px 8px;border-radius:999px;background:#e8f1ff;color:#1f4fa8}.warn{background:#fff4e0;color:#8a5300}",
+  "blocks": [
+    {
+      "type": "settled",
+      "title": "Already decided",
+      "items": [
+        {"title": "Offline first", "quote": "I want to write on the train without a signal.", "rule": "Every edit is saved on the device first and synced later; nothing waits on the network."},
+        {"title": "No accounts in this plan", "quote": "Keep sign-in out of it for now.", "rule": "Sync uses the existing device pairing; account work is listed under Later."},
+        {"title": "Same look as today", "rule": "No visual redesign: new controls reuse the current settings components."}
+      ]
+    },
+    {
+      "type": "defaults",
+      "title": "How I read the rest",
+      "text": "Where the brief was silent, I assumed the following. Approve to keep them, or Change with a note.",
+      "items": [
+        "Sync runs every 5 minutes and on app open, never on a metered connection unless allowed.",
+        "Attachments over 20 MB sync only on Wi-Fi.",
+        "A failed sync retries with backoff and shows a quiet badge, not a dialog."
+      ]
+    },
+    {
+      "type": "question",
+      "id": "q1",
+      "title": "How long should deleted notes stay recoverable?",
+      "text": "Longer history costs device storage; shorter history risks losing something.",
+      "recommendation": {"answer": "30 days, then deleted for good", "why": "Matches what most note apps do and keeps storage bounded."},
+      "group": "Open questions",
+      "revised": "New after the grill",
+      "asked": "Is 30 days of history enough?",
+      "answer": "It is the common default; pick a different number if your notes need longer."
+    },
+    {
+      "type": "question",
+      "id": "q2",
+      "title": "Should sync pause on low battery?",
+      "recommendation": {"answer": "Yes, below 15 percent", "why": "Sync is the biggest background cost; the next charge catches up."},
+      "group": "Open questions"
+    },
+    {
+      "type": "piece",
+      "id": "p1",
+      "title": "Local change log",
+      "tag": "P0",
+      "text": "Record every edit on the device in an append-only log, so nothing depends on the network.",
+      "items": ["One log per notebook", "Compacted after a successful sync", "Survives an app restart mid-edit"],
+      "group": "Sync engine"
+    },
+    {
+      "type": "piece",
+      "id": "p2",
+      "title": "Conflict handling",
+      "tag": "P0",
+      "text": "When two devices edit the same note, the newer edit wins per paragraph and the older version is kept as a conflict copy.",
+      "items": ["Conflict copies are named with the device and time", "A banner on the note links to its copy"],
+      "html": "<div class=\"m\"><h4>Trip ideas</h4><div class=\"row\"><span>This note changed on another device</span><span class=\"pill warn\">Conflict copy</span></div><div class=\"row\"><span>Open the other version</span><span class=\"pill\">View</span></div></div>",
+      "group": "Sync engine",
+      "revised": "Revised",
+      "asked": "What happens when two devices edit the same note?",
+      "answer": "Paragraph-level merge, with the older text kept as a conflict copy instead of being dropped."
+    },
+    {
+      "type": "piece",
+      "id": "p3",
+      "title": "Sync status in settings",
+      "tag": "P1",
+      "text": "A row in settings shows the last sync time and a Sync now button.",
+      "group": "Settings screen"
+    },
+    {
+      "type": "decision",
+      "id": "d1",
+      "title": "Where does the sync toggle live?",
+      "tag": "Settings",
+      "nav": "Toggle",
+      "layout": "side",
+      "text": "Pick the settings layout for the sync controls.",
+      "group": "Settings screen",
+      "revised": "Updated after your brief",
+      "options": [
+        {"id": "a", "label": "Own page", "text": "Settings > Sync, one level down.", "html": "<div class=\"m\"><h4>Settings</h4><div class=\"row\"><span>Sync</span><span>›</span></div><div class=\"row\"><span>Appearance</span><span>›</span></div></div>"},
+        {"id": "b", "label": "Main page", "text": "The toggle sits on the main settings page.", "recommended": true, "html": "<div class=\"m\"><h4>Settings</h4><div class=\"row\"><span>Sync</span><span class=\"pill\">On</span></div><div class=\"row\"><span>Appearance</span><span>›</span></div></div>"}
+      ]
+    }
+  ],
+  "next": "The sync engine comes first; the settings screen follows in week 3.",
+  "gate": {
+    "label": "Build",
+    "text": "Approves the whole plan as it stands. The agent starts with the sync engine and reports back after each milestone.",
+    "after": ["Pair two test devices so conflict handling can be checked", "Confirm the attachment size limit before week 2"],
+    "later": ["Accounts and sign-in", "Sharing a notebook with someone else", "End-to-end encryption of the change log"]
+  }
+}

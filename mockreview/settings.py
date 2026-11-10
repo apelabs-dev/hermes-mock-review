@@ -69,11 +69,20 @@ SPEC: List[Setting] = [
             "look", lo=600, hi=1280, review=True),
     Setting("desktop_width", "int", 1280, "Desktop mock width in px for a decision that sets no desktop_width.",
             "look", lo=320, hi=1920),
-    # feedback (the first three are stored per review)
+    # feedback (the first five are stored per review)
     Setting("pins_enabled", "bool", True, "Let the reviewer drop pins on mocks.", "feedback", review=True),
     Setting("require_note_on_change", "bool", False, "Block Send until every Change mark has a note.",
             "feedback", review=True),
     Setting("max_pins", "int", 40, "Most pins per round.", "feedback", lo=1, hi=80, review=True),
+    Setting("footer_button", "str", "build", "The one button in the footer of a round that has a gate (every plan "
+            "board): build or send. build: Build, locked until nothing is open or on Change, with the reason in its "
+            "tooltip; a block on Change turns it into Send for that round's notes. send: Send only, and the board "
+            "never offers Build. A round with no gate always has Send.", "feedback",
+            choices=("send", "build"), review=True),
+    Setting("interactive_elements", "bool", True, "Mocks carry working controls. On: build every control in a mock "
+            "so it responds (a dropdown opens, a switch flips, a tab changes, a field takes text), and the board "
+            "opens on Tap so taps reach the mock; the reviewer switches to Pin in the header to comment. Off: mocks "
+            "are static pictures and the board opens on Pin.", "feedback", review=True),
     Setting("webhook_url", "str", "http://localhost:8644/webhooks/mock-review", "Hermes webhook base URL; the route suffix is selected by origin platform.",
             "feedback"),
     Setting("webhook_route", "str", "mock-review", "Webhook route prefix; setup creates <prefix>-<platform> for each origin platform.", "feedback"),
@@ -84,11 +93,15 @@ SPEC: List[Setting] = [
             lo=0, hi=86400),
     Setting("stale_after_minutes", "float", 15.0, "Minutes after a submitted round with no new round before the "
             "board server pings the origin chat that the agent may have stalled. No ping for a round with nothing to "
-            "build (every decision approved or skipped, no pins, no general notes) or one the agent acknowledged "
-            "(mockreview ack). 0 = never ping.", "feedback", lo=0, hi=10080),
+            "build (every decision approved or skipped, every question on its recommendation, no pins, no general "
+            "notes, Build not pressed) or one the agent acknowledged (mockreview ack). 0 = never ping.",
+            "feedback", lo=0, hi=10080),
     Setting("stale_after_read_minutes", "float", 60.0, "Once the agent has read a submission's feedback "
             "(mock_review_feedback or mockreview feedback), minutes after that read with no new round before the "
             "stalled ping. 0 = no ping once the feedback was read.", "feedback", lo=0, hi=10080),
+    Setting("build_stale_factor", "float", 4.0, "A build takes longer than a feedback round: after Build, "
+            "stale_after_minutes and stale_after_read_minutes are multiplied by this before the stalled ping, and the "
+            "ping names the longer wait. 1 = the same wait as Send. A wait of 0 stays off.", "feedback", lo=1, hi=24),
     Setting("wake_toolsets", "list", [], "Hermes toolsets the session woken by Send may use, for example mock-review, "
             "terminal, file (the list replaces Hermes's webhook default). hermes mockreview setup prints the toolsets line to add by hand to the wake "
             "route in webhook_subscriptions.json; add it again after every setup run. Empty: Hermes's safe webhook tools only, and "

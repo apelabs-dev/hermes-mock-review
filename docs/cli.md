@@ -89,15 +89,18 @@ usage: hermes mockreview create [-h] --title TITLE [--brief BRIEF]
                                 [--decisions /abs/decisions.json]
                                 [--prototype /abs/index.html]
                                 [--design NAME|/abs/dir] [--allow-live-demo]
-                                [--no-allow-live-demo]
+                                [--no-allow-live-demo] [--project /abs/dir]
+                                [--no-design] [--off-brand REASON]
                                 [--devices desktop,tablet,mobile]
                                 [--default-device {auto,desktop,tablet,mobile}]
                                 [--default-theme {project,dark,light}]
                                 [--theme-toggle] [--no-theme-toggle]
                                 [--mobile-width PX] [--tablet-width PX]
                                 [--pins] [--no-pins] [--require-note]
-                                [--no-require-note] [--max-pins N] [--wake]
-                                [--no-wake] [--password] [--no-password]
+                                [--no-require-note] [--max-pins N]
+                                [--footer-button {send,build}] [--interactive]
+                                [--no-interactive] [--wake] [--no-wake]
+                                [--password] [--no-password]
 
 options:
   -h, --help            show this help message and exit
@@ -119,6 +122,16 @@ options:
                         dir); add-round inherits it
   --allow-live-demo     allow a --prototype round for this call
   --no-allow-live-demo  refuse a --prototype round for this call
+  --project /abs/dir    the project this board is for (default: the current
+                        directory): a design profile bound to it, to its git
+                        repository or to the main checkout of its worktree
+                        applies on its own
+  --no-design           a board that deliberately has no design profile
+                        (needed when profiles are saved, none is bound to the
+                        project and --design is not given)
+  --off-brand REASON    skip the off-brand check of the mocks' colours and
+                        fonts against the design profile, and record why
+                        (1-200 characters)
   --wake                require a working wake route and wake Hermes on Send
                         (the default)
   --no-wake             a board nobody is woken by: no wake-route check, Send
@@ -141,6 +154,11 @@ per-review look (default: saved settings; stored in the review):
   --require-note        Send needs a note on every Change
   --no-require-note     Change marks need no note
   --max-pins N
+  --footer-button {send,build}
+                        the footer button on a round with a gate: Build
+                        (default) or Send
+  --interactive         mocks carry working controls; the board opens on Tap
+  --no-interactive      static mocks; the board opens on Pin
 ```
 
 ## `hermes mockreview add-round --help`
@@ -150,6 +168,8 @@ usage: hermes mockreview add-round [-h] [--decisions /abs/decisions.json]
                                    [--prototype /abs/index.html]
                                    [--design NAME|/abs/dir]
                                    [--allow-live-demo] [--no-allow-live-demo]
+                                   [--project /abs/dir] [--no-design]
+                                   [--off-brand REASON]
                                    [--devices desktop,tablet,mobile]
                                    [--default-device {auto,desktop,tablet,mobile}]
                                    [--default-theme {project,dark,light}]
@@ -157,6 +177,8 @@ usage: hermes mockreview add-round [-h] [--decisions /abs/decisions.json]
                                    [--mobile-width PX] [--tablet-width PX]
                                    [--pins] [--no-pins] [--require-note]
                                    [--no-require-note] [--max-pins N]
+                                   [--footer-button {send,build}]
+                                   [--interactive] [--no-interactive]
                                    review_id
 
 positional arguments:
@@ -175,6 +197,16 @@ options:
                         dir); add-round inherits it
   --allow-live-demo     allow a --prototype round for this call
   --no-allow-live-demo  refuse a --prototype round for this call
+  --project /abs/dir    the project this board is for (default: the current
+                        directory): a design profile bound to it, to its git
+                        repository or to the main checkout of its worktree
+                        applies on its own
+  --no-design           a board that deliberately has no design profile
+                        (needed when profiles are saved, none is bound to the
+                        project and --design is not given)
+  --off-brand REASON    skip the off-brand check of the mocks' colours and
+                        fonts against the design profile, and record why
+                        (1-200 characters)
 
 per-review look (default: saved settings; stored in the review):
   --devices desktop,tablet,mobile
@@ -190,20 +222,30 @@ per-review look (default: saved settings; stored in the review):
   --require-note        Send needs a note on every Change
   --no-require-note     Change marks need no note
   --max-pins N
+  --footer-button {send,build}
+                        the footer button on a round with a gate: Build
+                        (default) or Send
+  --interactive         mocks carry working controls; the board opens on Tap
+  --no-interactive      static mocks; the board opens on Pin
 ```
 
 ## `hermes mockreview design --help`
 
 ```text
-usage: hermes mockreview design [-h] {save,show,list} ...
+usage: hermes mockreview design [-h] {save,show,list,bind,unbind} ...
 
 positional arguments:
-  {save,show,list}
-    save            save/refresh a profile from a dir holding design.json (+
-                    mock.css, fonts, icon)
+  {save,show,list,bind,unbind}
+    save                save/refresh a profile from a dir holding design.json
+                        (+ mock.css, fonts, icon)
+    show                print a saved profile, including the projects bound to
+                        it
+    bind                bind a project directory to a saved profile, so boards
+                        made for it wear the profile
+    unbind              remove a project directory from a saved profile
 
 options:
-  -h, --help        show this help message and exit
+  -h, --help            show this help message and exit
 ```
 
 ## `hermes mockreview design save --help`
@@ -238,6 +280,32 @@ usage: hermes mockreview design list [-h]
 
 options:
   -h, --help  show this help message and exit
+```
+
+## `hermes mockreview design bind --help`
+
+```text
+usage: hermes mockreview design bind [-h] name /abs/project/dir
+
+positional arguments:
+  name
+  /abs/project/dir
+
+options:
+  -h, --help        show this help message and exit
+```
+
+## `hermes mockreview design unbind --help`
+
+```text
+usage: hermes mockreview design unbind [-h] name /abs/project/dir
+
+positional arguments:
+  name
+  /abs/project/dir
+
+options:
+  -h, --help        show this help message and exit
 ```
 
 ## `hermes mockreview feedback --help`
