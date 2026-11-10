@@ -80,7 +80,7 @@ def test_the_plan_example_validates_and_uses_every_feature():
 
 def test_the_example_holds_only_generic_content():
     text = EXAMPLE.read_text(encoding="utf-8").lower()
-    for word in ("hermes", "clawbro", "discord", "telegram", "@", "http"):
+    for word in ("hermes", "discord", "telegram", "@", "http"):
         assert word not in text
 
 

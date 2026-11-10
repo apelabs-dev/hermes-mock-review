@@ -5,7 +5,7 @@ serves it as a review board, and you open the link, mark each decision Approve, 
 the mocks and press Send. Send wakes the agent in the chat the review came from, with your marks attached. Boards render
 inline mocks at desktop, tablet and phone widths, in light and dark, and wear a per-project design profile.
 
-## Plan boards and Start building (v1.2)
+## Plan boards and Start building
 
 A `plan` preset round uses the same fixed skeleton as a design board: a status line, "Already decided", a defaults card,
 the plan grouped by section, then a final approval. Questions carry a recommendation (go with it, or type a different

@@ -78,7 +78,8 @@ def is_build(round_: Dict[str, Any]) -> bool:
 
 def nothing_to_build(round_: Dict[str, Any]) -> bool:
     """True when a submitted decisions round asks for no further work: every decision is Approved or Skipped (a note
-    on an approve or skip is fine), with no pins and no general notes, and the gate was not pressed. The agent is only
+    on an approve or skip is fine), every question took the recommendation, with no pins and no general notes, and the
+    gate was not pressed. The agent is only
     expected to close then, so no round N+1 will come and a stalled ping would be wrong. A build is the opposite: the
     whole round is approved precisely so that round N+1 (the result) comes."""
     from .store import round_index
@@ -88,7 +89,9 @@ def nothing_to_build(round_: Dict[str, Any]) -> bool:
         return False
     index = round_index(round_)
     c = feedback.decision_counts(fb, index)
-    return bool(index) and c["change"] == 0 and c["open"] == 0
+    # a custom answer overrides the recommendation, so the plan has to be revised: a round N+1 is due
+    custom = any(((fb.get("marks") or {}).get(d["id"]) or {}).get("choice") == "custom" for d in index)
+    return bool(index) and c["change"] == 0 and c["open"] == 0 and not custom
 
 
 def feedback_path(review_id: str, n: int) -> str:

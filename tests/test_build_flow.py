@@ -129,8 +129,15 @@ def test_a_build_is_never_nothing_to_build_but_the_same_marks_sent_are(env, tmp_
     _build(built)
     assert service.nothing_to_build(_round(built["id"])) is False
     sent = _review(tmp_path, name="sent")
-    service.submit(sent["id"], 1, {"marks": _all_resolved()}, sent["token"])
+    service.submit(sent["id"], 1, {"marks": _all_resolved(q2={"choice": "recommended"})}, sent["token"])
     assert service.nothing_to_build(_round(sent["id"])) is True
+
+
+def test_a_custom_answer_sent_without_build_still_expects_a_revised_round(env, tmp_path):
+    # the reviewer overrode a recommendation: the plan must be revised, so the stalled ping stays on
+    sent = _review(tmp_path, name="custom")
+    service.submit(sent["id"], 1, {"marks": _all_resolved()}, sent["token"])   # q2 is a custom answer
+    assert service.nothing_to_build(_round(sent["id"])) is False
 
 
 # ---------------------------------------------------------------- the stalled ping waits longer for a build
@@ -256,7 +263,7 @@ def test_a_plain_send_read_window_is_unmultiplied(env, tmp_path):
 
 def test_an_all_approved_send_on_a_plan_board_still_expects_no_round(env, tmp_path):
     data = _review(tmp_path)
-    service.submit(data["id"], 1, {"marks": _all_resolved()}, data["token"])
+    service.submit(data["id"], 1, {"marks": _all_resolved(q2={"choice": "recommended"})}, data["token"])
     assert json.loads(env["receiver"].wakes[0]["body"])["action"] == "send"
     assert json.loads(env["receiver"].notices[0]["body"])["message"] == SEND_ACK
     assert service.check_stalled(now=_submitted_ts(data["id"]) + DAY) == 0
