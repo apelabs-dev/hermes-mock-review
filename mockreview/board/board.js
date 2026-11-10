@@ -2063,8 +2063,13 @@
   }
 
   // Slow watch: while the current round is sent and no newer round exists, look at state.json every 30 s (for up to
-  // 2 h, and not once the review closes) so the stalled hint and the next round show up without a reload.
-  var WATCH_EVERY = 30000, WATCH_FOR = 2 * 3600 * 1000;
+  // 2 h, 8 h after Start building, and not once the review closes) so the stalled hint and the next round show up
+  // without a reload.
+  var WATCH_EVERY = 30000, WATCH_FOR = 2 * 3600 * 1000, WATCH_FOR_BUILD = 8 * 3600 * 1000;
+  function watchWindowMs(r) {   // a build may take stale_after_* x build_stale_factor (60 / 240 min by default)
+    var fb = submittedFeedback(r);
+    return fb && fb.action === 'build' ? WATCH_FOR_BUILD : WATCH_FOR;
+  }
 
   function refreshStatus() {
     var old = app.querySelector('.banner'), nb = renderStatusBanner();
@@ -2078,7 +2083,7 @@
     clearTimeout(S.watchTimer);
     var st = R(), r = cur(), sub = r.submission;
     if (st.status !== 'open' || !sub || sub.status !== 'notified') return;
-    var round = r.n, until = Date.now() + WATCH_FOR;
+    var round = r.n, until = Date.now() + watchWindowMs(r);
     (function tick() {
       S.watchTimer = setTimeout(function () {
         if (Date.now() > until) return;

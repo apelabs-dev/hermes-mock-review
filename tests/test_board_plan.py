@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = (ROOT / 'mockreview/board/board.js').read_text(encoding='utf-8')
 NAMES = ['h', 'append', 'paras', 'entryKind', 'capCustom', 'isResolved', 'gateState', 'progressLine', 'isMarkableBlock',
          'groupBlocks', 'approveRestIds', 'groupHasBulk', 'gateIcon', 'endLine', 'icon', 'updateGate', 'cleanMarks', 'answerText', 'payload', 'renderQuestion', 'renderPiece',
-         'renderSettled', 'renderAsked', 'renderNotesAnswered', 'markEmpty']
+         'renderSettled', 'renderAsked', 'renderNotesAnswered', 'markEmpty', 'submittedFeedback', 'watchWindowMs']
 
 
 def run(test):
@@ -20,7 +20,8 @@ def run(test):
     if not node:
         pytest.skip('Node is needed for executed board DOM tests')
     parts = [re.search(r'^  var LIMIT = .*$', SRC, re.M).group(0), "var PROGRESS = " + re.search(r'^  var PROGRESS = (.*);$', SRC, re.M).group(1) + ";",
-             "var NOTE_CHIP = " + re.search(r'^  var NOTE_CHIP = (.*);$', SRC, re.M).group(1) + ";"]
+             "var NOTE_CHIP = " + re.search(r'^  var NOTE_CHIP = (.*);$', SRC, re.M).group(1) + ";",
+             "var WATCH_EVERY = " + re.search(r'^  var WATCH_EVERY = (.*);$', SRC, re.M).group(1) + ";"]
     for name in NAMES:
         start = re.search(r'^  function ' + name + r'\(', SRC, re.M)
         assert start, name
@@ -213,4 +214,16 @@ for (const ed of [true, false]) {
   assert.equal(endLine(I, all, g, NX, ed), 'All 3 decided. Next → ' + NX);
 }
 for (const s of [endLine(I, all, g, NX, true), endLine(I, {}, g, NX, true), endLine(I, chg, g, NX, true)]) assert.ok(!/Press|ready/.test(s), s);
+''')
+
+
+def test_watch_window_stretches_for_start_building():
+    run('''
+global.R = () => ({current_round: 9, id: 'r'});
+global.localSent = () => null;
+assert.equal(WATCH_EVERY, 30000);
+assert.equal(watchWindowMs({n: 2, feedback: {action: 'build'}}), 8 * 3600 * 1000);
+assert.equal(watchWindowMs({n: 2, feedback: {action: 'send'}}), 2 * 3600 * 1000);
+assert.equal(watchWindowMs({n: 2, feedback: {}}), 2 * 3600 * 1000);
+assert.equal(watchWindowMs({n: 2}), 2 * 3600 * 1000);   // no feedback yet: the ordinary window
 ''')
