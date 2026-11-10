@@ -111,14 +111,14 @@ def schemas(ask_host: bool, default_host: str, live_demo: bool) -> Dict[str, Dic
         },
         "mock_review_feedback": {
             "name": "mock_review_feedback",
-            "description": "Read a round's feedback (marks, pins, notes) as JSON + markdown.",
+            "description": "Read a round's feedback (marks, pins, notes) as JSON + markdown. action is send or build; on build, follow next_step.",
             "parameters": {"type": "object", "properties": {
                 "review_id": {"type": "string"}, "round": {"type": "integer", "description": "Default: current."}},
                 "required": ["review_id"]},
         },
         "mock_review_ack": {
             "name": "mock_review_ack",
-            "description": "Mark a round's feedback as handled (answered here, or no round coming): no stalled ping.",
+            "description": "Mark a round's feedback as handled (answered here, or no round coming): no stalled ping. Not a substitute for building.",
             "parameters": {"type": "object", "properties": {
                 "review_id": {"type": "string"}, "round": {"type": "integer", "description": "Default: current."}},
                 "required": ["review_id"]},

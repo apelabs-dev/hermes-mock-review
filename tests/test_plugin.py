@@ -75,6 +75,9 @@ def test_register_registers_everything_and_writes_nothing(env, plugin, tmp_path)
     for t in ctx.tools.values():                                # short descriptions (they cost tokens every turn)
         assert len(t["schema"]["description"]) < 120
     assert len(json.dumps([t["schema"] for t in ctx.tools.values()])) < 6000
+    # the woken agent must learn that a build means building now, not acking
+    assert "build" in ctx.tools["mock_review_feedback"]["schema"]["description"]
+    assert "building" in ctx.tools["mock_review_ack"]["schema"]["description"]
 
 
 def test_tools_return_json_and_read_settings_via_get_config(env, plugin, tmp_path):
