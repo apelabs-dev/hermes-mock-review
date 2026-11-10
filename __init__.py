@@ -64,6 +64,7 @@ ROUND_PROPS: Dict[str, Any] = {
         "Why this round is off-brand on purpose (1-200 characters). Skips the check that mocks use only the "
         "profile's colours and fonts; recorded in the review.")},
 }
+REASK_PROP: Dict[str, Any] = {"type": "boolean", "description": "Re-ask approved blocks (refused without it)."}
 
 
 def _live_demo_prop(on: bool) -> Dict[str, Any]:
@@ -106,12 +107,13 @@ def schemas(ask_host: bool, default_host: str, live_demo: bool) -> Dict[str, Dic
             "description": "Add the next round to an open mock review (same link). Pass project (repo path).",
             "parameters": {"type": "object", "properties": {
                 "review_id": {"type": "string"}, **ROUND_PROPS, "allow_live_demo": _live_demo_prop(live_demo),
+                "allow_reask": REASK_PROP,
                 **LOOK_PROPS},
                 "required": ["review_id"]},
         },
         "mock_review_feedback": {
             "name": "mock_review_feedback",
-            "description": "Read a round's feedback (marks, pins, notes) as JSON + markdown. action is send or build; on build, follow next_step.",
+            "description": "Read a round's feedback as JSON + markdown. action is send or build: follow next_step (build) or next_round (send).",
             "parameters": {"type": "object", "properties": {
                 "review_id": {"type": "string"}, "round": {"type": "integer", "description": "Default: current."}},
                 "required": ["review_id"]},
@@ -183,7 +185,7 @@ class MockReview:
                     out = api.add_round(a["review_id"], decisions=a.get("decisions"), prototype=a.get("prototype"),
                                         design=a.get("design"), allow_live_demo=a.get("allow_live_demo"),
                                         project=a.get("project"), no_design=a.get("no_design"),
-                                        off_brand=a.get("off_brand"), **look)
+                                        off_brand=a.get("off_brand"), allow_reask=a.get("allow_reask"), **look)
                 elif name == "mock_review_feedback":
                     if not a.get("review_id"):
                         return json.dumps({"error": "review_id is required"})

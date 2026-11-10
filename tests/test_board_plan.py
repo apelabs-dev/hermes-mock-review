@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = (ROOT / 'mockreview/board/board.js').read_text(encoding='utf-8')
 NAMES = ['h', 'append', 'paras', 'entryKind', 'capCustom', 'isResolved', 'gateState', 'progressLine', 'isMarkableBlock',
          'groupBlocks', 'approveRestIds', 'groupHasBulk', 'gateIcon', 'endLine', 'icon', 'updateGate', 'gateReason', 'gateTitle', 'renderGate', 'updateSendbar', 'cleanMarks', 'answerText', 'payload', 'renderQuestion', 'renderPiece',
-         'renderSettled', 'renderAsked', 'renderNotesAnswered', 'markEmpty', 'submittedFeedback', 'watchWindowMs']
+         'renderSettled', 'renderRecapNote', 'renderAsked', 'renderNotesAnswered', 'markEmpty', 'submittedFeedback', 'watchWindowMs']
 
 
 def run(test):
@@ -274,3 +274,13 @@ const sec = renderGate(r, {gate: {label: 'Build', text: 'Approves the plan.', af
 assert.equal(sec.querySelectorAll('button').length, 0); assert.equal(sec.querySelectorAll('h2').length, 0);
 assert.deepEqual(Array.from(sec.querySelectorAll('h3')).map(x => x.textContent), ['What I need from you after approval', 'Later, not in this plan']);
 ''')
+
+
+def test_a_recap_that_is_not_markable_is_drawn_as_a_plain_list():
+    run('''
+const el = renderRecapNote({id: 'recap', title: 'Agreed so far', items: ['Dark theme stays', 'Header at 48 px']});
+assert.equal(el.querySelectorAll('li').length, 2); assert.equal(el.querySelectorAll('button').length, 0);
+assert.ok(el.textContent.includes('Agreed so far') && el.textContent.includes('Header at 48 px'));
+assert.ok(renderRecapNote({id: 'recap', items: ['x']}).textContent.includes('Recap'));
+''')
+    assert "if (b.type === 'recap' && b.markable === false) return renderRecapNote(b);" in SRC

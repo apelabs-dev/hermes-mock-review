@@ -8,7 +8,7 @@ import json
 import pytest
 
 from conftest import SECRET, http, verify_v2_copy
-from mockreview import api, cli, mcp, service, settings, store
+from mockreview import api, cli, mcp, service, settings, setup, store
 from test_notice import _rid, _stalled, _submitted_ts
 from test_plan_format import PLAN, _all_resolved
 
@@ -300,3 +300,75 @@ def test_wake_prompt_mentions_the_build_and_keeps_the_hand_off():
     from mockreview import setup
     assert "act on the notes, or build if Build was pressed." in setup.PROMPT_TEMPLATE
     assert setup.HANDOFF_LINE in setup.PROMPT_TEMPLATE
+
+
+# ---------------------------------------------------------------- a next round does not re-ask what was settled
+
+def _sent(tmp_path, **over):
+    data = _review(tmp_path)
+    service.submit(data["id"], 1, {"marks": _all_resolved(**over), "action": "send"}, data["token"])
+    return data["id"]
+
+
+def _same_plan(tmp_path):
+    """Round 1's file sent again: every block back, none marked as revised."""
+    dec = copy.deepcopy(PLAN)
+    for b in dec["blocks"]:
+        b.pop("revised", None)
+    return str(_plan_file(tmp_path, dec, "again"))
+
+
+def _next_plan(tmp_path, keep, revised=()):
+    """PLAN with only the markable blocks in `keep` (context blocks stay), `revised` set on the ones named."""
+    dec = copy.deepcopy(PLAN)
+    for b in dec["blocks"]:
+        b.pop("revised", None)
+    markable = {"decision", "question", "piece", "defaults"}
+    dec["blocks"] = [b for b in dec["blocks"] if b["type"] not in markable or b.get("id", "defaults") in keep]
+    for b in dec["blocks"]:
+        if b.get("id") in revised:
+            b["revised"] = "Revised"
+    dec["notes_answered"] = [n for n in dec.get("notes_answered") or [] if n["ref"] in keep]
+    return str(_plan_file(tmp_path, dec, "next"))
+
+
+def test_add_round_refuses_a_round_that_re_asks_approved_blocks_and_answered_questions(env, tmp_path):
+    rid = _sent(tmp_path, p1={"status": "change", "note": "split it"})
+    with pytest.raises(store.ReviewError) as e:
+        api.add_round(rid, decisions=_same_plan(tmp_path))          # the copied round 1 file
+    msg = str(e.value)
+    assert e.value.status == 409 and "round 1 already settled" in msg and "allow_reask" in msg
+    for settled in ("defaults", "q1", "q2", "p2", "d1"):
+        assert settled in msg
+    assert "p1" not in msg and "p3" not in msg                                         # on Change / skipped: may return
+    assert len(store.load(rid)["rounds"]) == 1                                         # nothing was added
+
+    res = api.add_round(rid, decisions=_next_plan(tmp_path, {"p1", "p3"}, revised={"p1"}))
+    assert res["round"] == 2
+
+
+def test_a_revised_block_and_allow_reask_pass_the_re_ask_guard(env, tmp_path):
+    rid = _sent(tmp_path, p1={"status": "change", "note": "split it"})
+    res = api.add_round(rid, decisions=_next_plan(tmp_path, {"p1", "p2"}, revised={"p1", "p2"}))   # p2 approved, but changed
+    assert res["round"] == 2
+
+    rid = _sent(tmp_path, p1={"status": "change", "note": "split it"})
+    assert api.add_round(rid, decisions=_same_plan(tmp_path), allow_reask=True)["round"] == 2
+    rid = _sent(tmp_path, p1={"status": "change", "note": "split it"})
+    tool = mcp.call_tool("mock_review_add_round", {"review_id": rid, "decisions": _same_plan(tmp_path)},
+                         mcp.Options())
+    assert tool["isError"] is True and "already settled" in tool["content"][0]["text"]
+    assert cli.main(["add-round", rid, "--decisions", _same_plan(tmp_path), "--allow-reask"]) == 0
+
+
+def test_a_round_with_no_feedback_yet_is_not_guarded(env, tmp_path):
+    data = _review(tmp_path)
+    assert api.add_round(data["id"], decisions=_same_plan(tmp_path))["round"] == 2
+
+
+def test_send_feedback_and_the_wake_prompt_say_what_the_next_round_may_ask(env, tmp_path):
+    rid = _sent(tmp_path, p1={"status": "change", "note": "split it"})
+    fb = api.get_feedback(rid)
+    assert fb["action"] == "send" and fb["next_round"] == api.SEND_NEXT_ROUND and "settled" in fb["next_round"]
+    assert _tool_feedback(rid)["next_round"] == fb["next_round"]
+    assert "go in a `settled` block" in setup.PROMPT_TEMPLATE

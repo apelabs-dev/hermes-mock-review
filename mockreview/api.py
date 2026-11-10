@@ -187,6 +187,10 @@ def create(title: str, origin: Optional[Dict[str, str]] = None, brief: str = "",
     return res
 
 
+SEND_NEXT_ROUND = ("The next round asks only what is still open: blocks marked Change (with `revised`), skipped or "
+                   "unanswered ones, and anything new. Do not ask approved blocks or answered questions again: list "
+                   "them in a `settled` block. mock_review_add_round refuses a round that re-asks them.")
+
 _CONTROL = re.compile(r"<(select|details|input|textarea)\b", re.I)
 INTERACTIVE_HINT = ("interactive_elements is on, but no mock in this round has a working control (select, details, "
                     "input, textarea). Build the controls the mocks show so they respond, or create the review with "
@@ -203,11 +207,38 @@ def _interactive_hint(spec: Dict[str, Any], look: Optional[Dict[str, Any]]) -> D
     return {"hint": INTERACTIVE_HINT}
 
 
+def reasked(prev: Dict[str, Any], spec: Dict[str, Any]) -> List[str]:
+    """Ids the reviewer settled in `prev` (approved, or a question answered) that `spec` asks again unchanged: the
+    same id, markable, with no `revised`. A markable recap is exempt: every round may ask "is this record right?".
+    So is the round after a Build."""
+    fb = prev.get("feedback") or {}
+    marks = fb.get("marks") or {}
+    # After Build the next round is the result, which may show the built pieces under their own ids.
+    if not isinstance(spec.get("decisions"), dict) or not marks or fb.get("action") == "build":
+        return []
+    out = []
+    for e in store.decision_index(spec["decisions"]):
+        m = marks.get(e["id"]) or {}
+        if store.entry_kind(e) != "recap" and not e.get("revised") and (m.get("status") == "approve" or m.get("choice")):
+            out.append(e["id"])
+    return out
+
+
+def _reask_error(ids: List[str], n: int) -> ReviewError:
+    shown = ", ".join(ids[:8]) + (f" and {len(ids) - 8} more" if len(ids) > 8 else "")
+    return ReviewError(
+        f"this round asks again what round {n} already settled: {shown}. Only blocks marked Change, skipped or left "
+        "open come back. Move the settled ones into a `settled` block (context, no controls), or set `revised` on a "
+        "block you really changed. To ask them again on purpose, pass allow_reask.", 409)
+
+
 def add_round(review_id: str, decisions: Optional[str] = None, prototype: Optional[str] = None,
               design: Optional[str] = None, allow_live_demo: Optional[bool] = None, project: Optional[str] = None,
-              no_design: Optional[bool] = None, off_brand: Optional[str] = None, **look: Any) -> Dict[str, Any]:
+              no_design: Optional[bool] = None, off_brand: Optional[str] = None, allow_reask: Optional[bool] = None,
+              **look: Any) -> Dict[str, Any]:
     """Add the next round. Design: `design`, else the review's own, else the profile bound to `project`, else refused
-    when saved profiles exist (unless `no_design`, or the review was created with it). See create()."""
+    when saved profiles exist (unless `no_design`, or the review was created with it). See create().
+    A round that asks again what the last round settled is refused unless `allow_reask`."""
     unknown = set(look) - set(settings.REVIEW_KEYS)
     if unknown:
         raise ReviewError(f"unknown setting(s): {', '.join(sorted(unknown))}")
@@ -231,6 +262,10 @@ def add_round(review_id: str, decisions: Optional[str] = None, prototype: Option
         if existing["mode"] == "herenow" and wakeguard.password_on(existing):
             spec = bundle.bundle_spec(spec)   # see create(): only gated here.now prototype rounds are bundled
         spec, extra = _brand_round(spec, project, no_design, reason, review=existing)
+        if not allow_reask and existing.get("rounds"):
+            again = reasked(existing["rounds"][-1], spec)
+            if again:
+                raise _reask_error(again, existing["rounds"][-1]["n"])
         data = store.add_round(review_id, spec, look=new_look)
         if data["mode"] == "herenow":
             data = herenow.publish(review_id)
@@ -278,6 +313,9 @@ def get_feedback(review_id: str, round_n: Optional[int] = None) -> Dict[str, Any
                             "When done, call mock_review_add_round with the result (what you built, with notes_answered "
                             "for every note) so the reviewer sees it on the same link. Do not ask for confirmation "
                             "again.")
+    elif (res["action"] == "send" and res["kind"] == "decisions" and r.get("feedback") and data["status"] == "open"
+          and r["n"] == data["rounds"][-1]["n"]):
+        res["next_round"] = SEND_NEXT_ROUND
     return res
 
 

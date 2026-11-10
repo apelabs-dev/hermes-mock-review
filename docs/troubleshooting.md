@@ -186,6 +186,19 @@ Check them in order:
   whose origin has no chat id (created before chat ids were required), or a gateway answer of 400, 413 or 422. 401, 403,
   429 and 5xx answers are retried every `retry_seconds`.
 
+### add-round says the round asks again what was already settled
+
+The round brings back a block the last round approved, or a question it answered, with the same id, still markable and
+without `revised`. Only blocks marked Change, skipped or left open come back; move the settled ones into a `settled`
+block, or set `revised` on a block that really changed. `--allow-reask` (`allow_reask: true` for the tools) asks them
+again on purpose.
+
+### A round's files were edited after it was added
+
+The board checks marks and Build against the block list stored in `review.json` when the round was added (`decisions`,
+`mocks`, `preset`, `gate`). Editing `rounds/<n>/a/decisions.json` afterwards leaves that record stale, so Build can be
+checked against blocks that are no longer on the page. Add a new round instead.
+
 ### Build pressed but nothing came back
 
 Build is a Send with `action: "build"`, so the three steps above apply: check the wake route first with

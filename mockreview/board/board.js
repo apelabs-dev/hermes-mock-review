@@ -1252,6 +1252,10 @@
               onclick: function () { jumpTo('dz-' + n.ref); } })));
       })));
   }
+  function renderRecapNote(b) {   // a recap with markable: false: a record to read, no controls (it used to draw nothing)
+    return h('section', { class: 'blk blk-recap', id: 'dz-' + b.id }, h('h2', { text: b.title || 'Recap' }),
+      h('ul', { class: 'recap' }, (b.items || []).map(function (x) { return h('li', { text: x }); })));
+  }
   function renderSettled(b) {   // "Already decided": context only, never a control
     return h('section', { class: 'blk blk-settled' }, h('h2', { text: b.title || 'Already decided' }),
       h('div', { class: 'cards settled' }, b.items.map(function (it) {
@@ -1370,6 +1374,7 @@
     if (b.type === 'table') return renderTable(b);
     if (b.type === 'mock') return renderContextMock(r, a, b);
     if (b.type === 'settled') return renderSettled(b);
+    if (b.type === 'recap' && b.markable === false) return renderRecapNote(b);
     if (!isMarkableBlock(b)) return null;
     var el = h('section', { class: 'blk item', id: 'dz-' + b.id, 'data-id': b.id, 'data-kind': b.type });
     var head = h('div', { class: 'ihead' }, b.tag ? h('span', { class: 'tag', text: b.tag }) : b.type === 'question' ? h('span', { class: 'tag', text: 'Question' }) : null,
