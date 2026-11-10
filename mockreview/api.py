@@ -15,7 +15,7 @@ import time
 import urllib.request
 from typing import Any, Dict, List, Optional
 
-from . import bundle, config, feedback, herenow, locks, owner, service, settings, store, wakeguard
+from . import brand, bundle, config, feedback, herenow, locks, owner, service, settings, store, wakeguard
 from .store import ReviewError
 
 log = logging.getLogger("mockreview.api")
@@ -62,6 +62,43 @@ def _spec(decisions: Optional[str], prototype: Optional[str], design: Optional[s
     return spec
 
 
+def _brand_round(spec: Dict[str, Any], project: Optional[str], no_design: bool, reason: Optional[str],
+                 review: Optional[Dict[str, Any]] = None) -> Any:
+    """Settle which design profile a round wears and, when one does, check the mocks against it. Runs before anything
+    is written. Order: the explicit design, the review's own (add-round), the project's bound profile, a review made
+    with no_design, then refuse when saved profiles exist. Returns (spec, extra result keys)."""
+    extra: Dict[str, Any] = {}
+    d = spec.get("design")
+    if not d and review is not None:
+        d = store.inherited_design(review["id"], review)    # store.add_round applies it
+    if not d:
+        name = brand.project_profile(project) if project else None
+        if name:
+            d = store.design_dir(name)
+            spec = dict(spec, design=d)
+            extra["design_auto"] = name
+        elif not (no_design or (review or {}).get("no_design")):
+            names = [x["name"] for x in store.list_designs()]
+            if names:
+                raise ReviewError(brand.refusal(project, names))
+    if no_design:
+        spec = dict(spec, no_design=True)
+    if reason:
+        spec = dict(spec, off_brand=reason)
+        extra["off_brand"] = reason
+    elif d and spec.get("kind") == "decisions":
+        brand.enforce(spec["decisions"], d)    # prototype rounds are whole apps: not scanned
+    return spec, extra
+
+
+def _brand_args(design: Optional[str], project: Any, no_design: Any, off_brand: Any):
+    """Validate the three brand arguments up front: (project, no_design, reason)."""
+    reason = brand.clean_off_brand(off_brand)
+    if design and no_design:
+        raise ReviewError("design and no_design contradict each other: pass one")
+    return brand.clean_project(project), bool(no_design), reason
+
+
 def check_wake_toolsets(mode: str, wake: bool, password: bool = False) -> None:
     """Refuse a board that wakes Hermes while wake_toolsets grants the woken session tools and the way to its Send button
     is not gated: a here.now board without its password, or any board while the server listens beyond loopback. Every
@@ -83,8 +120,13 @@ def _owned(fn):
 def create(title: str, origin: Optional[Dict[str, str]] = None, brief: str = "", mode: Optional[str] = None,
            decisions: Optional[str] = None,
            prototype: Optional[str] = None, design: Optional[str] = None, allow_live_demo: Optional[bool] = None,
-           wake: Optional[bool] = None, password: Optional[bool] = None, **look: Any) -> Dict[str, Any]:
+           wake: Optional[bool] = None, password: Optional[bool] = None, project: Optional[str] = None,
+           no_design: Optional[bool] = None, off_brand: Optional[str] = None, **look: Any) -> Dict[str, Any]:
     """Create a review; `look` = per-review overrides (devices, default_device, default_theme, ...).
+
+    Design: `design`, else the profile bound to `project` (an absolute path; design_auto in the result), else refused
+    when saved profiles exist unless `no_design`. Decision-round mocks must stay inside the profile unless `off_brand`
+    carries a reason (see brand.py).
 
     Preflight, all before anything is published: the owning board server is found (or this process's store is the
     one it watches), its wake route works (unless wake is off), and after the board is written the server can load
@@ -93,6 +135,7 @@ def create(title: str, origin: Optional[Dict[str, str]] = None, brief: str = "",
     unknown = set(look) - set(settings.REVIEW_KEYS)
     if unknown:
         raise ReviewError(f"unknown setting(s): {', '.join(sorted(unknown))}")
+    project, no_design, reason = _brand_args(design, project, no_design, off_brand)
     mode = resolve_mode(mode)
     try:
         stored = settings.review_settings(look)
@@ -111,6 +154,7 @@ def create(title: str, origin: Optional[Dict[str, str]] = None, brief: str = "",
     if mode == "herenow" and ctx.state == "unreachable":
         raise owner.OwnerError(f"refusing to publish a public board: {ctx.why}. Nothing would poll its feedback.", 503)
     with owner.bound(ctx):
+        spec, extra = _brand_round(spec, project, no_design, reason)
         data = store.create_review(title, brief, origin, mode, spec, look=stored, wake=want_wake, password=want_password)
         if not owner.confirm_visible(data["id"], ctx):
             owner.discard_created(data["id"])
@@ -118,7 +162,7 @@ def create(title: str, origin: Optional[Dict[str, str]] = None, brief: str = "",
                 f"the board server on {config.local_base()} could not load the review it was just given "
                 f"(store {ctx.data_root}); it was removed and nothing was published.", 502)
         res: Dict[str, Any] = {"review_id": data["id"], "url": None, "mode": data["mode"], "round": 1,
-                               "settings": stored, "owner": ctx.as_dict()}
+                               "settings": stored, "owner": ctx.as_dict(), **extra}
         if not want_wake:
             res["wake"] = False
         if mode == "herenow":
@@ -142,10 +186,14 @@ def create(title: str, origin: Optional[Dict[str, str]] = None, brief: str = "",
 
 
 def add_round(review_id: str, decisions: Optional[str] = None, prototype: Optional[str] = None,
-              design: Optional[str] = None, allow_live_demo: Optional[bool] = None, **look: Any) -> Dict[str, Any]:
+              design: Optional[str] = None, allow_live_demo: Optional[bool] = None, project: Optional[str] = None,
+              no_design: Optional[bool] = None, off_brand: Optional[str] = None, **look: Any) -> Dict[str, Any]:
+    """Add the next round. Design: `design`, else the review's own, else the profile bound to `project`, else refused
+    when saved profiles exist (unless `no_design`, or the review was created with it). See create()."""
     unknown = set(look) - set(settings.REVIEW_KEYS)
     if unknown:
         raise ReviewError(f"unknown setting(s): {', '.join(sorted(unknown))}")
+    project, no_design, reason = _brand_args(design, project, no_design, off_brand)
     spec = _spec(decisions, prototype, design, allow_live_demo)
     ctx = owner.resolve_soft()
     with owner.bound(ctx):
@@ -164,11 +212,12 @@ def add_round(review_id: str, decisions: Optional[str] = None, prototype: Option
                 raise _settings_error(e)
         if existing["mode"] == "herenow" and wakeguard.password_on(existing):
             spec = bundle.bundle_spec(spec)   # see create(): only gated here.now prototype rounds are bundled
+        spec, extra = _brand_round(spec, project, no_design, reason, review=existing)
         data = store.add_round(review_id, spec, look=new_look)
         if data["mode"] == "herenow":
             data = herenow.publish(review_id)
         return {"review_id": review_id, "round": data["rounds"][-1]["n"], "url": store.review_url(data),
-                "mode": data["mode"], "owner": ctx.as_dict(), **herenow.password_result(data)}
+                "mode": data["mode"], "owner": ctx.as_dict(), **extra, **herenow.password_result(data)}
 
 
 def _record_read(review_id: str, round_n: int) -> None:

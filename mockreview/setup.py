@@ -1027,7 +1027,7 @@ def _run(args: argparse.Namespace) -> int:
                 dec.write_text(json.dumps({"blocks": [{"type": "text", "title": "Setup", "text": TEST_TITLE}]}), encoding="utf-8")
                 try:
                     res = api.create(title=TEST_TITLE, origin=None, brief=SETUP_BRIEF,
-                                     mode="local", decisions=str(dec), wake=False)
+                                     mode="local", decisions=str(dec), wake=False, no_design=True)
                 except (ReviewError, settings.SettingsError) as e:
                     msg = getattr(e, "message", None) or str(e)
                     print(f"test review pending: {msg}")

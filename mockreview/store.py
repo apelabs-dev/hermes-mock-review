@@ -204,6 +204,7 @@ MAX_MILESTONES = 6
 MAX_NOTES_ANSWERED = 40
 MAX_GATE_AFTER = 12
 MAX_GATE_LATER = 20
+MAX_PROJECTS = 50
 
 
 def designs_root() -> Path:
@@ -258,11 +259,124 @@ def validate_design(d: Path) -> Dict[str, Any]:
             if not (d / v).is_file():
                 raise ReviewError(f"design.json: {key} file not found: {v}")
             out[key] = v
+    out["projects"] = _clean_projects(raw.get("projects"))
     return out
 
 
+def _clean_projects(v: Any) -> List[str]:
+    """design.json `projects`: absolute directory paths the profile is bound to (deduplicated, at most MAX_PROJECTS)."""
+    if v is None:
+        return []
+    if not isinstance(v, list):
+        raise ReviewError("design.json: projects must be a list of absolute paths")
+    out: List[str] = []
+    seen = set()
+    for p in v:
+        if not isinstance(p, str) or not p.strip() or len(p) > 500 or not Path(p.strip()).is_absolute():
+            raise ReviewError(f"design.json: projects must hold absolute paths, got {p!r}")
+        p = p.strip()
+        key = os.path.normcase(os.path.normpath(p))
+        if key not in seen:
+            seen.add(key)
+            out.append(p)
+    if len(out) > MAX_PROJECTS:
+        raise ReviewError(f"design.json: at most {MAX_PROJECTS} projects per profile")
+    return out
+
+
+@contextlib.contextmanager
+def designs_locked() -> Iterator[None]:
+    """Serialises every edit of a saved profile (save, bind, unbind) so none loses another's `projects`."""
+    designs_root().mkdir(parents=True, exist_ok=True)
+    with locks.exclusive(designs_root() / ".lock"):
+        yield
+
+
+def _read_projects(d: Path) -> List[str]:
+    """The `projects` of a saved profile dir, [] when it has none or cannot be read."""
+    try:
+        return _clean_projects(json.loads((d / "design.json").read_text(encoding="utf-8")).get("projects"))
+    except (OSError, ValueError, ReviewError, AttributeError):
+        return []
+
+
+def project_bindings() -> Dict[str, List[str]]:
+    """{profile name: bound project paths} over the saved profiles that have any."""
+    out: Dict[str, List[str]] = {}
+    root = designs_root()
+    if root.is_dir():
+        for d in sorted(root.iterdir()):
+            if d.is_dir() and DESIGN_RE.match(d.name):
+                projects = _read_projects(d)
+                if projects:
+                    out[d.name] = projects
+    return out
+
+
+def _same_path(a: str, b: str) -> bool:
+    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+
+
+def _write_projects(d: Path, projects: List[str]) -> None:
+    raw = json.loads((d / "design.json").read_text(encoding="utf-8"))
+    raw["projects"] = projects
+    atomic_write(d / "design.json", json.dumps(raw, indent=2, ensure_ascii=False))
+
+
+def _saved_design(name: str) -> Path:
+    if not DESIGN_RE.match(name or ""):
+        raise ReviewError("design name must be lowercase letters, digits and dashes")
+    d = designs_root() / name
+    if not d.is_dir():
+        raise ReviewError(f"unknown design {name!r} (save it first with `mockreview design save`)")
+    validate_design(d)
+    return d
+
+
+def _conflict(path: str, name: str, bindings: Dict[str, List[str]]) -> None:
+    for other, paths in bindings.items():
+        if other != name and any(_same_path(path, p) for p in paths):
+            raise ReviewError(f"{path} is already bound to design {other!r}; unbind it there first "
+                              f"(`hermes mockreview design unbind {other} {path}`)")
+
+
+def bind_design(name: str, path: str) -> List[str]:
+    """Bind a project directory to a saved profile. Returns the profile's project list."""
+    if not isinstance(path, str) or not Path(path).is_absolute():
+        raise ReviewError(f"project path must be absolute: {path}")
+    if not Path(path).is_dir():
+        raise ReviewError(f"project directory not found: {path}")
+    real = os.path.realpath(path)
+    with designs_locked():
+        d = _saved_design(name)
+        _conflict(real, name, project_bindings())
+        projects = _read_projects(d)
+        if any(_same_path(real, p) for p in projects):
+            return projects
+        if len(projects) >= MAX_PROJECTS:
+            raise ReviewError(f"design {name!r} already has {MAX_PROJECTS} projects")
+        projects.append(real)
+        _write_projects(d, projects)
+        return projects
+
+
+def unbind_design(name: str, path: str) -> List[str]:
+    """Remove a project directory from a saved profile. Returns the profile's project list."""
+    if not isinstance(path, str) or not Path(path).is_absolute():
+        raise ReviewError(f"project path must be absolute: {path}")
+    with designs_locked():
+        d = _saved_design(name)
+        projects = _read_projects(d)
+        kept = [p for p in projects if not _same_path(path, p)]
+        if len(kept) == len(projects):
+            raise ReviewError(f"{path} is not bound to design {name!r}")
+        _write_projects(d, kept)
+        return kept
+
+
 def save_design(name: str, src: Path) -> Dict[str, Any]:
-    """Copy a design profile dir into designs/<name>/ (replacing the old one)."""
+    """Copy a design profile dir into designs/<name>/ (replacing the old one). The project bindings of the profile being
+    replaced carry over unless the source design.json brings its own `projects`."""
     if not DESIGN_RE.match(name):
         raise ReviewError("design name must be lowercase letters, digits and dashes")
     src = Path(src).expanduser()
@@ -271,13 +385,22 @@ def save_design(name: str, src: Path) -> Dict[str, Any]:
     info = validate_design(src)
     dest = designs_root() / name
     tmp = designs_root() / f".{name}.tmp"
-    if tmp.exists():
-        shutil.rmtree(tmp)
-    tmp.mkdir(parents=True)
-    _copy_assets(src, tmp)
-    if dest.exists():
-        shutil.rmtree(dest)
-    tmp.rename(dest)
+    with designs_locked():
+        if tmp.exists():
+            shutil.rmtree(tmp)
+        tmp.mkdir(parents=True)
+        _copy_assets(src, tmp)
+        own = "projects" in json.loads((src / "design.json").read_text(encoding="utf-8"))
+        projects = info["projects"] if own else (_read_projects(dest) if dest.is_dir() else [])
+        others = project_bindings()
+        for p in projects:
+            _conflict(p, name, others)
+        if projects != info["projects"] or (own and not projects):
+            _write_projects(tmp, projects)
+        info["projects"] = projects
+        if dest.exists():
+            shutil.rmtree(dest)
+        tmp.rename(dest)
     return info
 
 
@@ -726,7 +849,21 @@ def _install_round(review_id: str, n: int, spec: Dict[str, Any]) -> List[Dict[st
                              "file": f"rounds/{n}/{vid}/index.html", "source": str(p["src"])})
     if spec.get("design"):
         _copy_assets(spec["design"], base / "a" / "design")
+        _strip_projects(base / "a" / "design")
     return variants
+
+
+def _strip_projects(d: Path) -> None:
+    """A round's copy of a profile never carries its `projects`: the board serves that folder, and the paths are the
+    owner's, not the reviewer's."""
+    f = d / "design.json"
+    try:
+        raw = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if isinstance(raw, dict) and "projects" in raw:
+        del raw["projects"]
+        atomic_write(f, json.dumps(raw, indent=2, ensure_ascii=False))
 
 
 def _round_record(n: int, spec: Dict[str, Any], variants: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -742,6 +879,9 @@ def _round_record(n: int, spec: Dict[str, Any], variants: List[Dict[str, Any]]) 
             r["gate"] = spec["decisions"]["gate"]   # feedback.gate_state / the build action read it from here
     if spec.get("design"):
         r["design"] = validate_design(spec["design"])
+        r["design"].pop("projects", None)
+    if spec.get("off_brand"):
+        r["off_brand"] = spec["off_brand"]
     return r
 
 
@@ -801,6 +941,10 @@ def create_review(title: str, brief: str, origin: Any, mode: str, spec: Any,
         }
         if look:
             data["settings"] = dict(look)
+        if spec.get("no_design"):
+            data["no_design"] = True       # later rounds need not repeat it (see api.add_round)
+        if spec.get("off_brand"):
+            data["off_brand"] = spec["off_brand"]
         if not wake:
             data["wake"] = False       # a board nobody is woken by: Send stores feedback, sends nothing
         if mode == "herenow":
@@ -812,6 +956,12 @@ def create_review(title: str, brief: str, origin: Any, mode: str, spec: Any,
     return data
 
 
+def inherited_design(review_id: str, data: Dict[str, Any]) -> Optional[Path]:
+    """The design dir the next round of this review inherits (the newest round's copy), or None."""
+    prev = review_dir(review_id) / "rounds" / str(len(data["rounds"])) / "a" / "design"
+    return prev if prev.is_dir() else None
+
+
 def add_round(review_id: str, spec: Any, look: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """`look`: replaces the review's stored settings (only when the caller passed per-review overrides)."""
     spec = _as_spec(spec)
@@ -821,11 +971,13 @@ def add_round(review_id: str, spec: Any, look: Optional[Dict[str, Any]] = None) 
             raise ReviewError("review is closed", 409)
         n = len(data["rounds"]) + 1
         if not spec.get("design"):
-            prev = review_dir(review_id) / "rounds" / str(n - 1) / "a" / "design"
-            if prev.is_dir():
+            prev = inherited_design(review_id, data)
+            if prev:
                 spec = dict(spec, design=prev)   # a new round keeps the review's design unless told otherwise
         variants = _install_round(review_id, n, spec)
         data["rounds"].append(_round_record(n, spec, variants))
+        if spec.get("off_brand"):
+            data["off_brand"] = spec["off_brand"]
         if look:
             data["settings"] = dict(look)
         save(review_id, data)

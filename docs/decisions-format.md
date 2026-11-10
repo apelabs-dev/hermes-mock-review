@@ -197,6 +197,65 @@ colours. It may also set `surface2`, `line`, `line2`, `muted`, `faint`, `accentI
 
 Then pass `design="acme"` (or `--design acme`) to create. `add-round` inherits the profile.
 
+### Brand enforcement
+
+A saved profile can be bound to the projects it belongs to, so that forgetting `design` cannot produce a generic-looking
+board. `design.json` may carry an optional `projects` list of absolute paths (at most 50). Edit it with:
+
+    hermes mockreview design bind acme /path/to/acme-app
+    hermes mockreview design unbind acme /path/to/acme-app
+
+`bind` needs an existing directory, stores its real path and refuses a path already bound to another profile (unbind it
+there first). Binding the same path twice changes nothing. `design save` keeps the bindings of the profile it replaces,
+unless the new `design.json` brings its own `projects`. `design show` and `design list` print them. A round's copy of the
+profile never carries `projects`.
+
+**Auto-apply.** `create` and `add-round` take a `project`: an absolute path (the CLI's `--project`, default the current
+directory; the MCP and plugin tools have no default, so pass it). The board wears the profile bound to the project, to
+the git repository it is in, or to the main checkout when the project is a linked git worktree, so a binding to the main
+checkout applies inside its worktrees. The most specific (longest) bound path wins. The result names the profile in
+`design_auto`.
+
+**Which design a round gets.** `create`: `design`, else the project's bound profile, else a refusal when any profile is
+saved and `no_design` is not set, else no design. `add-round`: `design`, else the review's own design (as before), else
+the project's bound profile, else none for a review created with `no_design`, else the same refusal. `design` together
+with `no_design` is an error.
+
+The refusal names the project it checked, lists the saved profiles and offers three fixes: pass `design="<name>"`
+(`--design <name>`); bind the project with `hermes mockreview design bind <name> <abs path>`; or pass `no_design=true`
+(`--no-design`) for a board that deliberately has no profile. Nothing is created when it fires. `no_design` is recorded on
+the review, so later rounds need not repeat it.
+
+**Off-brand check.** When a profile is in effect (given, inherited or auto-applied), a decision round is refused if its
+mocks use a colour or a font the profile does not allow. It reads the HTML of every block that has an `html` string and of
+every option, and `extra_css`. Only CSS is read: `style` attributes, `<style>` text and the colour attributes `fill`,
+`stroke`, `stop-color`, `flood-color`, `lighting-color`, `color` and `bgcolor`. Selectors, `url(...)` and quoted strings
+are skipped, so `#add {}` or `url(#grad)` is not a colour.
+
+- Colours: `#hex` (3, 4, 6 or 8 digits), `rgb()`/`rgba()` (comma or space syntax), `hsl()`/`hsla()` and CSS colour names.
+  Names count only in colour properties, so an animation called `tan` is fine. Custom property definitions
+  (`--brand: #ff6b00`) and the fallback of a `var()` (`var(--x, #ff6b00)`) are checked like any other literal.
+- Allowed colours: every colour in the profile's themes, every colour in its `mock.css`, and white and black. Alpha is
+  ignored, so `rgba(<accent>, .15)` passes, and `hsl()` may differ by one per channel for rounding. `var(--x)` is always
+  allowed.
+- Fonts: `font-family` and the family part of `font`. Allowed are the families in the profile's `font`, those declared in
+  its `mock.css` and `fonts.css`, the generic families (`sans-serif`, `system-ui`, `monospace`, ...), CSS-wide keywords
+  and `var(...)`.
+
+A failure lists each value with its path, once each, at most 20 lines and then `... and N more`:
+
+    blocks[3].options[b].html: color #ff6b00 is not in profile acme
+    blocks[1].html: font-family "Comic Sans MS" is not in profile acme
+
+The last line names the board's tokens (`--bg --surface --surface-2 --line --line-strong --text --muted --faint --accent
+--accent-ink --accent-soft --ok --warn --err --font`): use `var(--accent)` and friends instead of raw values.
+
+**Bypass.** `off_brand="<reason>"` (`--off-brand "<reason>"`), 1 to 200 characters, skips the check for a round that is
+off-brand on purpose. The reason is recorded on the round and on the review (the latest one) and echoed in the result. An
+empty reason counts as not given.
+
+Prototype ("try it live") rounds are whole pages and are not scanned.
+
 ## Validation errors
 
 A bad file fails the create call with the path of the problem, for example `blocks[2]: tone must be one of ('neutral',

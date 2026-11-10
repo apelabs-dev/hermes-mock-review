@@ -73,6 +73,21 @@ def _round_properties() -> Dict[str, Any]:
         "allow_live_demo": {"type": "boolean",
                             "description": "Allow a prototype round for this call. Only true if the user asked for a "
                                            "live demo."},
+        **brand_properties(),
+    }
+
+
+def brand_properties() -> Dict[str, Any]:
+    return {
+        "project": {"type": "string",
+                    "description": "Absolute path of the project (repo) this board is for. Pass it: the design profile "
+                                   "bound to it applies on its own, in worktrees too."},
+        "no_design": {"type": "boolean",
+                      "description": "A board that deliberately has no design profile. Needed only when profiles are "
+                                     "saved and none applies."},
+        "off_brand": {"type": "string", "maxLength": 200,
+                      "description": "Why this round is off-brand on purpose (1-200 characters). Skips the check that "
+                                     "mocks use only the profile's colours and fonts; recorded in the review."},
     }
 
 
@@ -109,7 +124,10 @@ def tools() -> List[Dict[str, Any]]:
     return [
         {
             "name": "mock_review_create",
-            "description": "Create a mock review board (round 1) for the user to mark up. Returns review_id + url.",
+            "description": "Create a mock review board (round 1) for the user to mark up. Returns review_id + url. "
+                           "Pass project (absolute repo path) so the project's bound design profile applies; with "
+                           "saved profiles, a create with no design, no binding and no no_design fails. Mocks must "
+                           "use the profile's colours and fonts (var(--accent) ...), or the call fails.",
             "inputSchema": {"type": "object", "properties": {
                 "title": {"type": "string"},
                 "brief": {"type": "string"},
@@ -127,7 +145,9 @@ def tools() -> List[Dict[str, Any]]:
         },
         {
             "name": "mock_review_add_round",
-            "description": "Add the next round to an open mock review (same link).",
+            "description": "Add the next round to an open mock review (same link). Keeps the review's design profile; "
+                           "pass project (absolute repo path) so a bound profile applies. Mocks must use the "
+                           "profile's colours and fonts, or the call fails.",
             "inputSchema": {"type": "object", "properties": {
                 "review_id": {"type": "string"},
                 **round_props,
@@ -188,6 +208,11 @@ def _look(args: Dict[str, Any]) -> Dict[str, Any]:
     return {k: args.get(k) for k in settings.REVIEW_KEYS if args.get(k) is not None}
 
 
+def _brand(args: Dict[str, Any]) -> Dict[str, Any]:
+    """project, no_design, off_brand as given: no default project here, the agent passes it."""
+    return {"project": args.get("project"), "no_design": args.get("no_design"), "off_brand": args.get("off_brand")}
+
+
 def _round_number(args: Dict[str, Any]) -> Optional[int]:
     value = args.get("round")
     if value is None:
@@ -230,6 +255,7 @@ def _create(args: Dict[str, Any], options: Options) -> Dict[str, Any]:
         allow_live_demo=args.get("allow_live_demo"),
         wake=wake,
         password=args.get("password"),
+        **_brand(args),
         **_look(args),
     )
 
@@ -243,6 +269,7 @@ def _add_round(args: Dict[str, Any], options: Options) -> Dict[str, Any]:
         prototype=args.get("prototype"),
         design=args.get("design"),
         allow_live_demo=args.get("allow_live_demo"),
+        **_brand(args),
         **_look(args),
     )
 

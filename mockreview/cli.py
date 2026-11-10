@@ -27,19 +27,26 @@ def _look(a) -> Dict[str, Any]:
     return {k: getattr(a, k, None) for k in settings.REVIEW_KEYS}
 
 
+def _brand(a) -> Dict[str, Any]:
+    """project (default: the current directory), no_design and off_brand of a create / add-round call."""
+    return {"project": os.path.abspath(a.project) if a.project else os.getcwd(), "no_design": a.no_design,
+            "off_brand": a.off_brand}
+
+
 def cmd_create(a) -> int:
     origin = {"platform": a.platform, "chat_id": a.chat_id}
     if a.thread is not None:
         origin["thread_id"] = a.thread
     out(api.create(a.title, origin,
                    brief=a.brief, mode=a.mode, decisions=a.decisions, prototype=a.prototype,
-                   design=a.design, allow_live_demo=a.allow_live_demo, wake=a.wake, password=a.password, **_look(a)))
+                   design=a.design, allow_live_demo=a.allow_live_demo, wake=a.wake, password=a.password,
+                   **_brand(a), **_look(a)))
     return 0
 
 
 def cmd_add_round(a) -> int:
     out(api.add_round(a.review_id, decisions=a.decisions, prototype=a.prototype, design=a.design,
-                      allow_live_demo=a.allow_live_demo, **_look(a)))
+                      allow_live_demo=a.allow_live_demo, **_brand(a), **_look(a)))
     return 0
 
 
@@ -157,6 +164,9 @@ def cmd_design(a) -> int:
     with owner.bound(owner.resolve_soft()):
         if a.design_cmd == "save":
             out({"ok": True, "saved": a.name, "design": store.save_design(a.name, Path(a.dir))})
+        elif a.design_cmd in ("bind", "unbind"):
+            fn = store.bind_design if a.design_cmd == "bind" else store.unbind_design
+            out({"ok": True, "name": a.name, "projects": fn(a.name, a.path)})
         elif a.design_cmd == "show":
             d = store.design_dir(a.name)
             out({"name": a.name, "path": str(d), **store.validate_design(d)})
@@ -214,6 +224,15 @@ def _round_args(c) -> None:
                    help="the project's design profile (saved name or a profile dir); add-round inherits it")
     _bool_flag(c, "allow-live-demo", "allow_live_demo", "allow a --prototype round for this call",
                "refuse a --prototype round for this call")
+    c.add_argument("--project", metavar="/abs/dir",
+                   help="the project this board is for (default: the current directory): a design profile bound to it, "
+                        "to its git repository or to the main checkout of its worktree applies on its own")
+    c.add_argument("--no-design", dest="no_design", action="store_true", default=False,
+                   help="a board that deliberately has no design profile (needed when profiles are saved, none is "
+                        "bound to the project and --design is not given)")
+    c.add_argument("--off-brand", metavar="REASON", default=None,
+                   help="skip the off-brand check of the mocks' colours and fonts against the design profile, and "
+                        "record why (1-200 characters)")
     g = c.add_argument_group("per-review look (default: saved settings; stored in the review)")
     g.add_argument("--devices", metavar="desktop,tablet,mobile", help="device widths offered on the board")
     g.add_argument("--default-device", choices=("auto",) + settings.DEVICES)
@@ -259,9 +278,15 @@ def add_commands(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
     d = ds.add_parser("save", help="save/refresh a profile from a dir holding design.json (+ mock.css, fonts, icon)")
     d.add_argument("name")
     d.add_argument("dir")
-    d = ds.add_parser("show")
+    d = ds.add_parser("show", help="print a saved profile, including the projects bound to it")
     d.add_argument("name")
     ds.add_parser("list")
+    d = ds.add_parser("bind", help="bind a project directory to a saved profile, so boards made for it wear the profile")
+    d.add_argument("name")
+    d.add_argument("path", metavar="/abs/project/dir")
+    d = ds.add_parser("unbind", help="remove a project directory from a saved profile")
+    d.add_argument("name")
+    d.add_argument("path", metavar="/abs/project/dir")
     c.set_defaults(**{FN: cmd_design})
 
     c = sub.add_parser("feedback", help="print a round's feedback (JSON + markdown)")

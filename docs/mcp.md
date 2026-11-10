@@ -35,7 +35,11 @@ tools, so validation, storage and publishing behave identically.
 
 `mock_review_create` creates a board and its first round. `title` is required. `brief` is the reviewer-facing context.
 `decisions` is an absolute path to a `decisions.json` round, `prototype` an absolute path to a clickable
-`index.html` round, and `design` a saved design profile name or an absolute profile directory. `mode` is one of
+`index.html` round, and `design` a saved design profile name or an absolute profile directory. `project` is the absolute
+path of the repo the board is for: the profile bound to it applies on its own (there is no default, so pass it). With saved
+profiles, a create that has no `design`, no bound project and no `no_design: true` fails; `off_brand` (a reason, up to 200
+characters) skips the check of the mocks' colours and fonts against the profile (see "Brand enforcement" in
+[decisions-format.md](decisions-format.md)). `mode` is one of
 `tailnet`, `tailscale`, `local`, `lan` or `herenow` (the aliases resolve like the CLI's). `allow_live_demo` permits a
 prototype round for this call when the `offer_live_demo` setting is off. `password` controls the here.now password gate.
 The per-review look keys (`devices`, `default_device`, `default_theme`, `show_theme_toggle`, `pins_enabled`,
@@ -44,7 +48,7 @@ and are stored in the review. The result carries `review_id`, `url`, `mode` and 
 nobody is woken by.
 
 `mock_review_add_round` adds the next round to an open review and returns the same link. `review_id` is required; it
-takes `decisions`, `prototype`, `design`, `allow_live_demo` and the look keys.
+takes `decisions`, `prototype`, `design`, `project`, `no_design`, `off_brand`, `allow_live_demo` and the look keys.
 
 `mock_review_feedback` reads a round's marks, pins and notes plus a markdown rendering. `review_id` is required and
 `round` is optional (default: the current round). Reading the newest round records that the agent has the feedback, so

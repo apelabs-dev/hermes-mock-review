@@ -54,6 +54,15 @@ ROUND_PROPS: Dict[str, Any] = {
     "decisions": {"type": "string", "description": "Absolute path to decisions.json (a decision round)."},
     "prototype": {"type": "string", "description": "Absolute path to a clickable index.html (\"try it live\")."},
     "design": {"type": "string", "description": "Design profile name or absolute dir."},
+    "project": {"type": "string", "description": (
+        "Absolute path of the project (repo) this board is for. Pass it: the design profile bound to it applies on "
+        "its own, in worktrees too. With saved profiles, a create with no design, no binding and no no_design fails; "
+        "mocks must use the profile's colours and fonts (var(--accent) ...) or the call fails.")},
+    "no_design": {"type": "boolean", "description": (
+        "A board that deliberately has no design profile. Needed only when profiles are saved and none applies.")},
+    "off_brand": {"type": "string", "maxLength": 200, "description": (
+        "Why this round is off-brand on purpose (1-200 characters). Skips the check that mocks use only the "
+        "profile's colours and fonts; recorded in the review.")},
 }
 
 
@@ -74,7 +83,7 @@ def schemas(ask_host: bool, default_host: str, live_demo: bool) -> Dict[str, Dic
     return {
         "mock_review_create": {
             "name": "mock_review_create",
-            "description": "Create a mock review board (round 1) for the user to mark up. Returns review_id + url.",
+            "description": "Create a mock review board (round 1) for the user to mark up. Pass project (repo path).",
             "parameters": {"type": "object", "properties": {
                 "title": {"type": "string"},
                 "origin_platform": {"type": "string", "maxLength": 64, "pattern": "^[a-z][a-z0-9_-]{0,63}$",
@@ -94,7 +103,7 @@ def schemas(ask_host: bool, default_host: str, live_demo: bool) -> Dict[str, Dic
         },
         "mock_review_add_round": {
             "name": "mock_review_add_round",
-            "description": "Add the next round to an open mock review (same link).",
+            "description": "Add the next round to an open mock review (same link). Pass project (repo path).",
             "parameters": {"type": "object", "properties": {
                 "review_id": {"type": "string"}, **ROUND_PROPS, "allow_live_demo": _live_demo_prop(live_demo),
                 **LOOK_PROPS},
@@ -165,12 +174,16 @@ class MockReview:
                     out: Any = api.create(a["title"], origin or None, brief=a.get("brief") or "",
                                           mode=a.get("mode"), decisions=a.get("decisions"),
                                           prototype=a.get("prototype"), design=a.get("design"),
-                                          allow_live_demo=a.get("allow_live_demo"), wake=a.get("wake"), password=a.get("password"), **look)
+                                          allow_live_demo=a.get("allow_live_demo"), wake=a.get("wake"), password=a.get("password"),
+                                          project=a.get("project"), no_design=a.get("no_design"),
+                                          off_brand=a.get("off_brand"), **look)
                 elif name == "mock_review_add_round":
                     if not a.get("review_id"):
                         return json.dumps({"error": "review_id is required"})
                     out = api.add_round(a["review_id"], decisions=a.get("decisions"), prototype=a.get("prototype"),
-                                        design=a.get("design"), allow_live_demo=a.get("allow_live_demo"), **look)
+                                        design=a.get("design"), allow_live_demo=a.get("allow_live_demo"),
+                                        project=a.get("project"), no_design=a.get("no_design"),
+                                        off_brand=a.get("off_brand"), **look)
                 elif name == "mock_review_feedback":
                     if not a.get("review_id"):
                         return json.dumps({"error": "review_id is required"})
