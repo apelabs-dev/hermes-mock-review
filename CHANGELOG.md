@@ -3,6 +3,22 @@
 All notable changes to this project are listed here. The format follows Keep a Changelog, and the project follows
 semantic versioning.
 
+## [1.2.0](https://github.com/apelabs-dev/hermes-mock-review/compare/v1.1.10...v1.2.0) (2026-11-11)
+
+
+### Features
+
+* **mcp:** stdio MCP server so Claude Code, Codex and OpenCode can open review boards ([#27](https://github.com/apelabs-dev/hermes-mock-review/issues/27)) ([9fcaf79](https://github.com/apelabs-dev/hermes-mock-review/commit/9fcaf798214c2ec3e3a88d8bf42ac9f2a7da19bb))
+* plan boards with Build, question cards, working mock controls and brand enforcement ([#32](https://github.com/apelabs-dev/hermes-mock-review/issues/32)) ([3f74298](https://github.com/apelabs-dev/hermes-mock-review/commit/3f74298b70d89d4becd108df30bd5b2715aa334f))
+
+
+### Bug Fixes
+
+* **mcp:** pin the MCP server's stdio to UTF-8 so a non-ASCII title cannot kill or mangle it ([#29](https://github.com/apelabs-dev/hermes-mock-review/issues/29)) ([e75f952](https://github.com/apelabs-dev/hermes-mock-review/commit/e75f9527a08f9ad16e586ffb2bd1d2f62fe4cef0))
+* **mcp:** resolve the wake secret from the environment outside Hermes ([#30](https://github.com/apelabs-dev/hermes-mock-review/issues/30)) ([708d2ce](https://github.com/apelabs-dev/hermes-mock-review/commit/708d2ce7cda4cc7f861077fc8134ba1044de2718))
+* **rounds:** add-round refuses a round that re-asks what the last round settled ([#34](https://github.com/apelabs-dev/hermes-mock-review/issues/34)) ([ec11454](https://github.com/apelabs-dev/hermes-mock-review/commit/ec11454b90ac82b237b7518fe3f0beee9fce188e))
+* **secrets:** decide Hermes presence by the top-level package, so a broken parent still fails closed ([#31](https://github.com/apelabs-dev/hermes-mock-review/issues/31)) ([69baeab](https://github.com/apelabs-dev/hermes-mock-review/commit/69baeab20bb8d20082c185892e0f04e3f1591f04))
+
 ## [1.1.10](https://github.com/apelabs-dev/hermes-mock-review/compare/v1.1.9...v1.1.10) (2026-11-05)
 
 
