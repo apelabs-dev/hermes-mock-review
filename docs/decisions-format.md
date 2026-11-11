@@ -105,7 +105,8 @@ embedded in prose. Surrounding text, sentence punctuation and literal HTML remai
     {"type": "table", "columns": ["", "A", "B"], "rows": [["Taps", 3, 2], ["Risk", "low", "medium"]], "highlight_col": 2}
 
 `recap`: a list the reviewer can confirm. `items` is a list of strings (up to 40, 600 characters each). `markable`
-defaults to true. `id` defaults to `recap` and must not equal a decision or mock id.
+defaults to true. `id` defaults to `recap` and must not equal a decision or mock id. With `markable: false` it is drawn
+as a plain list with no controls.
 
     {"type": "recap", "title": "Agreed so far", "items": ["Dark theme stays", "Header at 48 px"]}
 

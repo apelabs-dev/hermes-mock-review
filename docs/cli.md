@@ -179,6 +179,7 @@ usage: hermes mockreview add-round [-h] [--decisions /abs/decisions.json]
                                    [--no-require-note] [--max-pins N]
                                    [--footer-button {send,build}]
                                    [--interactive] [--no-interactive]
+                                   [--allow-reask]
                                    review_id
 
 positional arguments:
@@ -207,6 +208,8 @@ options:
   --off-brand REASON    skip the off-brand check of the mocks' colours and
                         fonts against the design profile, and record why
                         (1-200 characters)
+  --allow-reask         ask again blocks the last round approved or answered
+                        (refused without it: they belong in a `settled` block)
 
 per-review look (default: saved settings; stored in the review):
   --devices desktop,tablet,mobile

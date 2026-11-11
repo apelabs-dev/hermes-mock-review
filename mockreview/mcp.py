@@ -150,17 +150,20 @@ def tools() -> List[Dict[str, Any]]:
             "description": "Add the next round to an open mock review (same link). Keeps the review's design profile; "
                            "pass project (absolute repo path) so a bound profile applies. Mocks must use the "
                            "profile's colours and fonts, or the call fails. After Build, post the "
-                           "build result here.",
+                           "build result here. Only open blocks come back; approved ones go in a settled block.",
             "inputSchema": {"type": "object", "properties": {
                 "review_id": {"type": "string"},
                 **round_props,
+                "allow_reask": {"type": "boolean",
+                                "description": "Ask again blocks the last round approved or answered. Without it "
+                                               "such a round is refused: settled blocks belong in a `settled` block."},
                 **look,
                 }, "required": ["review_id"]},
         },
         {
             "name": "mock_review_feedback",
             "description": "Read a round's feedback (marks, pins, notes) as JSON + markdown. action is send or build; "
-                           "on build, follow next_step.",
+                           "on build, follow next_step; on send, next_round says what the next round may ask.",
             "inputSchema": {"type": "object", "properties": {
                 "review_id": {"type": "string"},
                 "round": {"type": "integer", "description": "Default: current."},
@@ -274,6 +277,7 @@ def _add_round(args: Dict[str, Any], options: Options) -> Dict[str, Any]:
         prototype=args.get("prototype"),
         design=args.get("design"),
         allow_live_demo=args.get("allow_live_demo"),
+        allow_reask=args.get("allow_reask"),
         **_brand(args),
         **_look(args),
     )

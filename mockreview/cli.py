@@ -46,7 +46,7 @@ def cmd_create(a) -> int:
 
 def cmd_add_round(a) -> int:
     out(api.add_round(a.review_id, decisions=a.decisions, prototype=a.prototype, design=a.design,
-                      allow_live_demo=a.allow_live_demo, **_brand(a), **_look(a)))
+                      allow_live_demo=a.allow_live_demo, allow_reask=a.allow_reask, **_brand(a), **_look(a)))
     return 0
 
 
@@ -274,6 +274,9 @@ def add_commands(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
     c = sub.add_parser("add-round", help="add the next round (--decisions or --prototype)")
     c.add_argument("review_id")
     _round_args(c)
+    c.add_argument("--allow-reask", dest="allow_reask", action="store_true", default=False,
+                   help="ask again blocks the last round approved or answered (refused without it: they belong in a "
+                        "`settled` block)")
     c.set_defaults(**{FN: cmd_add_round})
 
     c = sub.add_parser("design", help="per-project design profiles the board wears (colours, font, mock CSS, icon)")

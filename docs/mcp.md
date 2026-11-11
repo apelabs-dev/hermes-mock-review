@@ -53,6 +53,11 @@ takes `decisions`, `prototype`, `design`, `project`, `no_design`, `off_brand`, `
 `mock_review_feedback` reads a round's marks, pins and notes plus a markdown rendering. `review_id` is required and
 `round` is optional (default: the current round). Reading the newest round records that the agent has the feedback, so
 the stalled ping, if any, starts from that read. The result carries `action` (`send`, or `build` after Build).
+After a plain Send on a decisions round it carries `next_round`: ask only what is still open, and list what was
+approved or answered in a `settled` block. `mock_review_add_round` refuses (409) a round that brings back, as markable
+and without `revised`, a block the last round approved or a question it answered; the error names the ids. Pass
+`allow_reask: true` to ask them again on purpose. A markable `recap` is exempt, and so is the result round after Build.
+
 While a build round is the newest round of an open review, it also carries `next_step`: build now and post the result
 with `mock_review_add_round`.
 

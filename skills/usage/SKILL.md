@@ -31,7 +31,15 @@ build, and do not list what is missing.
 
 In the thread's own chat session, take over: read the feedback with `mock_review_feedback` (that read moves the stalled
 ping to `stale_after_read_minutes`, 60 by default) and build the next round with `mock_review_add_round`. If no round
-will follow, call `mock_review_ack`. A round whose decisions are all Approved or Skipped, with no pins or general
+will follow, call `mock_review_ack`.
+
+The next round asks only what is still open: blocks marked Change (set `revised` on them), skipped or unanswered ones,
+and anything new. Approved blocks and answered questions go in a `settled` block, never back as questions. Do not copy
+the last decisions.json and re-send every block: `mock_review_add_round` refuses that round and names the ids
+(`allow_reask` overrides, for a real second ask). Do not edit a round's files in place either; the board checks marks
+and Build against the block list recorded when the round was added, so a fix is a new round.
+
+A round whose decisions are all Approved or Skipped, with no pins or general
 notes and no Build, gets no stalled ping; close the review when the user is done.
 
 ## When Build wakes you

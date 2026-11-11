@@ -70,6 +70,8 @@ PROMPT_TEMPLATE = (
     "Mock review feedback is ready: {review_id} round {round} — {title}. "
     "Read it with mock_review_feedback(review_id='{review_id}', round={round}), then act on the notes, "
     "or build if Build was pressed. "
+    "A next round asks only what is still open: approved blocks and answered questions go in a `settled` block, "
+    "never back as questions. "
     "If this session has no mock_review_feedback tool or cannot write files, do not explain what is missing: reply "
     f"with exactly this one line and stop: {HANDOFF_LINE} "
     "Board: {review_url}"
