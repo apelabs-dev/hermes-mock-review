@@ -1,0 +1,3 @@
+4ec3b90d63ef82efa2c91c6e62845e1f16f66d88
+# The last commit published on main before the 2.0.0 sweep. Everything up to here is already public and cannot be
+# rewritten, so private tokens are checked only in what comes after it; the generic denylist still covers every commit.

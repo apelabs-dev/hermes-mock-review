@@ -1,25 +1,27 @@
-"""Bundle a prototype page into one self-contained HTML file.
+"""Bundle an artifact's page into one self-contained HTML file.
 
-A password-gated here.now site sets its unlock cookie SameSite=Lax. The board shows a prototype in a sandboxed iframe
-(sandbox="allow-scripts": an opaque origin), so every request the page makes for its own CSS, scripts, images and fonts
-is cross-site and goes out without the cookie: the gate answers 401 and the prototype renders unstyled. So a prototype
-published behind a password is inlined first: every local stylesheet, script, image and font becomes part of the HTML as
-a data: URI (nested CSS url() and @import included), and runtime asset paths in scripts go through a small lookup table
-(`window.__MR_A`, read by `window.__mrA(path)`) that holds each asset once.
+An artifact block's `src` page (store.py, decisions.json) is bundled on every kind of board: its served file has the CSP
+of store.ARTIFACT_CSP (no script from a data: URI, no network), so every local stylesheet, script, image and font
+becomes part of the HTML as a data: URI (nested CSS url() and @import included), and runtime asset paths in scripts go
+through a small lookup table (`window.__MR_A`, read by `window.__mrA(path)`) that holds each asset once. A local
+<script src> becomes an inline script and a local ES module import is refused. All artifacts of a round share one 50 MB
+budget, and each emitted data: URI counts once, at any nesting depth: a file referenced ten times is ten times the
+bytes, not one unique asset, and an inlined stylesheet is not counted again on top of the URIs inside it.
+Standard library only; Pillow is used, when already installed, to shrink big PNG/JPEG stills to WebP.
 
 Only the page's own folder is read: a reference that is missing, leaves that folder, goes through a symbolic link, has an
 unsupported type or exceeds the size bounds fails the whole bundle with a message naming it. Nothing is skipped
-silently. Standard library only; Pillow is used, when already installed, to shrink big PNG/JPEG stills to WebP.
+silently.
 
 What is not supported, and fails instead of producing a half-working bundle: a local <iframe>, a link to another local
-page, a web manifest, a <base href>, an alternate stylesheet, a page that already has an import map next to local ES
-modules, Workers and importScripts, and root-absolute ("/x") local paths. Paths built at runtime are found only when
-they are written as a template literal that starts with a local folder (`assets/poster-${n}.webp`).
+page, a web manifest, a <base href>, an alternate stylesheet, Workers and importScripts, and root-absolute ("/x")
+local paths. Paths built at runtime are found only when they are written as a template literal that starts with a
+local folder (`assets/poster-${n}.webp`).
 
 A script string that is a whole asset path (`'missing.png'`, `'lost/poster.png'`) and names no file is a missing
 reference like any other; so is a template literal ending in an asset extension whose folder is missing. Strings
-that are not asset paths (external URLs, prose, object keys, a download's file name, a bare `x.json`/`x.txt`) are left
-as written.
+that are not asset paths (external URLs, prose, object keys, a download's file name, a bare `x.json`/`x.txt`, a
+quoted string starting with `mr-module/`) are left as written.
 """
 
 from __future__ import annotations
@@ -35,13 +37,13 @@ import urllib.parse
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .store import MAX_ASSETS_BYTES, ReviewError
+from .store import MAX_ASSETS_BYTES, ReviewError, size_label
 
 MAX_ASSET_BYTES = 25 * 1024 * 1024        # one file
 MAX_BUNDLE_BYTES = 64 * 1024 * 1024       # the finished HTML
 REENCODE_MIN_BYTES = 300_000              # PNG/JPEG above this become WebP q85 when Pillow is installed
 WEBP_QUALITY = 85
-MODULE_PREFIX = "mr-module/"              # import-map key prefix for ES modules
+LEGACY_MODULE_PREFIX = "mr-module/"       # leave such a quoted literal as written (compatibility; not bundled)
 
 MIME = {
     ".css": "text/css", ".js": "text/javascript", ".mjs": "text/javascript", ".cjs": "text/javascript",
@@ -189,17 +191,16 @@ def _expr_end(s: str, i: int) -> Optional[int]:
 
 
 class Bundler:
-    def __init__(self, index: Path):
+    def __init__(self, index: Path, used: int = 0):
+        """`used`: bytes the round's earlier artifacts already emitted inline, counted against the same 50 MB."""
         self.index = Path(index)
         self.root = self.index.parent.resolve()
         self.problems: List[str] = []
         self.runtime: Dict[str, Optional[str]] = {}    # runtime key -> data: URI, each asset once
-        self.modules: Dict[str, Optional[str]] = {}    # import-map key -> data: URL
         self._uri: Dict[str, str] = {}
         self._busy: List[str] = []
-        self._raw_total = 0
+        self._raw_total = used
         self._emitted = 0
-        self.has_importmap = False
 
     # ------------------------------------------------------------------ bookkeeping
 
@@ -207,11 +208,18 @@ class Bundler:
         if msg not in self.problems:
             self.problems.append(msg)
 
-    def _use(self, text: str) -> str:
+    def _use(self, text: str, asset: str = "") -> str:
+        """Count one emitted data: URI against the artifact's 64 MB output and the round's 50 MB budget: each emitted
+        data: URI counts once, at any nesting depth, so a file referenced five times is emitted (and counted) five
+        times, not once as a unique asset, and the CSS/JS text that carries it is not counted again."""
         self._emitted += len(text)
+        self._raw_total += len(text)
         if self._emitted > MAX_BUNDLE_BYTES:
-            raise ReviewError(f"prototype bundle is larger than {MAX_BUNDLE_BYTES // (1024 * 1024)} MB once "
+            raise ReviewError(f"artifact bundle is larger than {MAX_BUNDLE_BYTES // (1024 * 1024)} MB once "
                               "its assets are inlined; shrink the images or reference each asset fewer times")
+        if self._raw_total > MAX_ASSETS_BYTES:
+            raise ReviewError(f"the artifact's assets are larger than {size_label(MAX_ASSETS_BYTES)} once inlined"
+                              + (f" (asset {asset})" if asset else ""))
         return text
 
     def locate(self, path: str, base: str, quiet: bool = False, what: str = "") -> Optional[str]:
@@ -228,7 +236,7 @@ class Bundler:
             return bad("root-absolute paths cannot be bundled (use a path relative to the page)")
         rel = posixpath.normpath(posixpath.join(base, path))
         if rel == ".." or rel.startswith("../"):
-            return bad("leaves the prototype's folder")
+            return bad("leaves the artifact's folder")
         cur = self.root
         for part in rel.split("/"):
             cur = cur / part
@@ -237,7 +245,7 @@ class Bundler:
         try:
             cur.resolve().relative_to(self.root)
         except (ValueError, OSError):
-            return bad("leaves the prototype's folder")
+            return bad("leaves the artifact's folder")
         if not cur.is_file():
             return bad("file not found")
         return rel
@@ -275,10 +283,6 @@ class Bundler:
             else:
                 body = self.read(rel)
                 body, mime = _webp(body, mime)
-            self._raw_total += len(body)
-            if self._raw_total > MAX_ASSETS_BYTES:
-                raise ReviewError(f"the prototype's assets are larger than {MAX_ASSETS_BYTES // (1024 * 1024)} MB "
-                                  "once inlined")
             uri = f"data:{mime};base64," + base64.b64encode(body).decode("ascii")
         finally:
             self._busy.pop()
@@ -292,7 +296,7 @@ class Bundler:
         if rel is None:
             return None
         uri = self.uri_for(rel)
-        return None if uri is None else self._use(uri + frag)
+        return None if uri is None else self._use(uri + frag, rel)
 
     # ------------------------------------------------------------------ CSS
 
@@ -320,7 +324,7 @@ class Bundler:
                     self.problem(f"{where}: @import {ref} with layer()/supports() cannot be bundled")
                     return m.group(0)
                 inner = self.css(self.text(rel), posixpath.dirname(rel), stack + (rel,))
-                return self._use("@media " + cond + "{" + inner + "}" if cond else inner)
+                return "@media " + cond + "{" + inner + "}" if cond else inner
             if m.group("iset"):
                 def one(s: "re.Match[str]") -> str:
                     ref = s.group(1) if s.group(1) is not None else s.group(2)
@@ -340,22 +344,17 @@ class Bundler:
     # ------------------------------------------------------------------ JS
 
     def runtime_asset(self, rel: str) -> None:
-        """Put a file in the runtime table once; lookups by path find it through window.__mrA()."""
+        """Put a file in the runtime table once; lookups by path find it through window.__mrA(). The one copy the table
+        emits counts against the round budget, like every other emitted data: URI."""
         if rel in self.runtime:
             return
         self.runtime[rel] = None
-        self.runtime[rel] = self.uri_for(rel)
-
-    def module_key(self, rel: str) -> str:
-        key = MODULE_PREFIX + rel
-        if key not in self.modules:
-            self.modules[key] = None
-            self.modules[key] = "data:text/javascript;charset=utf-8;base64," + base64.b64encode(
-                self.js(self.text(rel), posixpath.dirname(rel)).encode("utf-8")).decode("ascii")
-        return key
+        uri = self.runtime[rel] = self.uri_for(rel)
+        if uri is not None:
+            self._use(uri, rel)
 
     def js(self, text: str, base: str) -> str:
-        """Rewrite a script: local ES module imports -> import-map keys, runtime asset paths -> lookups."""
+        """Rewrite a script: a local ES module import is refused, runtime asset paths become lookups."""
         if _JS_WORKER.search(text):
             for m in _JS_WORKER.finditer(text):
                 tail = text[m.end():m.end() + 160].lstrip()
@@ -375,8 +374,9 @@ class Bundler:
         rel = self.locate(path, base, what=f"import {spec}")
         if rel is None:
             return m.group(0)
-        q = m.group("q")
-        return m.group("kw") + q + self.module_key(rel) + q
+        self.problem(f"import {spec}: a local ES module cannot be bundled into an artifact (its page may not load "
+                     "a script from a data: URL); put the code in the page")
+        return m.group(0)
 
     def _templates(self, text: str) -> str:
         """`assets/dir/x-${n}.webp` -> window.__mrA(`...`) with every file of assets/dir/ in the runtime table."""
@@ -414,7 +414,7 @@ class Bundler:
     def _folder_files(self, folder: str, ext: Optional[str], what: str) -> List[str]:
         path = posixpath.normpath(folder) if folder else "."
         if path.startswith(("/", "..")) or "\x00" in path:
-            self.problem(f"template literal {what}: folder is not inside the prototype's folder")
+            self.problem(f"template literal {what}: folder is not inside the artifact's folder")
             return []
         cur = self.root
         for part in ([] if path == "." else path.split("/")):
@@ -441,8 +441,8 @@ class Bundler:
     def _ref(self, m: "re.Match[str]", text: str) -> str:
         if m.group("lit"):
             path, q = m.group("lp"), m.group("q")
-            if path.startswith(MODULE_PREFIX) or not self._lit_ok(text, m.start(), m.end()):
-                return m.group(0)       # (an import-map key the import pass just wrote is not a file)
+            if path.startswith(LEGACY_MODULE_PREFIX) or not self._lit_ok(text, m.start(), m.end()):
+                return m.group(0)       # a quoted mr-module/ string stays as written (compatibility)
             rel = self.locate(_split_ref(path)[0], "", quiet=True)
             if rel is None:
                 if _asset_string(path, text[:m.start()]):
@@ -457,7 +457,7 @@ class Bundler:
         if rel is None:
             return m.group(0)
         uri = self.uri_for(rel)
-        return m.group(0) if uri is None else self._use(uri)
+        return m.group(0) if uri is None else self._use(uri, rel)
 
     @staticmethod
     def _lit_ok(text: str, s: int, e: int) -> bool:
@@ -487,7 +487,7 @@ class Bundler:
             uri = self.uri_for(rel)
             if uri is None:
                 return m.group(0)
-            return self._use(m.group("q") + uri + m.group("q") if m.group("lit") else uri)
+            return self._use(m.group("q") + uri + m.group("q") if m.group("lit") else uri, rel)
         return _JS_REF.sub(sub, value)
 
     def _srcset(self, value: str, base: str, where: str) -> str:
@@ -560,7 +560,7 @@ class Bundler:
             rel = self.locate(_split_ref(href)[0], "", what=f"<link rel=stylesheet> -> {href}")
             if rel is None:
                 return tag_text
-            css = self._use(self.css(self.text(rel), posixpath.dirname(rel), (rel,)))
+            css = self.css(self.text(rel), posixpath.dirname(rel), (rel,))
             media = (attrs.get("media") or "").strip()
             return "<style" + (f' media="{htmllib.escape(media)}"' if media else "") + ">" + _close_safe(css) + "</style>"
         if any(r in rels for r in ("preload", "prefetch", "modulepreload", "prerender")):
@@ -614,13 +614,11 @@ class Bundler:
             rel = self.locate(_split_ref(src)[0], "", what=f"<script src> -> {src}")
             if rel is None:
                 return m.group(0)
-            code = self._use(self.js(self.text(rel), posixpath.dirname(rel)))
-            uri = "data:text/javascript;charset=utf-8;base64," + base64.b64encode(code.encode("utf-8")).decode("ascii")
+            code = self.js(self.text(rel), posixpath.dirname(rel))
             keep = "".join(" " + n + ("" if v is None else '="' + htmllib.escape(v, quote=True) + '"')
                            for n, v in found if n.lower() not in ("src", "integrity"))
-            return "<script" + keep + ' src="' + uri + '"></script>'
+            return "<script" + keep + ">" + code.replace("</script", "<\\/script") + "</script>"
         if typ == "importmap":
-            self.has_importmap = True
             try:
                 spec = json.loads(body or "{}")
             except ValueError:
@@ -635,22 +633,18 @@ class Bundler:
     def bundle(self) -> str:
         page = self.text(self.index.name)
         out = _HTML.sub(lambda m: self._dispatch(m), page)
-        if self.has_importmap and self.modules:
-            self.problem("the page has its own import map next to local ES modules; the bundle needs to own it")
         if self.problems:
+            why = "cannot bundle this artifact (its page can load nothing but data: media). Fix and retry:"
             raise ReviewError(
-                "cannot bundle this prototype for a password-gated here.now board (its assets would be blocked "
-                "from the sandboxed frame). Fix and retry:\n - " + "\n - ".join(self.problems[:12])
+                why + "\n - " + "\n - ".join(self.problems[:12])
                 + (f"\n - ... and {len(self.problems) - 12} more" if len(self.problems) > 12 else ""))
         pre = []
-        if self.modules:
-            pre.append('<script type="importmap">' + _json_safe({"imports": self.modules}) + "</script>")
         if self.runtime:
             pre.append("<script>window.__MR_A=" + _json_safe(self.runtime) + ";" + _HELPER + "</script>")
         if pre:
             out = _inject_head(out, "".join(pre))
         if len(out.encode("utf-8")) > MAX_BUNDLE_BYTES:
-            raise ReviewError(f"prototype bundle is larger than {MAX_BUNDLE_BYTES // (1024 * 1024)} MB")
+            raise ReviewError(f"artifact bundle is larger than {MAX_BUNDLE_BYTES // (1024 * 1024)} MB")
         return out
 
     def _dispatch(self, m: "re.Match[str]") -> str:
@@ -691,17 +685,35 @@ def _inject_head(page: str, prelude: str) -> str:
     return prelude + page
 
 
-def bundle_html(index: Path) -> str:
-    """The prototype's index.html as one self-contained document. Raises ReviewError naming every problem."""
-    return Bundler(index).bundle()
+def bundle_artifact(src: Any, block_id: str, used: int = 0) -> Tuple[str, int]:
+    """One artifact's `src` page as a single document with its media inline, and the round's running total of bytes
+    emitted inline (`used` plus every copy this page emitted). Every failure names the artifact."""
+    bundler = Bundler(Path(src), used=used)
+    try:
+        return bundler.bundle(), bundler._raw_total
+    except ReviewError as e:
+        raise ReviewError(f"artifact {block_id}: {e.message}", e.status)
 
 
-def bundle_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
-    """A prototype round spec with its page replaced by the bundled HTML (and its assets/ left out of the round).
-    Any other kind of round is returned unchanged: only prototypes are bundled."""
-    if spec.get("kind") != "prototype":
+def bundle_artifact_page(src: Any, block_id: str) -> str:
+    """One artifact's `src` page as a single document with its media inline. Every failure names the artifact."""
+    return bundle_artifact(src, block_id)[0]
+
+
+def bundle_artifacts(spec: Dict[str, Any]) -> Dict[str, Any]:
+    """A decisions round spec with every artifact `src` replaced by its bundled `html`. Always, on every kind of board:
+    the artifact's page may load nothing from outside itself. The round's artifacts share one 50 MB asset budget (the
+    spec carries the bytes used as `inlined`, so the store counts them with the round's copied assets/ folder). Any
+    other spec is returned unchanged."""
+    if spec.get("kind") != "decisions":
         return spec
-    pages = []
-    for page in spec["pages"]:
-        pages.append(dict(page, html=bundle_html(page["src"]), bundled=True))
-    return dict(spec, pages=pages)
+    blocks = spec["decisions"]["blocks"]
+    if not any(b["type"] == "artifact" and "src" in b for b in blocks):
+        return spec
+    used, out = 0, []
+    for b in blocks:
+        if b["type"] == "artifact" and "src" in b:
+            html, used = bundle_artifact(b["src"], b["id"], used)
+            b = dict({k: v for k, v in b.items() if k != "src"}, html=html)
+        out.append(b)
+    return dict(spec, decisions=dict(spec["decisions"], blocks=out), inlined=used)   # the store counts this with its assets/ copy

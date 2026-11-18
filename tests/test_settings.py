@@ -189,9 +189,14 @@ def test_old_reviews_have_no_settings(review):
 
 
 def test_mode_defaults_to_default_host(env, tmp_path, monkeypatch):
+    assert store.MODES == ("tailscale", "local", "public")
     monkeypatch.setenv("MOCKREVIEW_DEFAULT_HOST", "tailnet")
     assert api.resolve_mode(None) == "tailscale" and api.resolve_mode("tailnet") == "tailscale"
-    assert api.resolve_mode("herenow") == "herenow"
+    assert api.resolve_mode("tailscale") == "tailscale"
+    monkeypatch.setenv("MOCKREVIEW_DEFAULT_HOST", "public")
+    assert api.resolve_mode(None) == "public"
+    assert api.resolve_mode("public") == "public"
+    monkeypatch.setenv("MOCKREVIEW_DEFAULT_HOST", "local")
     with pytest.raises(ReviewError):
         api.resolve_mode("funnel")
 
@@ -280,28 +285,15 @@ def test_housekeeping_off_by_default(env, tmp_path):
     assert store.load(data["id"])["status"] == "open"
 
 
-def test_auto_close_idle_reviews_deletes_herenow_site(env, tmp_path, monkeypatch):
-    from mockreview import herenow
-    calls = []
-    monkeypatch.setattr(herenow, "poll_review", lambda rid, republish=True: calls.append(("poll", rid)) or [])
-    monkeypatch.setattr(herenow, "fetch_records", lambda slug: calls.append(("fetch", slug)) or [{"id": "r1"}])
-    monkeypatch.setattr(herenow, "delete_site", lambda slug: calls.append(("delete", slug)) or True)
+def test_auto_close_idle_reviews(env, tmp_path, monkeypatch):
     monkeypatch.setenv("MOCKREVIEW_AUTO_CLOSE_IDLE_DAYS", "7")
     idle = _decision_review(tmp_path)
     fresh = _decision_review(tmp_path)
-    with store.locked(idle["id"]):
-        d = store.load(idle["id"])
-        d["mode"] = "herenow"
-        d["herenow"] = {"slug": "idle-site-x1", "site_url": "https://idle-site-x1.here.now", "processed_records": []}
-        store.save(idle["id"], d)
     _age(idle["id"], 8)
     _age(fresh["id"], 2)
     res = api.housekeeping()
     assert res["closed"] == [idle["id"]] and not res["errors"]
-    assert ("delete", "idle-site-x1") in calls
-    d = store.load(idle["id"])
-    assert d["status"] == "closed" and d["herenow"]["deleted_at"]
-    assert (store.review_dir(idle["id"]) / "archive" / "sitedata-records.json").is_file()
+    assert store.load(idle["id"])["status"] == "closed"
     assert store.load(fresh["id"])["status"] == "open"
 
 

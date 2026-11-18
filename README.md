@@ -5,6 +5,8 @@ serves it as a review board, and you open the link, mark each decision Approve, 
 the mocks and press Send. Send wakes the agent in the chat the review came from, with your marks attached. Boards render
 inline mocks at desktop, tablet and phone widths, in light and dark, and wear a per-project design profile.
 
+With viewer access you can also export a round as PNG, PDF, HTML or Markdown, with or without its comments.
+
 <img src="docs/img/showcase.jpg" alt="mock-review: a Discord thread next to a review board showing a Cash Flow decision" width="100%">
 
 ## Plan boards and Build
@@ -15,8 +17,8 @@ answer); pieces, defaults and decisions are approved, changed or skipped, and "A
 press. The footer has one button. By default it is "Build": locked, with what is still open in its
 tooltip, until every question is answered, everything else is approved or skipped and nothing is on Change; a block on
 Change turns it into "Send" for those notes. Set `footer_button` to `send` for a board that only ever sends notes.
-Mocks carry working controls by default (`interactive_elements`): the board opens on Tap so dropdowns and switches
-respond, and Pin in the header switches to commenting. The section bar stays pinned under the header, so a long plan is
+Mocks carry working controls by default (`interactive_elements`): the board opens usable, so dropdowns and switches
+respond, and Comment (or `C`) switches to pinning a note. The section bar stays pinned under the header, so a long plan is
 one tap from any section.
 
 Build wakes Hermes on the chat the board came from, with the approved plan. The agent builds, and the result arrives as
@@ -35,7 +37,7 @@ To see a plan board without an agent, create the demo from a checkout with a boa
 
 ## Install
 
-Requires Hermes 0.22.0 or newer and Python 3.9 or newer. The plugin has no Python dependencies.
+Requires Hermes 0.22.0 or newer and Python 3.11-3.14. The plugin has no Python dependencies.
 
 Once the plugin is in the Hermes catalog:
 
@@ -87,8 +89,8 @@ mock_review tools; the list replaces Hermes's webhook default rather than adding
 
 Setup never edits Hermes's route file: it prints the `"toolsets"` line to add to the wake route in
 `webhook_subscriptions.json` (Hermes keeps this a manual step so an agent cannot grant itself tools). Each setup run
-re-subscribes the route and drops the key, so add it again afterwards. It refuses while a board's Send button would be ungated (a here.now board with its password off, or
-the server listening beyond loopback), because feedback typed there would reach those tools. Read [security](docs/security.md#tools-for-the-woken-session-wake_toolsets) first.
+re-subscribes the route and drops the key, so add it again afterwards. It refuses while the server listens beyond
+loopback, because feedback typed there would reach those tools. Read [security](docs/security.md#tools-for-the-woken-session-wake_toolsets) first.
 
 ### Try a board without an agent
 
@@ -104,42 +106,77 @@ A live prototype opens in **Use it** mode, so clicks work the page. To leave a c
 tap the spot; after each pin the board goes back to Use it.
 Agents write decision rounds instead; see [docs/decisions-format.md](docs/decisions-format.md).
 
-## Hosting modes
+## Sharing
 
 A review is hosted in one of three ways. Set the default with `default_host`, or let the agent ask you.
 
 - `local` (the default): the board is served from this computer. With the default bind address the link opens on this
-  computer only. Setting `host` to `0.0.0.0` makes local links open on other devices on your network, with no login.
-- `tailnet`: the board stays on loopback and you expose it with `tailscale serve`. The link is your Tailscale address, so
-  only your tailnet can open it. `setup` offers this when Tailscale is running, and `setup --hosting tailnet` selects it.
-- `herenow`: the board is published on here.now with a password gate by default; feedback comes back through its Site Data. This
-  needs the official here-now Hermes skill and a `HERENOW_API_KEY`. Create/add-round/publish return a `password`
-  beside the URL: send both to the reviewer. Use `--no-password` on create only for an intentionally public board.
-  Change an open board with `hermes mockreview password <id> on|off` or `/mockreview password <id> <on|off>`.
-  A prototype round on a password-gated here.now board is bundled into one self-contained HTML file (local CSS, scripts,
-  images and fonts inlined; a missing or unsupported reference fails the call), then published and loaded in a real
-  Chrome, Chromium or Edge behind its password inside the sandboxed iframe; failed requests or an unstyled page fail the
-  publish and the link and password are withheld. The sandboxed frame has an opaque origin, so the `SameSite=Lax` unlock
-  cookie is not sent with its requests and any file left on the site would 401; fetching the URLs with `curl` and the cookie
-  proves nothing. Set `MOCKREVIEW_BROWSER` if the browser is not found. Details in
-  [docs/hosting.md](docs/hosting.md#prototype-rounds-on-a-password-gated-board).
+  computer only. Setting `host` to `0.0.0.0` makes local links reachable from other devices on your network; people
+  there get the sign-in page and join with an invite or a share link.
+- `tailnet`: the board stays on loopback and you expose it with `tailscale serve`. The link is your Tailscale address,
+  so only your tailnet can open it. `setup` offers this when Tailscale is running, and `setup --hosting tailnet`
+  selects it.
+- `public`: a public URL behind Tailscale Funnel or any TLS proxy. `hermes mockreview public on` maps one Funnel port
+  and prints the URL; any other proxy works with `public_url` and `trusted_proxies`. Reviewers sign in with an invite
+  or a share link. See [docs/public-hosting.md](docs/public-hosting.md).
 
 [docs/hosting.md](docs/hosting.md) covers each mode step by step.
+
+Sharing a review with other people is separate from hosting it. An **invite** (`hermes mockreview invite`) creates an
+account and works once; a **share link** gives access to one review without an account, and the link itself is the
+guest's credential. A review has at most one share link, managed by its owner in the Share dialog or with
+`hermes mockreview share <review id>`. The link carries its own guest role — `reviewer`, `commenter` (the default) or
+`viewer` — and can be limited to signed-in members, given an expiry, and pinned to one round for viewer guests.
+
+A guest opens the link with its role and gets a server-assigned name such as "Calm Otter"; the name is unique among
+that review's live guests and can be changed. A viewer sees only the round the link names, with no feedback pins,
+notes or submit token. A commenter can comment on any round; a reviewer can also send feedback and ask for a pin fix,
+but a guest never wakes Hermes: Send is stored for the owner. Regenerating or stopping the link ends every guest
+session of the old link.
+
+Pins are conversations now: each pin opens a thread with replies, resolve/reopen, optional `@Hermes` mentions, and live
+updates on every open board. Comments and their history live in the review's own database under the data root. See
+[docs/comments.md](docs/comments.md) and [docs/security.md](docs/security.md).
+
+![The Share dialog in the board, showing invites, the guest link, its role and expiry, and live seats](docs/img/share-dialog.png)
+
+![A pin's thread popover, with the original comment and a reply](docs/img/thread-popover.png)
+
+## People and access
+
+There are no passwords. The board server has accounts, and every request is checked against who is asking.
+
+- The owner is this computer: a request from the board's own machine is the install's admin. Turn `loopback_owner`
+  off and the owner signs in with a one-time link instead, `hermes mockreview login`.
+- People join with a single-use invite link (`hermes mockreview invite`, 7 days by default, `--expires` to change it).
+  An invite creates an account; a share link does not.
+- Accounts live in one flat user directory per install. Each account is a member or an admin; admins manage every
+  review and see Members and Invites in Settings. The last admin cannot be demoted or the only admin deleted.
+- Access is granted per review: `viewer` (look), `commenter` (look and comment) or `reviewer` (look, comment and send
+  feedback), optionally with an expiry. A grant for all reviews is a convenience flag, not a workspace or a team.
+  `hermes mockreview users grant <name|id> --review <review id> --role reviewer --expires 30d` is the CLI form.
+- Personal access tokens (`hermes mockreview tokens create --user <id> <name>`) let a coding agent comment as that
+  account; the token is shown once and stored hashed.
+
+Roles and grants are read again on every request, so a change applies immediately. The full model — sessions, proxy
+identities, share-link seats, throttling and audit — is in [docs/security.md](docs/security.md); the migration from
+the old password/hosting model is in [docs/migrating-to-2.md](docs/migrating-to-2.md).
+
+![The Settings page, with the account directory, each account's admin or member role, and how it signed in](docs/img/settings.png)
 
 ## Platforms
 
 macOS and Linux run everything, including the board inside the gateway process (autostart). On Windows, run the board in
 the foreground with `hermes mockreview serve`. The plugin installs no service files on any platform.
 
-Known issue: here.now publishing runs the official skill's Bash helper. On Windows it requires Git Bash on `PATH`
-with compatible paths, or running Hermes and the plugin inside WSL. Native Windows without Bash cannot publish
-here.now reviews; local hosting does not need Bash. See [hosting requirements](docs/hosting.md#herenow).
-
 ## Other agents (MCP)
 
-Claude Code, Codex and OpenCode can use the same boards without Hermes in the loop: `mockreview/mcp.py` serves the five
+Claude Code, Codex and OpenCode can use the same boards without Hermes in the loop: `mockreview/mcp.py` serves the six
 `mock_review_*` tools over stdio, so a coding agent can create a board, add a round and read the reviewer's marks
-itself. The canonical command is `<abs>/bin/mockreview mcp` (the checkout or installed plugin directory);
+itself. With a personal access token (`mockreview tokens create --user <id> <name>`, passed as `--token` or
+`MOCKREVIEW_TOKEN`) it also gets three comment tools — `list_comments`, `reply` and `resolve` — so it can work through
+the board's threads as the person whose token it holds; an `@Hermes` mention there never wakes Hermes. The canonical
+command is `<abs>/bin/mockreview mcp` (the checkout or installed plugin directory);
 `python -m mockreview.mcp` runs the same server when the package is on the import path. Details:
 [docs/mcp.md](docs/mcp.md).
 
@@ -147,7 +184,7 @@ Wake is off for MCP boards by default, because an external CLI has no Hermes ses
 with `mock_review_feedback`. Add `--wake` plus `--platform` and `--chat-id` (or `origin_platform` and `origin_chat_id`
 on one call) only when the session context names a real chat. A receiver of your own can be supplied through
 `MOCKREVIEW_WEBHOOK_URL`; see the receiver contract in [docs/mcp.md](docs/mcp.md#wake-without-hermes). A `local` link
-opens on the computer running the board; use `herenow` (password protected by default) or `tailnet` to open it on a phone.
+opens on the computer running the board; use `tailnet` to open it on a phone.
 
 Claude Code, project scope (use `--mcp-config` with a JSON file for a one-off):
 
@@ -175,11 +212,13 @@ OpenCode, in `opencode.json`:
 
 ## Commands and reference
 
-`hermes mockreview <command>` and the `/mockreview` slash command (list, open, close, password, settings). The agent uses five
-tools: `mock_review_create`, `mock_review_add_round`, `mock_review_feedback`, `mock_review_ack` and `mock_review_list`.
+`hermes mockreview <command>` and the `/mockreview` slash command (list, open, close, settings). The agent uses six
+tools: `mock_review_create`, `mock_review_add_round`, `mock_review_feedback`, `mock_review_ack`, `mock_review_list` and
+`mock_review_patch_block`.
 
 - [docs/cli.md](docs/cli.md): every command with its flags
 - [docs/settings.md](docs/settings.md): every setting, its default and its environment variable
+- [docs/design.md](docs/design.md): the 2.0 design system, tokens and the rules the tests hold
 - [docs/decisions-format.md](docs/decisions-format.md): the `decisions.json` blocks an agent writes
 - [docs/hosting.md](docs/hosting.md), [docs/security.md](docs/security.md) and
   [docs/troubleshooting.md](docs/troubleshooting.md)
@@ -189,14 +228,13 @@ tools: `mock_review_create`, `mock_review_add_round`, `mock_review_feedback`, `m
 What the plugin does that you may want to know before installing it.
 
 Background server. When `autostart` is on, the plugin starts a board web server on a background thread inside the Hermes
-gateway process, plus one worker thread that retries undelivered wake-ups, polls here.now and runs the optional
-auto-close and cleanup of old reviews. `autostart` is off until `hermes mockreview setup` turns it on. The CLI,
-`hermes plugins validate` and Kanban workers never start a server. `hermes mockreview serve` runs the same server in the
-foreground instead.
+gateway process, plus one worker thread that retries undelivered wake-ups and runs the optional auto-close and cleanup of
+old reviews. `autostart` is off until `hermes mockreview setup` turns it on. The CLI, `hermes plugins validate` and
+Kanban workers never start a server. `hermes mockreview serve` runs the same server in the foreground instead.
 
 Bind address and port. The server listens on `127.0.0.1:8790` by default (settings `host` and `port`). If you set `host`
-to `0.0.0.0`, every device that can reach your computer on that port can open every review and send feedback. There is no
-login. Do this only on a network you trust. Setup prints this warning before it makes the change.
+to `0.0.0.0`, every device that can reach your computer on that port gets the sign-in page: people join with an invite
+(`hermes mockreview invite`) or the review's share link. Do this only on a network you trust. Setup prints this warning before it makes the change.
 
 Outbound network calls:
 
@@ -209,19 +247,18 @@ Outbound network calls:
   Build), to say the agent may have stalled. No
   ping for a round with nothing left to build, one the agent acknowledged, or a closed review. Both carry the review title and counts, never your notes, and
   use the same signing secret as the wake-up.
-- here.now (`https://here.now/api/v1`), only for reviews you host with `herenow`: the plugin publishes the board and
-  reads submitted feedback using your key. It publishes through the official here-now skill's `publish.sh`.
 - Nothing else. There is no telemetry, analytics or update check.
 
-Credentials. The plugin reads two secrets through Hermes's secret scope, or from the process environment when it runs
-without Hermes (the stdio MCP server), and keeps none of its own:
-`MOCKREVIEW_WEBHOOK_SECRET` (signs the wake-up request; setup generates it and stores it with `hermes config set`) and
-`HERENOW_API_KEY` (optional, here.now hosting only). Both are declared as optional secrets in `plugin.yaml`.
+Credentials. The plugin reads one secret through Hermes's secret scope, or from the process environment when it runs
+without Hermes (the stdio MCP server), and keeps none of its own: `MOCKREVIEW_WEBHOOK_SECRET` (signs the wake-up
+request; setup generates it and stores it with `hermes config set`). It is declared as an optional secret in
+`plugin.yaml`.
 
-Shell commands. `bash <here-now skill>/scripts/publish.sh` publishes a here.now review, with `HERENOW_API_KEY` passed in
-the child environment. `tailscale status --json` and `tailscale serve status --json` find your tailnet address and existing
+Shell commands. `tailscale status --json` and `tailscale serve status --json` find your tailnet address and existing
 routes when you use tailnet hosting (on macOS, the app's own binary when the `tailscale` symlink crashes); they only
-read, and setup prints any `tailscale serve` command for you to run. `setup` also
+read, and setup prints any `tailscale serve` command for you to run. To match a saved design profile to a project, it
+runs `git -C <project> rev-parse --show-toplevel --git-common-dir`, which only reads the project's git toplevel and,
+inside a linked worktree, the main checkout. `setup` also
 runs `hermes` subcommands: `--version`, `gateway status` and `config get` to read the current state, and `config set`,
 `config unset` for obsolete settings, `webhook subscribe`, `webhook remove` (only for a self-delivering route left by an
 older setup, and only after you confirm) and `plugins validate` to make its changes.
@@ -231,10 +268,37 @@ Files. Reviews are stored under `$HERMES_HOME/workspace/mock-reviews` (setting `
 
 ## Development
 
-    python -m pytest -q
+    uv run --with-requirements requirements-dev.txt python scripts/check.py fast
+    uv run --with-requirements requirements-dev.txt python scripts/check.py changed --base main
+    uv run --with-requirements requirements-dev.txt python scripts/check.py full
 
-The suite needs `pytest` and `pyyaml`. [AGENTS.md](AGENTS.md) describes the layout and the rules a change has to keep.
-[CHANGELOG.md](CHANGELOG.md) lists releases.
+`fast` runs every non-browser test in parallel (fail-fast, under a minute on a quiet machine). `changed` maps the
+branch's changed files to the tests they can affect, plus a small always-on smoke set; an unmapped path falls back to
+the non-browser tier, and `full` is the acceptance run. `full` runs the non-browser tier first and then the browser
+modules in a pool, each in its own pytest process, so a module's Chrome is reused and the suite fits in bounded
+foreground parts (`--part nonbrowser` or `--part browser` runs one half). A failed non-browser phase stops the run
+before any browser starts; `--all` runs both phases and shows every failure, so it is the form to use when one run
+must catch a broken non-browser and a broken browser assertion (the mutation demonstration uses `full --all`).
+
+The browser modules are discovered, not just listed: the runner takes every module that actually carries
+`pytest.mark.browser` and unions it with its schedule. A new browser module needs the mark; leaving its name out of
+the schedule still runs it (with a warning and one worker), while a listed module that lost the mark fails the run.
+A lower `CHECK_CHROMES` budget only changes how many workers a browser module gets, never which modules run; work
+that cannot be scheduled is reported as a failure, never dropped. A browser job runs only its marked tests, and a
+module that also holds unmarked ones keeps those in the non-browser pass, so every test runs exactly once in both
+`full` and `changed`.
+
+The browser harness caps Chromes machine-wide for this OS user: `MOCKREVIEW_CHROMES` (default 3, never more than 4) is
+one run's budget, and slot files in `/tmp/mockreview-chrome-slots-<uid>` (POSIX; `%LOCALAPPDATA%\mockreview\chrome-slots`
+on Windows) make every process of this user respect the same ceiling, whatever its `TMPDIR` or `HOME` says. It does not
+cover other OS users, other machines, or a sandbox that maps `/tmp` away per process; `MOCKREVIEW_CHROME_SLOTS` points
+the registry at an explicit directory. Browser tests skip when no Chrome, Chromium or Edge is installed;
+`MOCKREVIEW_BROWSER` points at an explicit executable.
+
+`requirements-dev.txt` is development-only. The plugin runtime keeps its one dependency (`itsdangerous`, in
+`pyproject.toml` and installed by Hermes), and `pytest`, `pyyaml` and `pytest-xdist` are never part of it.
+[AGENTS.md](AGENTS.md) describes the layout and the rules a change has to keep. [CHANGELOG.md](CHANGELOG.md) lists
+releases.
 
 ### Releasing
 
@@ -259,4 +323,4 @@ MIT. See [LICENSE](LICENSE).
 Safe absolute HTTP(S) links in mock/option HTML open in a new tab with `noopener noreferrer`. Table cells remain
 text, with bare absolute HTTP(S) URLs linked even inside prose or alongside other URLs. Surrounding punctuation
 and literal HTML stay text. Relative URLs and other link protocols are not linked.
-See [password hosting and recovery](docs/hosting.md#herenow) and [security](docs/security.md).
+See [hosting](docs/hosting.md) and [security](docs/security.md).

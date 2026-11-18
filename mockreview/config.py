@@ -15,8 +15,6 @@ BOARD_DIR = PACKAGE_DIR / "board"
 HOST = "127.0.0.1"   # built-in defaults; the effective values are host() / port()
 PORT = 8790
 MAX_BODY = 2 * 1024 * 1024
-HERENOW_CLIENT = "hermes/mock-review"
-HERENOW_API = "https://here.now/api/v1"
 
 
 def _path_setting(name: str, default: Path) -> Path:
@@ -154,6 +152,52 @@ def public_base() -> str:
     return ""
 
 
+def funnel_url() -> str:
+    """The HTTPS URL Tailscale Funnel maps to this board's port, or "" when no such mapping exists, the CLI is
+    missing, it times out or its JSON cannot be parsed. Never raises."""
+    import json
+    import subprocess
+    from urllib.parse import urlsplit
+    try:
+        proc = run_tailscale(["funnel", "status", "--json"], timeout=5)
+        if proc.returncode != 0:
+            return ""
+        status = json.loads(proc.stdout or "{}")
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return ""
+    if not isinstance(status, dict):
+        return ""
+    web = status.get("Web")
+    allow = status.get("AllowFunnel")
+    if not isinstance(web, dict) or not isinstance(allow, dict):
+        return ""
+    board_port = port()
+    for key in sorted(web):
+        node, _, https_port = str(key).rpartition(":")
+        handler = ((web.get(key) or {}).get("Handlers") or {}).get("/") or {}
+        target = str(handler.get("Proxy") or "")
+        if not node or not https_port.isdigit() or not target or allow.get(f"{node}:{https_port}") is not True:
+            continue
+        t = urlsplit(target if "://" in target else "http://" + target)
+        try:
+            tport = t.port
+        except ValueError:
+            continue
+        if t.hostname in ("127.0.0.1", "localhost") and tport == board_port:
+            return f"https://{node}" if https_port == "443" else f"https://{node}:{https_port}"
+    return ""
+
+
+def public_url() -> str:
+    """The explicit public URL setting, trailing slash removed (empty when unset)."""
+    return settings.get("public_url").rstrip("/")
+
+
+def public_link_base() -> str:
+    """Where a public-mode review link starts: public_url, else the Tailscale Funnel URL, else public_base."""
+    return public_url() or funnel_url() or public_base()
+
+
 def host() -> str:
     return settings.get("host")
 
@@ -200,25 +244,6 @@ def local_link_base() -> str:
     if ":" in addr and not addr.startswith("["):
         addr = f"[{addr}]"
     return f"http://{addr}:{port()}"
-
-
-def herenow_publish_script() -> Path:
-    """Resolve only an installed official here-now skill inside the active Hermes home."""
-    skills = (hermes_home() / "skills").resolve()
-    candidates = [skills / "productivity" / "here-now" / "scripts" / "publish.sh",
-                  skills / "here-now" / "scripts" / "publish.sh"]
-    candidates.extend(sorted(skills.glob("**/here-now/scripts/publish.sh")))
-    for candidate in candidates:
-        resolved = candidate.resolve()
-        if resolved.is_relative_to(skills) and resolved.is_file():
-            return resolved
-    raise FileNotFoundError(
-        "install-here-now-skill: run `hermes skills install official/productivity/here-now` "
-        "in the active HERMES_HOME")
-
-
-def poll_seconds() -> float:
-    return settings.get("poll_seconds")
 
 
 def retry_seconds() -> float:

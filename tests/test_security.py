@@ -3,7 +3,7 @@ import json
 import pytest
 
 from conftest import FEEDBACK, http
-from mockreview import config, store
+from mockreview import config, pages, store
 from mockreview.store import ReviewError
 
 
@@ -48,10 +48,20 @@ def test_board_and_variant_headers(server, review):
     code, h, body = http("GET", f"{server}/r/{review['id']}/")
     assert code == 200 and "frame-ancestors 'none'" in h["Content-Security-Policy"]
     code, h, body = http("GET", f"{server}/r/{review['id']}/rounds/1/a/index.html")
-    assert code == 200 and h["Content-Security-Policy"] == "sandbox allow-scripts"
+    csp = h["Content-Security-Policy"]
+    # A round document without a token has no network: the artifact-grade policy plus its own round's files.
+    assert code == 200 and csp.startswith("sandbox allow-scripts; ") and "connect-src 'none'" in csp
+    assert csp != "sandbox allow-scripts"
     assert b"<h1>alpha</h1>" in body
     code, h, _ = http("GET", f"{server}/r/{review['id']}/rounds/1/a/assets/logo.svg")
     assert code == 200 and h["Content-Type"].startswith("image/svg+xml")
+    assert h["Content-Security-Policy"] == csp
+    # The token the board mints is the prototype policy: a frame document and its relative files keep the network.
+    state = json.loads(http("GET", f"{server}/r/{review['id']}/state.json")[2])
+    tok = state["frame_tokens"]["1"]
+    code, h, body = http("GET", f"{server}/r/{review['id']}/rounds/1/~{tok}/a/index.html")
+    assert code == 200 and h["Content-Security-Policy"] == "sandbox allow-scripts"
+    assert b"<h1>alpha</h1>" in body
     code, h, _ = http("GET", f"{server}/r/{review['id']}")
     assert code in (200, 301)
 
@@ -128,3 +138,168 @@ def test_local_mode_links(env, tmp_path, monkeypatch):
     assert store.review_url(data) == f"http://review-box.example.test:{config.port()}/r/x-123abc"
     # tailnet links unchanged
     assert store.review_url({"id": "x-123abc", "mode": "tailscale"}).startswith(config.public_base())
+
+
+# ---------------------------------------------------------------- artifact pages
+
+def _artifact_review(tmp_path, html="<p id=x>art</p><script>1</script>"):
+    f = tmp_path / "adec" / "decisions.json"
+    f.parent.mkdir()
+    f.write_text(json.dumps({"blocks": [{"type": "artifact", "id": "film", "html": html}]}), encoding="utf-8")
+    return store.create_review("art", "", {"platform": "discord", "chat_id": "1490000000000000001", "thread_id": "1490000000000000001"},
+                               "tailscale", store.parse_round_spec(decisions=str(f)))
+
+
+def test_artifact_served_sandboxed(server, env, tmp_path):
+    data = _artifact_review(tmp_path)
+    url = f"{server}/r/{data['id']}/rounds/1/a/blocks/film.html"
+    code, h, body = http("GET", url)
+    assert code == 200 and h["Content-Security-Policy"] == "sandbox allow-scripts; " + store.ARTIFACT_CSP    # sandbox, plus no network
+    assert "connect-src 'none'" in h["Content-Security-Policy"] and "frame-src 'none'" in h["Content-Security-Policy"]
+    assert h["Content-Type"].startswith("text/html") and h.get("Cache-Control") == "no-cache"
+    assert b"<p id=x>art</p>" in body and b"connect-src 'none'" in body                 # and the page's own meta CSP
+    assert b"allow-same-origin" not in h["Content-Security-Policy"].encode()
+
+
+def test_every_file_of_a_round_with_an_artifact_carries_the_artifact_header(server, env, tmp_path):
+    """A page can navigate its own frame to any other file of the round; that document must have no network either."""
+    d = tmp_path / "dec"
+    (d / "assets").mkdir(parents=True)
+    (d / "assets" / "escape.html").write_text("<script>fetch('http://example.test/x')</script>", encoding="utf-8")
+    (d / "assets" / "click.wav").write_bytes(b"RIFF....WAVE")
+    (d / "decisions.json").write_text(json.dumps({"blocks": [
+        {"type": "artifact", "id": "film", "html": "<p>art</p>"}, {"type": "mock", "id": "m", "html": "<p>m</p>"}]}), encoding="utf-8")
+    data = store.create_review("t", "", {"platform": "discord", "chat_id": "1490000000000000001", "thread_id": "1490000000000000001"},
+                               "tailscale", store.parse_round_spec(decisions=str(d / "decisions.json")))
+    base = f"{server}/r/{data['id']}/rounds/1/a"
+    want = "sandbox allow-scripts; " + store.ARTIFACT_CSP
+    for rel in ("blocks/film.html", "assets/escape.html", "assets/click.wav", "decisions.json"):
+        code, h, _ = http("GET", f"{base}/{rel}")
+        assert code == 200 and h["Content-Security-Policy"] == want, rel
+    assert "connect-src 'none'" in want and "allow-same-origin" not in want
+
+
+def test_a_round_without_an_artifact_without_a_token_has_no_network_and_with_one_keeps_the_plain_header(server, env, tmp_path):
+    d = tmp_path / "dec"
+    (d / "assets").mkdir(parents=True)
+    (d / "assets" / "click.wav").write_bytes(b"RIFF....WAVE")
+    (d / "assets" / "page.html").write_text("<p>p</p>", encoding="utf-8")
+    (d / "decisions.json").write_text(json.dumps({"blocks": [{"type": "mock", "id": "m", "html": "<p>m</p>"}]}), encoding="utf-8")
+    data = store.create_review("t", "", {"platform": "discord", "chat_id": "1490000000000000001", "thread_id": "1490000000000000001"},
+                               "tailscale", store.parse_round_spec(decisions=str(d / "decisions.json")))
+    base = f"{server}/r/{data['id']}/rounds/1/a"
+    for rel in ("assets/click.wav", "assets/page.html", "decisions.json"):
+        h = http("GET", f"{base}/{rel}")[1]
+        assert h["Content-Security-Policy"].startswith("sandbox allow-scripts; "), rel
+        assert "connect-src 'none'" in h["Content-Security-Policy"], rel
+    tok = json.loads(http("GET", f"{server}/r/{data['id']}/state.json")[2])["frame_tokens"]["1"]
+    token_base = f"{server}/r/{data['id']}/rounds/1/~{tok}/a"
+    for rel in ("assets/click.wav", "assets/page.html", "decisions.json"):
+        h = http("GET", f"{token_base}/{rel}")[1]
+        assert h["Content-Security-Policy"] == "sandbox allow-scripts", rel
+
+
+def test_a_prototype_round_in_a_mixed_review_has_no_network_but_loads_its_own_files(server, env, tmp_path):
+    proto = tmp_path / "proto" / "index.html"
+    proto.parent.mkdir()
+    proto.write_text("<p>proto</p><img src=\"assets/still.png\">", encoding="utf-8")
+    (proto.parent / "assets").mkdir()
+    (proto.parent / "assets" / "still.png").write_bytes(b"PNG")
+    data = store.create_review("t", "", {"platform": "discord", "chat_id": "1490000000000000001",
+                                        "thread_id": "1490000000000000001"}, "tailscale",
+                               store.parse_round_spec(prototype=str(proto)))
+    f = tmp_path / "dec" / "decisions.json"
+    f.parent.mkdir()
+    f.write_text(json.dumps({"blocks": [{"type": "artifact", "id": "film", "html": "<p>art</p>"}]}), encoding="utf-8")
+    store.add_round(data["id"], store.parse_round_spec(decisions=str(f)))
+    code, h, _ = http("GET", f"{server}/r/{data['id']}/rounds/1/a/index.html")
+    csp = h["Content-Security-Policy"]
+    host = server.replace("http://", "")
+    own = f"http://{host}/r/{data['id']}/rounds/1/a/ https://{host}/r/{data['id']}/rounds/1/a/"
+    assert code == 200 and csp.startswith("sandbox allow-scripts; ") and "connect-src 'none'" in csp
+    assert "img-src " + own + " data:" in csp and "media-src " + own + " data: blob:" in csp
+    assert "script-src " + own + " 'unsafe-inline'" in csp and "style-src " + own + " 'unsafe-inline'" in csp
+    assert "font-src " + own + " data:" in csp
+    # the artifact's own round keeps the exact artifact policy: its page is fully bundled
+    code, h, _ = http("GET", f"{server}/r/{data['id']}/rounds/2/a/blocks/film.html")
+    assert h["Content-Security-Policy"] == "sandbox allow-scripts; " + store.ARTIFACT_CSP
+
+
+def test_a_symlinked_or_empty_blocks_folder_does_not_switch_the_header(server, env, tmp_path):
+    """The header switch reads the round's own folder; planting a `blocks` symlink or page there changes nothing."""
+    d = tmp_path / "dec"
+    (d / "assets").mkdir(parents=True)
+    (d / "assets" / "page.html").write_text("<p>p</p>", encoding="utf-8")
+    (d / "decisions.json").write_text(json.dumps({"blocks": [{"type": "mock", "id": "m", "html": "<p>m</p>"}]}), encoding="utf-8")
+    data = store.create_review("t", "", {"platform": "discord", "chat_id": "1490000000000000001", "thread_id": "1490000000000000001"},
+                               "tailscale", store.parse_round_spec(decisions=str(d / "decisions.json")))
+    base = config.data_root() / data["id"] / "rounds/1/a"
+    (base / "blocks").mkdir()
+    assert not store.variant_has_artifact(data["id"], "1", "a")                        # empty folder
+    (base / "blocks" / "x.html").symlink_to(base / "decisions.json")
+    assert not store.variant_has_artifact(data["id"], "1", "a")                        # a symlinked page
+    (base / "blocks" / "x.html").unlink()
+    (base / "blocks").rmdir()
+    (base / "blocks").symlink_to(tmp_path / "dec" / "assets")
+    assert not store.variant_has_artifact(data["id"], "1", "a")                        # a symlinked folder
+    assert not store.variant_has_artifact(data["id"], "1", "../a") and not store.variant_has_artifact(data["id"], "x", "a")
+    csp = http("GET", f"{server}/r/{data['id']}/rounds/1/a/assets/page.html")[1]["Content-Security-Policy"]
+    assert csp.startswith("sandbox allow-scripts; ") and "connect-src 'none'" in csp
+
+
+def test_artifact_files_are_not_a_way_around_the_variant_rules(server, env, tmp_path):
+    data = _artifact_review(tmp_path)
+    base = f"{server}/r/{data['id']}/rounds/1/a"
+    for rel in ("blocks/../../../review.json", "blocks/%2e%2e/%2e%2e/%2e%2e/review.json", "blocks/..%2f..%2f..%2freview.json",
+                "blocks/.hidden.html", "blocks/missing.html", "blocks/film.html/x", "decisions.json/../../review.json"):
+        code, _, body = http("GET", f"{base}/{rel}")
+        assert code in (400, 404) and b"token" not in body, rel
+    # a symlink planted inside blocks/ that points at the review's own secrets is refused by the resolver
+    d = config.data_root() / data["id"] / "rounds/1/a/blocks"
+    (d / "evil.html").symlink_to(config.data_root() / data["id"] / "review.json")
+    with pytest.raises(ReviewError):
+        store.safe_variant_file(data["id"], "1", "a", "blocks/evil.html")
+    code, _, body = http("GET", f"{base}/blocks/evil.html")
+    assert code == 404 and b"token" not in body
+
+
+def test_a_missing_round_file_is_the_dead_page_with_the_artifact_header(server, env, tmp_path):
+    """A dead end under a round of a mixed review is sandboxed and has no network; elsewhere it keeps the plain page."""
+    data = _artifact_review(tmp_path)
+    for rel in ("assets/missing.png", "blocks/missing.html"):
+        code, h, body = http("GET", f"{server}/r/{data['id']}/rounds/1/a/{rel}")
+        assert code == 404 and body == pages.DEAD
+        assert h["Content-Security-Policy"] == "sandbox allow-scripts; " + store.ARTIFACT_CSP
+    d = tmp_path / "plain"
+    (d / "assets").mkdir(parents=True)
+    (d / "decisions.json").write_text(json.dumps({"blocks": [{"type": "mock", "id": "m", "html": "<p>m</p>"}]}),
+                                      encoding="utf-8")
+    plain = store.create_review("t", "", {"platform": "discord", "chat_id": "1490000000000000001",
+                                          "thread_id": "1490000000000000001"}, "tailscale",
+                                store.parse_round_spec(decisions=str(d / "decisions.json")))
+    code, h, body = http("GET", f"{server}/r/{plain['id']}/rounds/1/a/assets/missing.png")
+    # The header is chosen from the path shape alone, never from the review content, so missing and forbidden cannot
+    # differ: even a plain review's dead end under rounds/<n>/<v>/ carries the artifact-grade policy.
+    assert code == 404 and body == pages.DEAD and h["Content-Security-Policy"] == "sandbox allow-scripts; " + store.ARTIFACT_CSP
+    # a 404 outside a round keeps its plain-text body and gains no artifact policy
+    code, h, body = http("GET", f"{server}/r/{data['id']}/nope")
+    assert code == 404 and body == b"404 not found\n" and "Content-Security-Policy" not in h
+
+
+def test_artifact_page_cannot_close_its_csp_meta_or_inject_a_looser_one(env, tmp_path):
+    data = _artifact_review(tmp_path, '<meta http-equiv="Content-Security-Policy" content="default-src *"><p>x</p>')
+    served = (config.data_root() / data["id"] / "rounds/1/a/blocks/film.html").read_text(encoding="utf-8")
+    # ours comes first; a second, looser policy in the page can only add restrictions (policies intersect)
+    assert served.index("default-src 'none'") < served.index("default-src *")
+
+
+def test_decisions_sibling_assets_are_served_same_origin_for_plain_mock_media(server, env, tmp_path):
+    """docs/decisions-format.md, "Media in a plain mock": rounds/<n>/a/assets/<file> next to decisions.json."""
+    d = tmp_path / "dec"
+    (d / "assets").mkdir(parents=True)
+    (d / "assets" / "click.wav").write_bytes(b"RIFF....WAVE")
+    (d / "decisions.json").write_text(json.dumps({"blocks": [{"type": "mock", "id": "m", "html": "<audio controls src=\"rounds/1/a/assets/click.wav\"></audio>"}]}), encoding="utf-8")
+    data = store.create_review("t", "", {"platform": "discord", "chat_id": "1490000000000000001", "thread_id": "1490000000000000001"},
+                               "tailscale", store.parse_round_spec(decisions=str(d / "decisions.json")))
+    code, h, body = http("GET", f"{server}/r/{data['id']}/rounds/1/a/assets/click.wav")
+    assert code == 200 and h["Content-Type"].startswith("audio/") and body == b"RIFF....WAVE"

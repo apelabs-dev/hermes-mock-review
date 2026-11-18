@@ -27,7 +27,12 @@ Look settings and the first three feedback settings are copied into each review 
 - `require_note_on_change` (bool, default `false`). Env: `MOCKREVIEW_REQUIRE_NOTE_ON_CHANGE`. Block Send until every Change mark has a note.
 - `max_pins` (int, default `40`, 1 to 80). Env: `MOCKREVIEW_MAX_PINS`. Most pins per round.
 - `footer_button` (str, default `build`, one of `send`, `build`). Env: `MOCKREVIEW_FOOTER_BUTTON`. The one button in the footer of a round that has a gate (every plan board): build or send. build: Build, locked until nothing is open or on Change, with the reason in its tooltip; a block on Change turns it into Send for that round's notes. send: Send only, and the board never offers Build. A round with no gate always has Send.
-- `interactive_elements` (bool, default `true`). Env: `MOCKREVIEW_INTERACTIVE_ELEMENTS`. Mocks carry working controls. On: build every control in a mock so it responds (a dropdown opens, a switch flips, a tab changes, a field takes text), and the board opens on Tap so taps reach the mock; the reviewer switches to Pin in the header to comment. Off: mocks are static pictures and the board opens on Pin.
+- `interactive_elements` (bool, default `true`). Env: `MOCKREVIEW_INTERACTIVE_ELEMENTS`. Mocks carry working controls. On: build every control in a mock so it responds (a dropdown opens, a switch flips, a tab changes, a field takes text); the comment toggle is always one press away (C). Off: mocks are static pictures.
+- `pin_fix` (bool, default `false`). Env: `MOCKREVIEW_PIN_FIX`. Let a reviewer ask Hermes to patch one block of the current round in place, from a pin or an @Hermes comment, instead of sending a new round. Off: pins and comments are notes only.
+- `pin_fix_window_seconds` (float, default `20.0`, 0 to 600). Env: `MOCKREVIEW_PIN_FIX_WINDOW_SECONDS`. Requests that arrive within this many seconds of each other share one wake-up.
+- `pin_fix_min_seconds` (float, default `60.0`, 0 to 3600). Env: `MOCKREVIEW_PIN_FIX_MIN_SECONDS`. Minimum seconds between two pin-fix wake-ups for one review.
+- `pin_fix_max_per_hour` (int, default `60`, 1 to 600). Env: `MOCKREVIEW_PIN_FIX_MAX_PER_HOUR`. Most pin-fix requests one review accepts in a rolling hour.
+- `pin_fix_max_per_round` (int, default `60`, 1 to 600). Env: `MOCKREVIEW_PIN_FIX_MAX_PER_ROUND`. Most pin-fix requests one round accepts.
 - `webhook_url` (str, default `http://localhost:8644/webhooks/mock-review`). Env: `MOCKREVIEW_WEBHOOK_URL`. Hermes webhook base URL; the route suffix is selected by origin platform.
 - `webhook_route` (str, default `mock-review`). Env: `MOCKREVIEW_WEBHOOK_ROUTE`. Webhook route prefix; setup creates `<prefix>-<platform>` for each origin platform.
 - `wake_required` (bool, default `true`). Env: `MOCKREVIEW_WAKE_REQUIRED`. Refuse to create or extend a review unless the owning service can wake Hermes on Send (the scoped signing secret is set; setup creates routes). Off: demo/local-only boards that are viewed but never wake anyone.
@@ -35,29 +40,39 @@ Look settings and the first three feedback settings are copied into each review 
 - `stale_after_minutes` (float, default `15.0`, 0 to 10080). Env: `MOCKREVIEW_STALE_AFTER_MINUTES`. Minutes after a submitted round with no new round before the board server pings the origin chat that the agent may have stalled. No ping for a round with nothing to build (every decision approved or skipped, every question on its recommendation, no pins, no general notes, Build not pressed) or one the agent acknowledged (mockreview ack). 0 = never ping.
 - `stale_after_read_minutes` (float, default `60.0`, 0 to 10080). Env: `MOCKREVIEW_STALE_AFTER_READ_MINUTES`. Once the agent has read a submission's feedback (mock_review_feedback or mockreview feedback), minutes after that read with no new round before the stalled ping. 0 = no ping once the feedback was read.
 - `build_stale_factor` (float, default `4.0`, 1 to 24). Env: `MOCKREVIEW_BUILD_STALE_FACTOR`. A build takes longer than a feedback round: after Build, stale_after_minutes and stale_after_read_minutes are multiplied by this before the stalled ping, and the ping names the longer wait. 1 = the same wait as Send. A wait of 0 stays off.
-- `wake_toolsets` (list, default `(empty)`). Env: `MOCKREVIEW_WAKE_TOOLSETS`. Hermes toolsets the session woken by Send may use, for example mock-review, terminal, file (the list replaces Hermes's webhook default). hermes mockreview setup prints the toolsets line to add by hand to the wake route in webhook_subscriptions.json; add it again after every setup run. Empty: Hermes's safe webhook tools only, and the build continues in the origin chat's session. Refused for a waking board whose Send is ungated (a here.now board with its password off, or any board while host listens beyond loopback), because that board text would reach these tools.
-- `poll_seconds` (float, default `60.0`, 5 to 86400). Env: `MOCKREVIEW_POLL_SECONDS`. Seconds between here.now Site Data polls.
+- `wake_toolsets` (list, default `(empty)`). Env: `MOCKREVIEW_WAKE_TOOLSETS`. Hermes toolsets the session woken by Send may use, for example mock-review, terminal, file (the list replaces Hermes's webhook default). hermes mockreview setup prints the toolsets line to add by hand to the wake route in webhook_subscriptions.json; add it again after every setup run. Empty: Hermes's safe webhook tools only, and the build continues in the origin chat's session. Refused for a waking board whose Send is ungated (any board while host listens beyond loopback), because that board text would reach these tools.
 
 ## Hosting and network
 
-- `default_host` (str, default `local`, one of `tailnet`, `local`, `herenow`). Env: `MOCKREVIEW_DEFAULT_HOST`. Where a review is hosted when the call doesn't say: tailnet (private, over Tailscale), local (this computer's own address, no Tailscale) or herenow (internet link, password protected by default).
-- `herenow_password` (bool, default `true`). Env: `MOCKREVIEW_HERENOW_PASSWORD`. Password protect new here.now reviews. Stored per review; change an existing review with mockreview password `<id>` on|off.
-- `ask_host_each_time` (bool, default `true`). Env: `MOCKREVIEW_ASK_HOST_EACH_TIME`. Ask the user tailnet, local or here.now before every review (read by the skill and tool text, not enforced in code).
+- `default_host` (str, default `local`, one of `tailnet`, `local`, `public`). Env: `MOCKREVIEW_DEFAULT_HOST`. Where a review is hosted when the call doesn't say: tailnet (private, over Tailscale), local (this computer's own address, no Tailscale) or public (an internet URL behind Tailscale Funnel or any TLS proxy).
+- `ask_host_each_time` (bool, default `true`). Env: `MOCKREVIEW_ASK_HOST_EACH_TIME`. Ask the user tailnet, local or public before every review (read by the skill and tool text, not enforced in code).
 - `public_base` (str, default `(empty)`). Env: `MOCKREVIEW_PUBLIC_BASE`. Tailnet URL for review links. Empty: detect MagicDNS with tailscale status --json.
+- `public_url` (str, default `(empty)`). Env: `MOCKREVIEW_PUBLIC_URL`. The public HTTPS URL a TLS proxy serves this board at (Caddy, nginx, Cloudflare Tunnel, oauth2-proxy). Empty: the Tailscale Funnel URL when Funnel serves the board, else public_base.
+- `funnel_port` (int, default `8443`, 1 to 65535). Env: `MOCKREVIEW_FUNNEL_PORT`. HTTPS port `hermes mockreview public on` maps through Tailscale Funnel. Funnel allows only 443, 8443 and 10000; 443 is usually taken.
 - `host` (str, default `127.0.0.1`, one of `127.0.0.1`, `localhost`, `::1`, `0.0.0.0`). Env: `MOCKREVIEW_HOST`. Address the board server binds. Loopback (default) keeps it on this computer (tailnet via tailscale serve); 0.0.0.0 shares it with every device on your network, unauthenticated, so local links open on other devices.
 - `owner` (str, default `auto`, one of `auto`, `service`, `self`). Env: `MOCKREVIEW_OWNER`. Who owns board storage and wake-ups: the running board server. auto = use this process's own store when the server watches it; inside a Kanban worker whose store is not watched, create in the server's store instead (reported in the result); anywhere else refuse rather than publish an orphan board. service = always the server's store. self = this process's store, no server check (own server, tests).
 - `port` (int, default `8790`, 1 to 65535). Env: `MOCKREVIEW_PORT`. Port the board server binds.
 - `local_base` (str, default `(empty)`). Env: `MOCKREVIEW_LOCAL_BASE`. URL the CLI uses to reach the server. Empty: http://`<host>`:`<port>`.
 - `lan_address` (str, default `(empty)`). Env: `MOCKREVIEW_LAN_ADDRESS`. Address local-mode links use. Empty: this computer's network address, detected (127.0.0.1 while the server binds loopback only).
 
+## Sign-in and access
+
+- `loopback_owner` (bool, default `true`). Env: `MOCKREVIEW_LOOPBACK_OWNER`. A request from this computer that did not come through a proxy is the install's owner (an admin) with no sign-in. Off: everyone signs in, the owner with mockreview login.
+- `trusted_proxies` (list, default `127.0.0.1, ::1`). Env: `MOCKREVIEW_TRUSTED_PROXIES`. Addresses or networks of the reverse proxies whose identity headers are read (tailscale serve, cloudflared and most local proxies connect from loopback). Identity headers from any other peer are ignored.
+- `tailscale_identity` (bool, default `true`). Env: `MOCKREVIEW_TAILSCALE_IDENTITY`. Sign in a tailnet person whose Tailscale Serve identity (Tailscale-User-Login) is linked to an account. Read only from trusted_proxies, only when X-Forwarded-For is the single tailnet address Serve sets (100.64.0.0/10 or fd7a:115c:a1e0::/48), and never for a Funnel request, a public host, or a request that also carries another source's identity headers. Any other proxy in trusted_proxies must strip Tailscale-User-* headers, or turn this off.
+- `forwarded_identity` (bool, default `false`). Env: `MOCKREVIEW_FORWARDED_IDENTITY`. Sign in a person whose X-Forwarded-User / X-Forwarded-Email (oauth2-proxy, Authelia) is linked to an account. Read only from trusted_proxies; turn it on only when that proxy strips these headers from incoming requests. Refused on a public host and with the Funnel marker (Funnel and Serve connect from a trusted loopback proxy and strip only Tailscale-* headers).
+- `cloudflare_team` (str, default `(empty)`). Env: `MOCKREVIEW_CLOUDFLARE_TEAM`. Cloudflare Access team name (the `<team>` in `<team>`.cloudflareaccess.com). With cloudflare_audience set, the Cf-Access-Jwt-Assertion JWT signs in a linked account; needs the plugin's crypto extra (PyJWT with cryptography) or the server refuses to start.
+- `cloudflare_audience` (str, default `(empty)`). Env: `MOCKREVIEW_CLOUDFLARE_AUDIENCE`. The Cloudflare Access application's AUD tag; a JWT for any other audience is refused.
+
 ## Board server
 
+- `sse_heartbeat_seconds` (int, default `15`, 1 to 300). Env: `MOCKREVIEW_SSE_HEARTBEAT_SECONDS`. Seconds between heartbeat comments on a quiet server-sent-events stream, so proxies do not drop it.
 - `autostart` (bool, default `false`). Env: `MOCKREVIEW_AUTOSTART`. Start the board server inside the Hermes gateway process (a background thread serving host:port) when the gateway's webhook platform connects. Off (default): nothing runs in the background; run `hermes mockreview serve` yourself. Restart the gateway after changing it, host or port.
 
 ## Housekeeping
 
 - `data_dir` (str, default `(empty)`). Env: `MOCKREVIEW_HOME`. Where reviews live. Empty: $HERMES_HOME/workspace/mock-reviews.
-- `auto_close_idle_days` (int, default `0`, 0 to 3650). Env: `MOCKREVIEW_AUTO_CLOSE_IDLE_DAYS`. Close an open review after this many days without a new round or feedback (here.now: its public site is deleted). 0 = never.
+- `auto_close_idle_days` (int, default `0`, 0 to 3650). Env: `MOCKREVIEW_AUTO_CLOSE_IDLE_DAYS`. Close an open review after this many days without a new round or feedback. 0 = never.
 - `keep_closed_days` (int, default `0`, 0 to 3650). Env: `MOCKREVIEW_KEEP_CLOSED_DAYS`. Delete a closed review this many days after it closed. 0 = keep forever.
 - `housekeeping_seconds` (int, default `3600`, 60 to 604800). Env: `MOCKREVIEW_HOUSEKEEPING_SECONDS`. Seconds between the server's auto-close/prune passes.
 
@@ -70,7 +85,6 @@ Look settings and the first three feedback settings are copied into each review 
 Secrets are not settings. The plugin reads them through Hermes's secret scope, so they live in the Hermes `.env`, never in `config.yaml`.
 
 - `MOCKREVIEW_WEBHOOK_SECRET`: Signs the wake-up request sent to the Hermes webhook. `hermes mockreview setup` generates it.
-- `HERENOW_API_KEY`: Your here.now key. Needed only for public here.now hosting.
 
 ## Output of `hermes mockreview settings`
 
@@ -92,6 +106,11 @@ mock-review settings (config: Hermes ctx.get_config, read with Hermes)
   max_pins = 40  (default)
   footer_button = build  (default)
   interactive_elements = true  (default)
+  pin_fix = false  (default)
+  pin_fix_window_seconds = 20.0  (default)
+  pin_fix_min_seconds = 60.0  (default)
+  pin_fix_max_per_hour = 60  (default)
+  pin_fix_max_per_round = 60  (default)
   webhook_url = http://localhost:8644/webhooks/mock-review  (default)
   webhook_route = mock-review  (default)
   wake_required = true  (default)
@@ -100,17 +119,24 @@ mock-review settings (config: Hermes ctx.get_config, read with Hermes)
   stale_after_read_minutes = 60.0  (default)
   build_stale_factor = 4.0  (default)
   wake_toolsets = (empty)  (default)
-  poll_seconds = 60.0  (default)
 [hosting]
   default_host = local  (default)
-  herenow_password = true  (default)
   ask_host_each_time = true  (default)
   public_base = (empty)  (default)
+  public_url = (empty)  (default)
+  funnel_port = 8443  (default)
   host = 127.0.0.1  (default)
   owner = auto  (default)
   port = 8790  (default)
   local_base = (empty)  (default)
   lan_address = (empty)  (default)
+[access]
+  loopback_owner = true  (default)
+  trusted_proxies = 127.0.0.1, ::1  (default)
+  tailscale_identity = true  (default)
+  forwarded_identity = false  (default)
+  cloudflare_team = (empty)  (default)
+  cloudflare_audience = (empty)  (default)
 [demo]
   offer_live_demo = false  (default)
 [housekeeping]
@@ -119,5 +145,6 @@ mock-review settings (config: Hermes ctx.get_config, read with Hermes)
   keep_closed_days = 0  (default)
   housekeeping_seconds = 3600  (default)
 [server]
+  sse_heartbeat_seconds = 15  (default)
   autostart = false  (default)
 ```

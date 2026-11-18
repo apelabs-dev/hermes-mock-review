@@ -152,19 +152,41 @@ def review(env, variants):
 
 @pytest.fixture
 def server(env):
-    from mockreview import server as srv
+    from mockreview import live, server as srv
     httpd = srv.make_server("127.0.0.1", 0)
     t = threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
     t.start()
     base = f"http://127.0.0.1:{httpd.server_address[1]}"
     yield base
+    # A live stream re-reads identity every 5 s (live.RECHECK_EVERY), and that read resolves the data root from the
+    # environment as it is at that moment. End every subscription before this test's environment is restored (env
+    # finalizes after this fixture), or the loop writes into the next test's store. daemon_threads makes shutdown()
+    # leave handler threads running, so wait for them too, bounded.
+    live.REGISTRY.reset()
     httpd.shutdown()
     httpd.server_close()
+    deadline = time.monotonic() + 3.0
+    while True:
+        leftover = [th for th in threading.enumerate()
+                    if th is not threading.current_thread() and th.is_alive()
+                    and "process_request_thread" in th.name]
+        remaining = deadline - time.monotonic()
+        if not leftover or remaining <= 0:
+            break
+        leftover[0].join(remaining)
 
 
-def http(method, url, body=None, headers=None):
+TEST_CSRF = "test-csrf-token"
+CSRF_HEADERS = {"Cookie": "mr_csrf=" + TEST_CSRF, "X-CSRF-Token": TEST_CSRF}
+
+
+def http(method, url, body=None, headers=None, csrf=True):
+    """One request. A POST carries the double-submit CSRF pair (cookie + header) unless csrf=False or the test sets
+    its own Cookie / X-CSRF-Token."""
     data = body if isinstance(body, (bytes, type(None))) else json.dumps(body).encode()
     hdrs = {"Content-Type": "application/json"} if data is not None else {}
+    if method == "POST" and csrf:
+        hdrs.update(CSRF_HEADERS)
     hdrs.update(headers or {})
     req = urllib.request.Request(url, data=data, method=method, headers=hdrs)
     try:
@@ -192,7 +214,7 @@ def isolated_settings(tmp_path, monkeypatch):
     """No test reads the real ~/.hermes/config.yaml: point the config layer at a temp file (absent unless a test
     writes it) and reset the in-process config source / reader switch afterwards."""
     from mockreview import api, config as config_mod, owner, settings, secrets
-    secret_values = {"MOCKREVIEW_WEBHOOK_SECRET": SECRET, "HERENOW_API_KEY": "test-public-key"}
+    secret_values = {"MOCKREVIEW_WEBHOOK_SECRET": SECRET}
     monkeypatch.setattr(secrets, "get_secret", lambda name: (secret_values.get(name) or "").strip())
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
@@ -214,21 +236,17 @@ def isolated_settings(tmp_path, monkeypatch):
     settings._cache["key"] = None
 
 
+@pytest.fixture(autouse=True)
+def close_access_db():
+    """Each test has its own data root; close this thread's SQLite connections to it afterwards."""
+    yield
+    from mockreview import db
+    db.close_all()
+
+
 @pytest.fixture
 def secret_values(monkeypatch):
     from mockreview import secrets
-    values = {"MOCKREVIEW_WEBHOOK_SECRET": SECRET, "HERENOW_API_KEY": "test-public-key"}
+    values = {"MOCKREVIEW_WEBHOOK_SECRET": SECRET}
     monkeypatch.setattr(secrets, "get_secret", lambda name: (values.get(name) or "").strip())
     return values
-
-
-@pytest.fixture(autouse=True)
-def block_real_herenow(monkeypatch):
-    """Every here.now HTTP interaction must have an explicit test double."""
-    original = urllib.request.urlopen
-    def guarded(request, *args, **kwargs):
-        url = request.full_url if isinstance(request, urllib.request.Request) else str(request)
-        if url.startswith("https://here.now/") or ".here.now/" in url:
-            raise AssertionError("real here.now HTTP is forbidden in tests")
-        return original(request, *args, **kwargs)
-    monkeypatch.setattr(urllib.request, "urlopen", guarded)

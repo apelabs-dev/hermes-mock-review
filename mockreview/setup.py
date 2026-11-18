@@ -40,6 +40,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
 from . import api, config, owner, settings, store, wakeguard
+from .migrate import OBSOLETE_KEYS
 from .store import ReviewError
 
 # The installed plugin directory is the tree that holds plugin.yaml and mockreview/ (bin/mockreview lives under it).
@@ -58,8 +59,7 @@ VERSION_TIMEOUT = 120    # `hermes --version` checks for updates on the first ru
 # ingress, the OpenAI-compatible API server and the local CLI. Auto-detection skips them; --origin-platform does not.
 NON_CHAT_PLATFORMS = ("webhook", "msgraph_webhook", "api_server", "local")
 
-HOSTING_CHOICES = ("local", "tailnet", "lan", "herenow")
-OBSOLETE_KEYS = ("herenow_credentials", "subscriptions_file", "herenow_publish_script")
+HOSTING_CHOICES = ("local", "tailnet", "lan")
 
 # The one line a woken session without the tools to build posts instead (Hermes runs webhook sessions with its safe
 # webhook tools unless wake_toolsets grants more). The origin chat's own session builds the round.
@@ -139,45 +139,23 @@ def wake_toolsets_instructions(names: List[str], toolsets: List[str]) -> List[st
 
 
 def wake_toolsets_blockers(hosting: str) -> List[str]:
-    """Why wake_toolsets must not be granted now: some board's Send button would be ungated (a here.now board without
-    its password, or a server reachable beyond loopback), and every board of a platform wakes the same route. A
-    password-gated here.now board is fine (see wakeguard). Fails closed when a setting or the reviews cannot be read."""
+    """Why wake_toolsets must not be granted now: a server reachable beyond loopback leaves every board's Send button
+    ungated, and every board of a platform wakes the same route. See wakeguard."""
     why = []
     if hosting == "lan":
-        why.append("this setup chose lan hosting (no login on the network)")
+        why.append("this setup chose lan hosting, so anyone who can reach the port gets the sign-in page, and any "
+                   "account there or anyone holding a share link can press Send")
     else:
         lan = wakeguard.lan_reason()
         if lan:
             why.append(lan)
-    try:
-        password_default = settings.get("herenow_password") is True
-    except settings.SettingsError:
-        password_default = False
-    if not password_default:
-        if hosting == "herenow":
-            why.append("this setup chose here.now hosting with herenow_password off")
-        else:
-            try:
-                if settings.get("default_host") == "herenow":
-                    why.append("default_host is herenow and herenow_password is off")
-            except settings.SettingsError:
-                pass
-    try:
-        ids = api.open_herenow_wake_reviews()
-    except Exception as e:
-        why.append(f"could not check for open here.now reviews ({getattr(e, 'message', None) or e})")
-    else:
-        if ids:
-            why.append("open here.now review(s) without a password: " + ", ".join(ids))
     return why
 
 
-LAN_WARNING = ("Anyone who can reach this port can open every board and press Send — there is no login. "
-               "Only do this on a network you trust.")
+LAN_WARNING = ("Anyone who can reach this port gets the sign-in page; any account there, and anyone holding a "
+               "share link, can open a board and press Send. Only do this on a network you trust.")
 
 WEBHOOK_ENABLE_CMD = "hermes config set platforms.webhook.enabled true"
-HERENOW_INSTALL_CMD = "hermes skills install official/productivity/here-now -y"
-HERENOW_KEY_CMD = "hermes config set HERENOW_API_KEY <key>"
 FOREGROUND_CMD = "hermes mockreview serve"
 
 NON_TTY_USAGE = "not a terminal: re-run with --yes (and --hosting / --origin-platform), or see --help"
@@ -241,9 +219,9 @@ def parse_version(text: Optional[str]) -> Optional[Tuple[int, int, int]]:
 
 
 def python_ok(info: Any = None) -> bool:
-    """True when the interpreter is at least Python 3.9. `info` defaults to the running interpreter's version."""
+    """True when the interpreter is at least Python 3.11. `info` defaults to the running interpreter's version."""
     info = sys.version_info if info is None else info
-    return tuple(info)[:2] >= (3, 9)
+    return tuple(info)[:2] >= (3, 11)
 
 
 def redact(text: Optional[str], secret: Optional[str]) -> str:
@@ -727,7 +705,7 @@ def _run(args: argparse.Namespace) -> int:
 
     # 0. preflight: Python version (pure, before any subprocess)
     if not python_ok():
-        print(f"mock-review setup needs Python >= 3.9 "
+        print(f"mock-review setup needs Python >= 3.11 "
               f"(running {'.'.join(map(str, sys.version_info[:3]))}). Upgrade Python, then re-run.")
         return 2
 
@@ -922,9 +900,6 @@ def _run(args: argparse.Namespace) -> int:
             r = run_hermes(["config", "set", f"{SETTINGS}.host", "0.0.0.0"])
             print(redact((r.stdout + r.stderr).strip(), secret))
             changed_at_start.append("host")
-    elif req.hosting == "herenow":
-        print(f"here.now hosting: install the official skill with: {HERENOW_INSTALL_CMD}")
-        print(f"then set the key: {HERENOW_KEY_CMD}  (setup never installs the skill or writes the key)")
     else:
         print("hosting: local (nothing written)")
     summary.append(hosting_row)
@@ -935,8 +910,7 @@ def _run(args: argparse.Namespace) -> int:
     blockers = wake_toolsets_blockers(req.hosting) if toolsets else []
     if blockers:
         print("refusing to set wake_toolsets: " + "; ".join(blockers) + ". Feedback typed on an ungated board would "
-              "reach the woken session's tools. Turn the here.now password on (or close those reviews) and keep the "
-              "server on loopback, then re-run setup.")
+              "reach the woken session's tools. Keep the server on loopback, then re-run setup.")
         failed = True
         summary.append(("wake toolsets", "failed", "ungated boards"))
     elif toolsets:

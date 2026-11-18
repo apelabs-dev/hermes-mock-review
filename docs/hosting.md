@@ -1,9 +1,10 @@
 # Hosting
 
-Every review is hosted in one of three modes. `default_host` sets the mode used when a call does not name one
-(`local`, `tailnet` or `herenow`). The agent can pass `mode` on each `mock_review_create` call, and the bundled skill
-asks you first when `default_host` was never set. `hermes mockreview setup --hosting <local|tailnet|lan|herenow>` writes
-the matching settings. `lan` is local mode with the board bound to `0.0.0.0`.
+Every review is hosted in one of three modes: `tailnet`, `local` or `public`. `default_host` sets the mode used when a
+call does not name one. The agent can pass `mode` on each `mock_review_create` call, and the bundled skill asks you
+first when `default_host` was never set. `public` means a public URL behind Tailscale Funnel or any TLS proxy; see
+[public-hosting.md](public-hosting.md). `hermes mockreview setup --hosting <local|tailnet|lan>` writes the matching
+settings. `lan` is local mode with the board bound to `0.0.0.0`.
 
 Whatever the mode, the board server has to be running when you open a link. Either turn on `autostart` and restart the
 gateway, or run `hermes mockreview serve`. `hermes mockreview owner` shows whether a server is running and where it
@@ -16,15 +17,18 @@ The default. The link is `http://<address>:<port>/r/<review id>/`.
 - With `host` at its default of `127.0.0.1`, the server accepts connections from this computer only, and the link works
   on this computer only. Create results carry a note saying so.
 - With `host` set to `0.0.0.0`, any device on the same network can open the link, and local links use this computer's
-  network address (set `lan_address` to override the detected one). There is no login, so use it only on a network you
-  trust. Restart the gateway or the `serve` process after changing `host` or `port`.
+  network address (set `lan_address` to override the detected one). Anyone other than this computer meets the sign-in
+  page: invite people with `hermes mockreview invite`, or share one review with `hermes mockreview share <review id>`.
+  Restart the gateway or the `serve` process after changing `host` or `port`.
 
       hermes config set plugins.entries.mock-review.settings.host 0.0.0.0
 
 ## Tailnet
 
 The board stays on `127.0.0.1` and Tailscale carries it to your other devices. Only devices on your tailnet can open the
-link.
+link. People other than you sign in once with an invite link; after that their Tailscale login signs them in. Use
+`tailscale serve` for a tailnet board, not Funnel: Funnel ingress is public and carries no Tailscale identity, and the
+board never accepts one on a public host (see [public-hosting.md](public-hosting.md)).
 
 1. Check that Tailscale is running (`tailscale status`).
 2. Run `hermes mockreview setup --hosting tailnet`. It reads your address with `tailscale status --json` and your
@@ -44,27 +48,56 @@ link.
 If you run Tailscale under a different name or port, set `public_base` yourself, for example
 `hermes config set plugins.entries.mock-review.settings.public_base https://<machine>.<tailnet>.ts.net:8790`.
 
-## here.now
+## Public
 
-Publishing calls the official skill's `publish.sh` through `bash`; it needs Bash and the helper's Unix tools.
-On Windows, use Git Bash on `PATH` with paths that its tools can read, or run Hermes and the plugin inside WSL.
-Native Windows without that environment cannot publish here.now reviews. The Bash integration tests are skipped
-on Windows; site building, feedback validation and polling are still tested there. Local hosting does not need Bash.
+`public` puts the board on a public HTTPS URL while the server keeps listening on loopback. Tailscale Funnel is built
+in: `hermes mockreview public on` maps one Funnel port (default 8443) and prints the URL; `public status` and `public
+off` show and remove it. The port must be exclusively the board's; another handler on it is refused before any
+Tailscale command runs. Any other TLS proxy works too: set `public_url` to the address people open and
+`trusted_proxies` to the proxy's address. Reviewers sign in with an invite or a share link: Funnel carries no Tailscale
+identity, the board never accepts one on a public host, and `forwarded_identity` is refused there; Cloudflare Access
+still works. The full
+recipes, including a cloud box without Tailscale and the SSE heartbeat, are in
+[public-hosting.md](public-hosting.md), and the release checks for a real public route are in
+[public-hosting-live-checks.md](public-hosting-live-checks.md).
 
-New here.now boards have a server-side password gate by default. Send the returned `password` next to the URL;
-the reviewer unlocks the site before viewing the board and sending feedback. Keep secrets and private values out of mocks. Feedback is collected through the site's Site Data and read back by your
-board server, which polls every `poll_seconds`.
+## Share links
 
-1. Install the official skill: `hermes skills install official/productivity/here-now -y`. The plugin looks for its
-   `publish.sh` under `$HERMES_HOME/skills`, and nowhere else.
-2. Store your key: `hermes config set HERENOW_API_KEY <key>`. The key goes through Hermes's secret scope and is passed
-   to the publish script in the child process environment.
-3. Create the review with `mode="herenow"` (or set `default_host` to `herenow`).
+A review has one guest link, managed by its owner. The board header's **Share** button (admins only) and
+`hermes mockreview share <review id>` both change it. The link is signed with itsdangerous and carries the review id and
+its generation: regenerating it makes a new URL, and the old one stops working. The URL is rebuilt from the review's row
+and the install's signing key; the database stores the row, not the URL.
 
-The server has to be running for feedback to come back, because the here.now page cannot reach your computer. Closing the
-review deletes the public site and archives its Site Data. A review whose site is already gone at here.now (HTTP 404)
-stops being polled and still closes locally, keeping the last Site Data archive. `hermes mockreview publish <review id>`
-republishes a review, and `hermes mockreview poll` reads Site Data once.
+- **Who can open it.** `anyone` (the default) means anyone holding the URL joins as a guest. `members` means the link
+  only redirects signed-in people who can already read the review; everyone else, and every guest, gets the same dead
+  page as a missing link. Switching an `anyone` link to `members` ends every guest session of that review and closes
+  their live streams; members' sessions are untouched, and a guest cookie left from before the switch reads as a dead
+  link rather than the sign-in page.
+- **Guests can.** The guest role is `reviewer`, `commenter` (the default) or `viewer`. It applies to everyone who joins
+  through the link.
+- **Invite role and expiry.** The invite row has its own role and expiry selects, `commenter` and `never expires` by
+  default. They work before any share link exists and never read the guest-link selects, so inviting someone does not
+  depend on who may open the link.
+- **Expiry.** `Never expires` (the default), `24h` or `7d`. The link, and the guest sessions bound to it, end then.
+- **Copy, Regenerate, Stop sharing.** Copy puts the URL on the clipboard. Regenerate makes a new link and signs out every
+  guest of the old one. Stop sharing ends the link; the section then reads "Not shared" and offers **Create link**. Both
+  buttons ask once more in place ("Regenerate?" / "Stop sharing?") rather than opening a browser dialog.
+- **People and inherited access.** A person whose access comes only from an all-reviews grant shows that inherited
+  role and no Remove button. A review-scoped grant on top of an all-reviews grant can be removed; the row then
+  re-renders with the all-reviews access that remains. Remove never touches another review or the all-reviews grant.
+- **Seats.** A review has 25 live seats, and one is the owner's: the dialog shows "Live: N of 25 seats". A new guest is
+  refused when the guest seats are full, with a page that asks the owner for a new link.
+- **What viewers see.** The version picker (`Latest round` or `Round N`) is stored on the link. It affects viewer guests
+  only: their board shows that one round, with no feedback pins or notes and no submit token. Every other role still sees
+  every round. If the picked round is removed, the link falls back to the full, latest board.
+- **The link base.** The review's own mode decides the address, so a link never points somewhere the review is not
+  served: a `local` review uses this computer's local address (the same base as its board URL, following
+  `lan_address` when the board is reachable beyond loopback), a `tailnet` review uses `public_base` and never
+  `public_url` or the Funnel host, and a `public` review uses `public_url`, then the Tailscale Funnel URL, then
+  `public_base` — so a public link stays valid when the owner turns Funnel on or off. A link whose review is gone
+  falls back to the public walk and then the local base. Nothing else builds a share URL.
+
+    hermes mockreview share <review id> create --role viewer --expires 7d --audience anyone --round 2
 
 ## Waking the agent
 
@@ -94,8 +127,7 @@ secret and sent to the same local webhook:
   server posts "No round N+1 yet ... The agent may have stalled" to the same chat, once per submission (an amend is a new
   submission). Only the board server runs this check, and only for open reviews with wake on. The board shows the same
   hint, and it polls every 30 seconds for up to two hours while a sent round has no successor, so the hint and the next
-  round appear without a reload. On a here.now board the server republishes after the ping, and the hosted board shows the
-  hint the next time its state is read.
+  round appear without a reload.
 
 Both messages carry the title and counts only, never the reviewer's notes. They reach the chat the same way the wake-up
 does (the route's `--deliver-chat-id` is the review's origin chat), so a Discord thread gets them in the thread. Hermes's
@@ -107,83 +139,3 @@ the board server logs one warning, marks that notice `no_route` and never retrie
 
 If you only want a board that is viewed and never wakes anyone, set `wake_required` to false or pass `--no-wake` on
 `create`.
-
-### Password controls and recovery
-
-`herenow_password` defaults to `true` in `plugins.entries.mock-review.settings` (environment override:
-`MOCKREVIEW_HERENOW_PASSWORD`). Create stores the choice in `review.json`; later global changes do not affect an
-existing review. Override it with `--password` / `--no-password` on create, or the `mock_review_create` tool's boolean
-`password` argument. Create, add-round and publish JSON return `password`, `password_enabled` and `password_status`.
-The password is four independent words from the bundled [EFF large wordlist](https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt)
-(7,776 choices each, about 51.7 bits of entropy; [CC BY 3.0 US](https://creativecommons.org/licenses/by/3.0/us/)).
-It lives only in the local review record and explicit owner results, never the site files, browser state or list output.
-
-Use `hermes mockreview password <review id> on` to enable the gate (reuses an existing password), or
-`hermes mockreview password <review id> off` to remove it and clear the local password after success.
-The same commands are available as `/mockreview password <review id> <on|off>`. Turning it on again after removal generates
-a new password. Closed reviews reject password changes and publication.
-
-Publishing first obtains a slug, saves it, then PATCHes `/api/v1/publish/<slug>/metadata` with `{"password":"..."}`.
-Removal PATCHes `{"password":null}`. The gate survives republishing; protected reviews reassert it on each publish.
-Owner Bearer-key Site Data reads are unaffected, and same-origin browser inserts work after unlock.
-There is a brief interval between first publication and the password PATCH when the site can be reached without the gate.
-A failed PATCH returns an error, records `password_status: error` and `password_applied: null`, and suppresses the URL in
-list/open results. The remote gate is then **unconfirmed**; do not share the board. The slug and password are preserved:
-retry `hermes mockreview publish <review id>` or the password command, or close the review to delete the site.
-Retries also reconcile interrupted removals. Publish, toggle and close share a per-review operation lock.
-An unpublished toggle saves the choice but returns an error until publication can apply it.
-
-Legacy reviews without a stored password choice stay public on republish. Enable their gate explicitly with the
-password command. Closing still archives feedback and deletes the site; housekeeping behavior is unchanged.
-
-### Prototype rounds on a password-gated board
-
-A prototype ("try it live") round shows the page in an iframe with `sandbox="allow-scripts"`. That frame has an opaque
-origin, so its requests for its own stylesheets, scripts, images and fonts are cross-site, and the here.now unlock cookie
-(`__hn_unlock_<slug>`, `SameSite=Lax`) is not sent with them. The gate answers each one with 401 and the reviewer sees an
-unstyled, broken page. Fetching the same URLs with `curl` and the cookie typed in by hand returns 200, so a curl check
-passes while a reviewer's browser fails. Mock-review does not add `allow-same-origin` to work around it: that would give
-the prototype the board's own origin.
-
-Two things make a gated prototype work, and both run on `create` and `add-round` (CLI, API and the agent tools):
-
-- **Bundling.** For a here.now review with its password on, a prototype round is rewritten into one self-contained HTML
-  file. Local CSS (including `@import` and `url()` references inside it), scripts, images, fonts, icons, `srcset`
-  candidates and inline `style` URLs become `data:` URIs. ES modules (`import`, `export ... from`, `import()`) are
-  served through an import map. A path that a script builds at run time from a folder prefix, such as
-  ``` `assets/shots/poster-${n}.webp` ```, resolves through one generated lookup table that holds each file once, and a
-  whole-string path in a script is looked up there too. `srcset` lists are parsed candidate by candidate, so a list that
-  mixes `data:`, remote and local candidates has every local one inlined. Missing files (including a script string that
-  is a whole asset path naming no file, such as `'missing.png'` or `'lost/poster.png'`, and a template literal that ends
-  in an asset extension whose folder is missing; external URLs, prose, object keys, a download's file name and a bare
-  `x.json` or `x.txt` are left as written), paths outside the prototype's folder,
-  symbolic links, oversized files (25 MiB each, 50 MiB of assets in all, as for other rounds, and 64 MiB of output), a local `<iframe>`, a link to another
-  local page, a manifest, `<base href>`, a Content-Security-Policy that blocks `data:`, workers, a service worker, an own
-  import map with local paths and paths built by concatenation (`"assets/" + name`) are errors that name the file or
-  construct; nothing is created or published. A PNG or JPEG over 300 KB is re-encoded as WebP (quality 85) only when
-  Pillow is already installed and the result is smaller; otherwise it is inlined unchanged. Nothing is installed.
-  Boards on `local`, `tailnet`, and here.now boards with the password off keep serving the `assets/` folder as before.
-- **Browser verification.** After the gate is applied, mock-review opens the published board in the installed Chrome,
-  Chromium or Edge (headless, throwaway profile, one browser at a time), types the password into the form like a
-  reviewer, lets the board build its real sandboxed frame and counts every HTTP 4xx/5xx and failed request after the
-  unlock, including the prototype's own favicon request (only the browser's probe for the board page itself is
-  ignored). The frame is an out-of-process frame, which the check follows through its own browser session. Any failure,
-  a request still unfinished when the wait ends, a frame that is not exactly `sandbox="allow-scripts"`, or a frame with
-  stylesheets that none applied, fails the publish. The browser is found from `MOCKREVIEW_BROWSER` (path to the executable), then the usual
-  names on `PATH`, then the standard macOS and Windows install paths. With no browser the check cannot run, so the
-  publish fails with a message saying so: it never passes silently. The password goes in through the browser's input
-  channel, never argv, a URL, the environment or a log, and is scrubbed from every message.
-
-While the check runs and after it fails, `verify_status` in `review.json` is `pending` or `failed`; the URL and password
-are withheld from create, add-round, publish, list and open results, the same way an unconfirmed gate is. The site stays
-published but unshared. Fix the prototype and add a round, or retry `hermes mockreview publish <review id>`. A `create`
-that fails this way says the review was created but publishing failed and names that retry command. Turning the password
-on for a board whose newest round is a prototype runs the check too; the poller's background republish does not.
-
-A failed or pending check only withholds the link while it still applies: when the password is turned off (the frame's
-files are then public) or a later round is not a prototype (decisions rounds have no frame), the link and password rules
-are the ordinary ones again, and turning the password back on checks a prototype round again. A board with the password
-off never gets a `verify_status`.
-
-On macOS the check starts Chrome with `--use-mock-keychain --password-store=basic`: without them Chrome's network can
-stall on a Keychain prompt when the process's home directory is not a real one (a test run, a service account).

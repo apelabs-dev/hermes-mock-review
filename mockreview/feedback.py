@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Dict, List, Optional
 
-from .store import ReviewError
+from .store import PIN_ID_RE, ReviewError, guest_submission, new_pin_id
+from .targets import clean_target, target_markdown
 
 MAX_PINS = 40
 MAX_PIN_TEXT = 600
@@ -13,6 +15,7 @@ MAX_NOTE = 3000
 MAX_GUIDELINES = 5000
 MAX_CHOICE_NOTE = 2000
 FRAMES = {"desktop": (1280, 800), "phone": (390, 844)}
+BOARD_TITLES = {"page": "Board", "else": "Anything else", "doc": "Board canvas"}
 
 _CTRL_LINE = re.compile(r"[\x00-\x1f\x7f  ]+")
 _CTRL_BLOCK = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
@@ -108,6 +111,10 @@ def _quote(text: str) -> str:
 
 
 def render_markdown(data: Dict[str, Any], round_: Dict[str, Any]) -> str:
+    if guest_submission(round_):
+        return (f"# {data['title']} — round {round_['n']}\n\n"
+                "A share-link guest sent feedback for this round. Guest feedback is kept for the owner on the "
+                "board and is never delivered to Hermes.\n")
     fb = round_.get("feedback")
     if not fb:
         return f"# {data['title']} — round {round_['n']}\n\nNo feedback submitted yet.\n"
@@ -201,6 +208,10 @@ STATUS_WORD = {"approve": "Approve", "change": "Change", "skip": "Skip"}
 MAX_MARK_NOTE = 2000
 MAX_DPINS = 80
 MAX_CUSTOM = 280
+MAX_PAGE_KEYS = 64
+MAX_PAGE_VALUE = 8 * 1024
+MAX_PAGE_ROUND = 256 * 1024
+PAGE_VALUE_RENDER = 200
 
 # Characters a reviewer cannot see but a model reads: zero-width, bidi embeddings / overrides / isolates, invisible
 # fillers, the Unicode tag block (hidden ASCII), BOM, C1 controls. Stripped from a typed question answer.
@@ -215,6 +226,50 @@ def clean_answer(v: Any) -> str:
     if not isinstance(v, str):
         return ""
     return re.sub(r"\s+", " ", _CTRL_LINE.sub(" ", _INVISIBLE.sub("", v))).strip()
+
+
+def _json_bytes(v: Any) -> Optional[int]:
+    try:
+        s = json.dumps(v, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+        return len(s.encode("utf-8"))
+    except (TypeError, ValueError, RecursionError, UnicodeEncodeError):
+        return None
+
+
+def _compact_json(v: Any) -> str:
+    try:
+        return json.dumps(v, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError, RecursionError, UnicodeEncodeError):
+        return "null"
+
+
+def sanitize_page_state(raw: Any, artifacts: Optional[List[str]]) -> Dict[str, Dict[str, Any]]:
+    """Re-cap the board's page-state store: only this round's artifact blocks, 64 keys and 8 KB per value, 256 KB
+    per round (keys included). Unknown blocks and oversized values are dropped, never repaired into something else."""
+    if not isinstance(raw, dict):
+        return {}
+    allowed = set(artifacts or [])
+    out: Dict[str, Dict[str, Any]] = {}
+    used = 0
+    for bid in sorted(raw):
+        if not isinstance(bid, str) or bid not in allowed:
+            continue
+        block = raw[bid]
+        if not isinstance(block, dict):
+            continue
+        kept: Dict[str, Any] = {}
+        for key in sorted(k for k in block if isinstance(k, str))[:MAX_PAGE_KEYS]:
+            vb = _json_bytes(block[key])
+            if vb is None or vb > MAX_PAGE_VALUE:
+                continue
+            nb = vb + len(key.encode("utf-8"))
+            if used + nb > MAX_PAGE_ROUND:
+                continue
+            kept[key] = block[key]
+            used += nb
+        if kept:
+            out[bid] = kept
+    return out
 
 
 def _action(raw: Dict[str, Any]) -> str:
@@ -277,12 +332,17 @@ def _check_build(gate: Optional[Dict[str, Any]], index: List[Dict[str, Any]], ma
 
 
 def sanitize_decisions(raw: Any, index: List[Dict[str, Any]], look: Optional[Dict[str, Any]] = None,
-                       mocks: Optional[List[Dict[str, Any]]] = None, gate: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                       mocks: Optional[List[Dict[str, Any]]] = None, gate: Optional[Dict[str, Any]] = None,
+                       sections: Optional[List[Dict[str, Any]]] = None,
+                       artifacts: Optional[List[str]] = None) -> Dict[str, Any]:
     """`look`: the review's stored settings (pins_enabled, max_pins, require_note_on_change); None = old reviews.
     `mocks`: the round's context mocks (store.round_mocks): pins may land on them (option None), marks may not.
     `gate`: the round's final approval (round["gate"]); action "build" is refused without one, and until every
-    markable block is resolved with nothing on Change."""
-    from .store import entry_kind
+    markable block is resolved with nothing on Change.
+    `sections`: the round's rendered sections (store.round_sections): a board pin names one of them or a reserved
+    board ref (`page`, `else`, `doc`); a round stored without sections keeps mock pins only.
+    `artifacts`: the round's artifact block ids (store.round_artifacts): only they may carry page state."""
+    from .store import entry_kind, RESERVED_REFS
     if not isinstance(raw, dict):
         raise ReviewError("feedback must be a JSON object")
     action = _action(raw)
@@ -306,18 +366,41 @@ def sanitize_decisions(raw: Any, index: List[Dict[str, Any]], look: Optional[Dic
         note = clean_block(m.get("note"), MAX_MARK_NOTE)
         if status or option or note:
             marks[did] = {"status": status, "option": option, "note": note}
+    section_refs = {s["ref"] for s in sections} if sections else None
     pins = []
+    pin_ids = set()
     for p in (raw.get("pins") if isinstance(raw.get("pins"), list) and max_pins else [])[: MAX_DPINS * 2]:
         if not isinstance(p, dict):
             continue
         block = p.get("block")
+        on = "board" if p.get("on") == "board" else "mock"
+        if on == "board" and (section_refs is None or (block not in section_refs and block not in RESERVED_REFS)):
+            continue
         text = clean_line(p.get("text"), MAX_PIN_TEXT)
         x, y = _num(p.get("x")), _num(p.get("y"))
-        if block not in pinnable or not text or x is None or y is None:
+        if (on == "mock" and block not in pinnable) or not text or x is None or y is None:
             continue
-        option = p.get("option") if p.get("option") in pinnable[block] else None
-        pins.append({"block": block, "option": option, "w": p.get("w") if p.get("w") in WIDTHS else "desktop",
-                     "x": round(min(max(x, 0.0), 1.0), 4), "y": round(min(max(y, 0.0), 1.0), 4), "text": text})
+        option = None if on == "board" else (p.get("option") if p.get("option") in pinnable[block] else None)
+        target = clean_target(p.get("target"))
+        pid = p.get("id") if isinstance(p.get("id"), str) and PIN_ID_RE.fullmatch(p["id"]) else None
+        if not pid or pid in pin_ids:
+            pid = new_pin_id()
+            while pid in pin_ids:
+                pid = new_pin_id()
+        pin_ids.add(pid)
+        pin = {"id": pid, "block": block, "option": option, "w": p.get("w") if p.get("w") in WIDTHS else "desktop",
+               "x": round(min(max(x, 0.0), 1.0), 4), "y": round(min(max(y, 0.0), 1.0), 4), "text": text}
+        if on == "board":
+            pin["on"] = "board"
+            doc = p.get("doc")
+            if isinstance(doc, dict):
+                dx, dy = _num(doc.get("x")), _num(doc.get("y"))
+                if dx is not None and dy is not None:
+                    pin["doc"] = {"x": round(min(max(dx, 0.0), 1000000.0), 6),
+                                  "y": round(min(max(dy, 0.0), 1000000.0), 6)}
+        if target:
+            pin["target"] = target
+        pins.append(pin)
         if len(pins) >= max_pins:
             break
     if look.get("require_note_on_change"):
@@ -327,16 +410,18 @@ def sanitize_decisions(raw: Any, index: List[Dict[str, Any]], look: Optional[Dic
     if action == "build":
         _check_build(gate, index, marks)
     out = {"kind": "decisions", "marks": marks, "pins": pins,
+           "page_state": sanitize_page_state(raw.get("page_state"), artifacts),
            "guidelines": clean_block(raw.get("guidelines"), MAX_GUIDELINES), "action": action}
-    if not (marks or pins or out["guidelines"] or action == "build"):
+    if not (marks or pins or out["page_state"] or out["guidelines"] or action == "build"):
         raise ReviewError("Nothing to send yet — mark a decision, drop a pin or write a note.")
     return out
 
 
 def sanitize_for_round(raw: Any, round_: Dict[str, Any], look: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     if round_.get("kind") in ("decisions", "prototype"):
-        from .store import round_index, round_mocks
-        return sanitize_decisions(raw, round_index(round_), look, round_mocks(round_), round_.get("gate"))
+        from .store import round_artifacts, round_index, round_mocks, round_sections
+        return sanitize_decisions(raw, round_index(round_), look, round_mocks(round_), round_.get("gate"),
+                                  round_sections(round_), round_artifacts(round_))
     if isinstance(raw, dict) and _action(raw) == "build":
         _check_build(None, [], {})
     return sanitize(raw, [v["id"] for v in round_["variants"]])
@@ -389,8 +474,26 @@ def _question_lines(d: Dict[str, Any], m: Dict[str, Any]) -> List[str]:
     return lines
 
 
+def _page_state_lines(fb: Dict[str, Any]) -> List[str]:
+    ps = fb.get("page_state") or {}
+    n = len(ps)
+    lines = [f"## Page state ({n} block{'s' if n != 1 else ''})", ""]
+    if not ps:
+        return lines + ["_none_"]
+    for bid in sorted(ps):
+        block = ps[bid]
+        k = len(block)
+        lines.append(f"- **[{bid}]** — {k} key{'s' if k != 1 else ''}")
+        for key in sorted(block):
+            val = _compact_json(block[key])
+            if len(val) > PAGE_VALUE_RENDER:
+                val = val[: PAGE_VALUE_RENDER - 1] + "…"
+            lines.append("  " + _quote(key + ": " + val).replace("\n", "\n  "))
+    return lines
+
+
 def render_decisions_markdown(data: Dict[str, Any], round_: Dict[str, Any]) -> str:
-    from .store import entry_kind, round_index, round_mocks
+    from .store import entry_kind, round_index, round_mocks, round_sections
     fb, sub, index = round_["feedback"], round_.get("submission") or {}, round_index(round_)
     c = decision_counts(fb, index)
     lines = [
@@ -425,16 +528,32 @@ def render_decisions_markdown(data: Dict[str, Any], round_: Dict[str, Any]) -> s
         lines.append(line)
         if m.get("note"):
             lines.append("  " + _quote(m["note"]).replace("\n", "\n  "))
-    lines += ["", f"## Pins ({len(fb['pins'])})", ""]
+    lines += [""] + _page_state_lines(fb) + ["", f"## Pins ({len(fb['pins'])})", ""]
     if fb["pins"]:
         names = {d["id"]: d for d in index}
         context = {m["id"]: m for m in round_mocks(round_)}
-        for i, p in enumerate(fb["pins"], 1):
+        sections = round_sections(round_)
+        titles = {s["ref"]: s["title"] for s in sections}
+        order = {s["ref"]: pos for pos, s in enumerate(sections)}
+        mock_pins = [p for p in fb["pins"] if p.get("on") != "board"]
+        board_pins = [p for p in fb["pins"] if p.get("on") == "board"]
+        board_pins.sort(key=lambda p: order.get(p["block"], len(order)))   # stable; reserved refs and unknown refs last
+        numbered = mock_pins + board_pins
+        for i, p in enumerate(numbered, 1):
+            if p.get("on") == "board":
+                title = BOARD_TITLES.get(p["block"]) or titles.get(p["block"]) or p["block"]
+                where = f'{p["block"]} "{title}", board, {p["w"]}'
+                quote = (p.get("target") or {}).get("quote")
+                line = f"{i}. [{where}]"
+                if quote and quote.get("exact"):
+                    line += ' on "' + clean_line(quote["exact"], 160).replace("`", "") + '"'
+                lines.append(line + f": {p['text']}" + target_markdown(p.get("target"), quote=False))
+                continue
             d = names.get(p["block"]) or context.get(p["block"])
             where = (p["block"] + (f", option {p['option'].upper()}" if p.get("option") else "")
                      + (", context mock" if p["block"] in context and p["block"] not in names else "") + f", {p['w']}")
             lines.append(f"{i}. [{where}] ~({round(p['x'] * 100)}%,{round(p['y'] * 100)}%) of the mock"
-                         + (f" — _{d['title']}_" if d and d.get("title") else "") + f": {p['text']}")
+                         + (f" — _{d['title']}_" if d and d.get("title") else "") + f": {p['text']}" + target_markdown(p.get("target")))
     else:
         lines.append("_none_")
     lines += ["", "## Anything else", ""]
@@ -470,6 +589,9 @@ def short_decisions_summary(data: Dict[str, Any], round_: Dict[str, Any], limit:
             parts.append(bit)
     if fb["pins"]:
         parts.append(f"**Pins:** {len(fb['pins'])}")
+    if fb.get("page_state"):
+        n = len(fb["page_state"])
+        parts.append(f"**Page state:** {n} block{'s' if n != 1 else ''}")
     if fb.get("guidelines"):
         parts.append(f"**Anything else:** {clean_line(fb['guidelines'], 400)}")
     s = "\n".join(f"- {p}" for p in parts)

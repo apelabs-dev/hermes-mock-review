@@ -676,7 +676,6 @@ def test_manifest_install_prompts_say_to_press_enter():
     manifest = yaml.safe_load((ROOT / "plugin.yaml").read_text(encoding="utf-8"))
     env = {e["name"]: e for e in manifest["requires_env"]}
     assert env["MOCKREVIEW_WEBHOOK_SECRET"]["description"] == "Leave empty: hermes mockreview setup generates and stores it."
-    assert env["HERENOW_API_KEY"]["description"] == "Leave empty unless you use here.now hosting."
     assert all(e["optional"] is True and e["secret"] is True for e in env.values())
 
 
@@ -685,7 +684,10 @@ def test_help_lists_setup_first_and_says_who_should_run_it():
     p = argparse.ArgumentParser(prog="mockreview")
     cli.add_commands(p)
     names = list(p._subparsers._group_actions[0].choices)
-    assert names[0] == "setup" and len(names) == 18 and "password" in names and "ack" in names and "mcp" in names
+    assert names[0] == "setup" and len(names) == 23 and "migrate" in names and "ack" in names and "mcp" in names
+    assert "public" in names
+    assert "password" not in names and "publish" not in names and "poll" not in names
+    assert all(n in names for n in ("login", "users", "invite", "admin", "share", "tokens"))
 
     class Ctx:
         cli = {}

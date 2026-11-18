@@ -1,8 +1,8 @@
 """Release Please wiring: one version everywhere, v-prefixed tags, an action pinned by commit.
 
 `release-please.yml` runs on every push to main and keeps a release pull request open. Merging that pull request tags
-vX.Y.Z. The version lives in three places and this file asserts they agree, so a bump only ever has to touch the files
-the action itself edits: `.release-please-manifest.json`, `plugin.yaml` and `mockreview/__init__.py`.
+vX.Y.Z. The version lives in four places and this file asserts they agree, so a bump only ever has to touch the files
+the action itself edits: `.release-please-manifest.json`, `plugin.yaml`, `mockreview/__init__.py` and `pyproject.toml`.
 """
 
 import json
@@ -18,6 +18,7 @@ MANIFEST = ROOT / ".release-please-manifest.json"
 WORKFLOW = ROOT / ".github" / "workflows" / "release-please.yml"
 PLUGIN = ROOT / "plugin.yaml"
 INIT = ROOT / "mockreview" / "__init__.py"
+PYPROJECT = ROOT / "pyproject.toml"
 ANNOTATION = "x-release-please-version"
 SEMVER = re.compile(r"\d+\.\d+\.\d+")
 FULL_SHA = re.compile(r"[0-9a-f]{40}")
@@ -54,6 +55,7 @@ def test_one_version_lives_in_the_manifest_the_plugin_and_the_package():
         ".release-please-manifest.json": read_json(MANIFEST)["."],
         "plugin.yaml": plugin_manifest()["version"],
         "mockreview/__init__.py": init_version(),
+        "pyproject.toml": annotated_lines(PYPROJECT)[0][1],
     }
     assert SEMVER.fullmatch(versions["plugin.yaml"]), "the manifest version is bare: tags add the v"
     assert len(set(versions.values())) == 1, "the version drifted: {}".format(versions)
@@ -75,10 +77,12 @@ def test_config_releases_the_root_package_with_v_prefixed_tags():
     assert package["extra-files"] == [
         {"type": "generic", "path": "plugin.yaml"},
         {"type": "generic", "path": "mockreview/__init__.py"},
+        {"type": "generic", "path": "pyproject.toml"},
     ]
 
 
-@pytest.mark.parametrize("path, declaration", [(PLUGIN, "version:"), (INIT, "__version__ =")])
+@pytest.mark.parametrize("path, declaration", [(PLUGIN, "version:"), (INIT, "__version__ ="),
+                                                   (PYPROJECT, "version =")])
 def test_every_extra_file_exists_and_marks_its_version_line(path, declaration):
     assert path.is_file(), "{} is named in extra-files but missing".format(path.name)
     lines = annotated_lines(path)

@@ -22,15 +22,15 @@ from pathlib import Path
 import pytest
 
 from conftest import FEEDBACK, http, load_plugin
-from mockreview import autostart, config, herenow, notify, owner, secrets, server, service, store
+from mockreview import autostart, config, notify, owner, secrets, server, service, store
 from test_plugin import FakeCtx
 
 
 REAL_GET_SECRET = secrets.get_secret   # the production wrapper, before the suite's autouse stub replaces it
 
-OWN = {"MOCKREVIEW_WEBHOOK_SECRET": "synthetic-owner-signing", "HERENOW_API_KEY": "synthetic-owner-herenow"}
-OTHER = {"MOCKREVIEW_WEBHOOK_SECRET": "synthetic-other-signing", "HERENOW_API_KEY": "synthetic-other-herenow"}
-PROCESS = {"MOCKREVIEW_WEBHOOK_SECRET": "synthetic-process-signing", "HERENOW_API_KEY": "synthetic-process-herenow"}
+OWN = {"MOCKREVIEW_WEBHOOK_SECRET": "synthetic-owner-signing"}
+OTHER = {"MOCKREVIEW_WEBHOOK_SECRET": "synthetic-other-signing"}
+PROCESS = {"MOCKREVIEW_WEBHOOK_SECRET": "synthetic-process-signing"}
 ORIGIN = {"platform": "telegram", "chat_id": "test-chat", "thread_id": "topic:alpha"}
 
 
@@ -147,16 +147,13 @@ def wait_for(predicate, what="condition"):
 # ---------------------------------------------------------------- the board, started like the gateway does
 
 class Recorder:
-    """notify.post and the here.now Site Data poll, without any network: who was called, with which secret, from
-    which thread, and which secret scope that thread had installed."""
+    """notify.post without any network: who was called, with which secret, from which thread, and which secret scope
+    that thread had installed."""
 
     def __init__(self, scope, monkeypatch):
         self.scope = scope
         self.posted = []
-        self.polls = []
         monkeypatch.setattr(notify, "post", self.post)
-        self._urlopen = herenow.urllib.request.urlopen
-        monkeypatch.setattr(herenow.urllib.request, "urlopen", self.urlopen)
 
     def _installed(self):
         return self.scope.current_secret_scope() if self.scope is not None else None
@@ -165,24 +162,6 @@ class Recorder:
         self.posted.append({"review": payload["review_id"], "key": key, "thread": threading.current_thread().name,
                             "scope": self._installed()})
         return True, "synthetic transport"
-
-    def urlopen(self, request, **kwargs):
-        if getattr(request, "full_url", "").startswith("https://here.now/api/"):
-            self.polls.append({"auth": request.get_header("Authorization"),
-                               "thread": threading.current_thread().name, "scope": self._installed()})
-
-            class Reply:
-                def __enter__(self):
-                    return self
-
-                def __exit__(self, *args):
-                    pass
-
-                def read(self, *args):
-                    return b'{"records": []}'
-
-            return Reply()
-        return self._urlopen(request, **kwargs)
 
 
 @pytest.fixture
@@ -275,28 +254,23 @@ def test_request_threads_sign_with_the_owning_secret(scope, board, monkeypatch):
     assert all(p["scope"] is not None for p in rec.posted)
 
 
-def test_worker_retries_and_polls_with_the_owning_secrets(scope, board, monkeypatch):
+def test_worker_retries_with_the_owning_secret(scope, board, monkeypatch):
     write_env(board.home, OWN)
     rec = Recorder(scope, monkeypatch)
     with multiplexing(scope):
         pending = board.review()
         service.submit(pending["id"], 1, FEEDBACK, pending["token"], do_notify=False)
-        public = board.review("herenow")
-        public["herenow"]["slug"] = "synthetic-scope-site"
-        store.save(public["id"], public)
         board.start(worker_tick=0.02)
-        wait_for(lambda: rec.polls and any(p["review"] == pending["id"] for p in rec.posted), "retry and poll")
+        wait_for(lambda: any(p["review"] == pending["id"] for p in rec.posted), "retry")
     sent = [p for p in rec.posted if p["review"] == pending["id"]]
     assert sent and all(p["thread"] == "mockreview-worker" for p in sent)
     assert {p["key"] for p in sent} == {OWN["MOCKREVIEW_WEBHOOK_SECRET"]}
-    assert all(p["thread"] == "mockreview-worker" for p in rec.polls)
-    assert {p["auth"] for p in rec.polls} == {"Bearer " + OWN["HERENOW_API_KEY"]}
 
 
 # ---------------------------------------------------------------- rotation without a restart
 
 def test_rotated_secret_is_used_on_the_next_request_without_restart(scope, board, monkeypatch):
-    write_env(board.home, {"HERENOW_API_KEY": OWN["HERENOW_API_KEY"]})   # signing secret absent at start
+    write_env(board.home, {})   # signing secret absent at start
     rec = Recorder(scope, monkeypatch)
     with multiplexing(scope):
         first, second = board.review(), board.review()
@@ -348,7 +322,7 @@ def test_a_routed_profile_scope_in_the_factory_caller_is_never_used(scope, board
 
 
 def test_owning_env_without_the_key_is_not_set_and_ignores_os_environ(scope, board, monkeypatch):
-    write_env(board.home, {"HERENOW_API_KEY": OWN["HERENOW_API_KEY"]})
+    write_env(board.home, {})
     rec = Recorder(scope, monkeypatch)
     assert os.environ["MOCKREVIEW_WEBHOOK_SECRET"] == PROCESS["MOCKREVIEW_WEBHOOK_SECRET"]
     with multiplexing(scope):

@@ -12,6 +12,7 @@ Layout (under config.data_root()):
 from __future__ import annotations
 
 import contextlib
+import functools
 import json
 import os
 import re
@@ -20,14 +21,16 @@ import shutil
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
+from uuid import uuid4
 
-from . import config, locks, passwords, settings
+from . import config, locks, settings
 
 ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
+PIN_ID_RE = re.compile(r"^[a-z0-9]{1,24}$")
 VARIANT_IDS = "abcd"
 VARIANT_RE = re.compile(r"^[a-d]$")
-MODES = ("tailscale", "local", "herenow")
+MODES = ("tailscale", "local", "public")
 MAX_VARIANTS = 4
 MAX_TITLE = 160
 MAX_BRIEF = 4000
@@ -35,14 +38,40 @@ MAX_LABEL = 60
 MAX_STANCE = 240
 MAX_ASSETS_BYTES = 50 * 1024 * 1024
 
+
+def size_label(n: int) -> str:
+    """A byte cap as the error messages say it: whole megabytes, or exact bytes under 1 MB (never "0 MB")."""
+    return f"{n // (1024 * 1024)} MB" if n >= 1024 * 1024 else f"{n} bytes"
+
 # Injected into every variant page (see board/probe.js): reports page size and
 # comment-mode taps to the board via postMessage and draws pin markers.
 PROBE_MARKER = "mockreview-probe"
+_LIB_EXPORTS = "export {\n  finder,\n  position,\n  quote\n};"
+_ANCHORS_IMPORT = "import {finder, quote, position} from './lib/anchors.js';"
+_PROBE_IMPORT = "import {LIVE, anchorFor, cleanTarget, surface, installAPI} from './anchors.js';"
 
 
+@functools.lru_cache(maxsize=1)
 def _probe() -> str:
-    js = (config.BOARD_DIR / "probe.js").read_text(encoding="utf-8")
-    return "<script>/*" + PROBE_MARKER + "*/\n" + js + "</script>"
+    """The probe as one classic inline script: a data: module import is refused by ARTIFACT_CSP, and a classic script
+    runs synchronously where it sits, so `window.mockreview` exists before an artifact page's own scripts do."""
+    lib = (config.BOARD_DIR / 'lib' / 'anchors.js').read_text(encoding='utf-8')
+    if _LIB_EXPORTS not in lib:
+        raise RuntimeError("board/lib/anchors.js: the expected export block is missing; rebuild the vendored bundle")
+    lib = lib.replace(_LIB_EXPORTS, 'return {finder: finder, quote: quote, position: position};')
+    lib = 'var __mrLib = (function(){\n' + lib + '\n})();'    # its top-level names never reach the other two files
+    anchors = (config.BOARD_DIR / 'anchors.js').read_text(encoding='utf-8')
+    if _ANCHORS_IMPORT not in anchors:
+        raise RuntimeError("board/anchors.js: the expected lib import is missing")
+    anchors = anchors.replace(_ANCHORS_IMPORT, '')
+    anchors = re.sub(r'(?m)^export (?=(?:const|function|let|var|class)\b)', '', anchors)
+    anchors = 'var finder = __mrLib.finder, quote = __mrLib.quote, position = __mrLib.position;\n' + anchors
+    probe = (config.BOARD_DIR / 'probe.js').read_text(encoding='utf-8')
+    if _PROBE_IMPORT not in probe:
+        raise RuntimeError("board/probe.js: the expected anchors import is missing")
+    probe = probe.replace(_PROBE_IMPORT, '')
+    js = '(function(){\n' + lib + '\n' + anchors + '\n' + probe + '\n})();'
+    return '<script>/*' + PROBE_MARKER + '*/\n' + js.replace('</script', '<\\/script') + '</script>'
 
 
 class ReviewError(Exception):
@@ -56,6 +85,11 @@ class ReviewError(Exception):
 
 def now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def new_pin_id() -> str:
+    """A pin id the board and the server both accept: `p` plus 8 hex characters."""
+    return "p" + uuid4().hex[:8]
 
 
 def validate_id(review_id: str) -> str:
@@ -88,11 +122,21 @@ def locked(review_id: str) -> Iterator[None]:
         yield
 
 
+@contextlib.contextmanager
+def io_lock(d: Path) -> Iterator[None]:
+    """Held while review.json is read and while it is replaced, so a replace never meets an open reader (Windows
+    refuses to replace a file another handle has open). Separate from locked(): a writer loads under locked()."""
+    with locks.exclusive(d / ".io.lock"):
+        yield
+
+
 def load(review_id: str) -> Dict[str, Any]:
     p = review_dir(review_id) / "review.json"
     if not p.is_file():
         raise ReviewError("review not found", 404)
-    return json.loads(p.read_text(encoding="utf-8"))
+    with io_lock(p.parent):
+        text = p.read_text(encoding="utf-8")
+    return json.loads(text)
 
 
 # On Windows, replacing a file another thread or process has open for reading fails with ERROR_ACCESS_DENIED
@@ -114,13 +158,15 @@ def _replace(src: str, dst: Path) -> None:
             time.sleep(_REPLACE_DELAY)
 
 
-def atomic_write(path: Path, text: str) -> None:
+def atomic_write(path: Path, text: str, lock: bool = False) -> None:
+    """Write via a temp file and a replace; lock=True takes io_lock around the replace (review.json)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-", suffix=path.suffix)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
-        _replace(tmp, path)
+        with io_lock(path.parent) if lock else contextlib.nullcontext():
+            _replace(tmp, path)
     except BaseException:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(tmp)
@@ -129,7 +175,7 @@ def atomic_write(path: Path, text: str) -> None:
 
 def save(review_id: str, data: Dict[str, Any]) -> None:
     data["updated_at"] = now_iso()
-    atomic_write(review_dir(review_id) / "review.json", json.dumps(data, indent=2, ensure_ascii=False))
+    atomic_write(review_dir(review_id) / "review.json", json.dumps(data, indent=2, ensure_ascii=False), lock=True)
 
 
 def list_ids() -> List[str]:
@@ -189,8 +235,16 @@ TOKEN_KEYS = ("bg", "surface", "surface2", "line", "line2", "text", "muted", "fa
 COLOR_RE = re.compile(r"^(#[0-9a-fA-F]{3,8}|rgba?\([0-9.,\s%/]+\))$")
 FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
 LAYOUTS = ("side", "switch", "steps", "before-after")
-BLOCK_TYPES = ("text", "recap", "decision", "cards", "callout", "mock", "table", "settled", "defaults", "question", "piece")
-ID_BLOCKS = ("decision", "mock", "question", "piece", "defaults")   # one id namespace (recaps join it via the clash check)
+BLOCK_TYPES = ("text", "recap", "decision", "cards", "callout", "mock", "table", "settled", "defaults", "question", "piece",
+               "artifact")
+ID_BLOCKS = ("decision", "mock", "question", "piece", "defaults", "artifact")   # one id namespace (recaps join it via the clash check)
+MAX_ARTIFACT_HTML = 2 * 1024 * 1024      # an artifact's own page, inline; media is bundled in later (bundle.py) under its caps
+ARTIFACT_HEIGHT = (80, 4000)
+# The meta CSP of every artifact page. The page runs with an opaque origin (sandbox="allow-scripts", no
+# allow-same-origin) and can load nothing but its own inline code and data:/blob: media: no network, no frames.
+ARTIFACT_CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; "
+                "media-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'; "
+                "frame-src 'none'")
 TONES = ("neutral", "ok", "warn", "err", "accent")
 BLOCK_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,23}")
 MAX_CARDS = 12
@@ -577,6 +631,57 @@ def _piece(b: Dict[str, Any], where: str, title: str) -> Dict[str, Any]:
     return out
 
 
+def _artifact(b: Dict[str, Any], where: str) -> Dict[str, Any]:
+    """An artifact block: a page of the agent's own HTML, CSS and script, shown in a sandboxed frame. Exactly one of
+    `html` (the page, up to 2 MB) or `src` (an absolute .html path; its local media is bundled in as data: URIs, see
+    bundle.bundle_artifacts). The page has no network; it may keep a bounded per-block page state (see
+    feedback.sanitize_decisions) and, when markable, set its own mark."""
+    has_html, has_src = b.get("html") is not None, b.get("src") is not None
+    if has_html == has_src:
+        raise ReviewError(f"{where}: artifact needs exactly one of html (the page) or src (an absolute .html path)")
+    out: Dict[str, Any] = {"text": _txt(b.get("text"), 2000), "caption": _clean_line(b.get("caption") or "", 300)}
+    if has_html:
+        if not isinstance(b["html"], str) or not b["html"].strip():
+            raise ReviewError(f"{where}: artifact html must be a non-empty html string")
+        if len(b["html"].encode("utf-8")) > MAX_ARTIFACT_HTML:
+            raise ReviewError(f"{where}: artifact html is larger than {MAX_ARTIFACT_HTML // (1024 * 1024)} MB; "
+                              "give the page as src and keep media in files next to it")
+        out["html"] = b["html"]
+    else:
+        out["src"] = _artifact_src(b["src"], where)
+    height = b.get("height", "auto")
+    lo, hi = ARTIFACT_HEIGHT
+    if height != "auto" and (isinstance(height, bool) or not isinstance(height, int) or not lo <= height <= hi):
+        raise ReviewError(f"{where}: artifact height must be {lo}-{hi} px or \"auto\"")
+    out["height"] = height
+    out["desktop_width"] = _width(b, where) if b.get("desktop_width") is not None else None
+    markable = b.get("markable", False)
+    if not isinstance(markable, bool):
+        raise ReviewError(f"{where}: artifact markable must be true or false")
+    out["markable"] = markable
+    display = b.get("display", "frame")
+    if display not in ("frame", "page"):
+        raise ReviewError(f"{where}: artifact display must be \"frame\" or \"page\"")
+    out["display"] = display
+    return out
+
+
+def _artifact_src(v: Any, where: str) -> str:
+    if not isinstance(v, str) or not v.strip():
+        raise ReviewError(f"{where}: artifact src must be an absolute .html path")
+    p = Path(v.strip()).expanduser()
+    if not p.is_absolute():
+        raise ReviewError(f"{where}: artifact src must be absolute: {v}")
+    if p.suffix.lower() not in (".html", ".htm"):
+        raise ReviewError(f"{where}: artifact src must be an .html file: {v}")
+    if not p.is_file():
+        raise ReviewError(f"{where}: artifact src not found: {v}")
+    if p.stat().st_size > MAX_ARTIFACT_HTML:
+        raise ReviewError(f"{where}: artifact src is larger than {MAX_ARTIFACT_HTML // (1024 * 1024)} MB; "
+                          "keep media in files next to it (they are bundled in separately)")
+    return str(p)
+
+
 def _status(v: Any) -> Optional[Dict[str, Any]]:
     if v is None:
         return None
@@ -625,8 +730,8 @@ def _gate(v: Any, preset: str) -> Optional[Dict[str, Any]]:
 
 def validate_decisions(raw: Any) -> Dict[str, Any]:
     """decisions.json: the content of a decision round. The board renders it; mocks are static HTML strings.
-    Markable blocks (decision, question, piece, defaults and a markable `recap`) are voted on; text / cards / callout /
-    mock / table / settled are context."""
+    Markable blocks (decision, question, piece, defaults, a markable `recap` and a markable `artifact`) are voted on;
+    text / cards / callout / mock / table / settled and a plain `artifact` are context."""
     if not isinstance(raw, dict):
         raise ReviewError("decisions.json must be an object")
     blocks = raw.get("blocks")
@@ -651,6 +756,8 @@ def validate_decisions(raw: Any) -> Dict[str, Any]:
             did = b.get("id") or ("defaults" if t == "defaults" else None)
             if not isinstance(did, str) or not BLOCK_ID_RE.fullmatch(did):
                 raise ReviewError(f"{where}: {t} id must be short lowercase (d1, d2, ...)")
+            if did in RESERVED_REFS:
+                raise ReviewError(f"decisions.json: block id '{did}' is reserved for the {RESERVED_REF_WHERE[did]}")
             if did in ids:
                 raise ReviewError(f"{where}: duplicate block id {did}")
             ids.add(did)
@@ -660,6 +767,8 @@ def validate_decisions(raw: Any) -> Dict[str, Any]:
             items = b.get("items") if isinstance(b.get("items"), list) else []
             ob["items"] = [_clean_line(x, 600) for x in items if isinstance(x, str)][:40]
             ob["id"] = _clean_line(b.get("id") or "recap", 24)
+            if ob["id"] in RESERVED_REFS:
+                raise ReviewError(f"decisions.json: block id '{ob['id']}' is reserved for the {RESERVED_REF_WHERE[ob['id']]}")
             ob["markable"] = bool(b.get("markable", True))
             all_recap_ids.add(ob["id"])
             if ob["markable"]:
@@ -680,6 +789,11 @@ def validate_decisions(raw: Any) -> Dict[str, Any]:
             ob.update({"id": did}, **_question(b, where, ob["title"]), **_markable_extras(b))
         elif t == "piece":
             ob.update({"id": did}, **_piece(b, where, ob["title"]), **_markable_extras(b))
+        elif t == "artifact":
+            art = _artifact(b, where)
+            ob.update({"id": did}, **art)
+            if art["markable"]:
+                ob.update(_markable_extras(b))
         elif t == "mock":
             if not isinstance(b.get("html"), str) or not b["html"].strip():
                 raise ReviewError(f"{where}: mock needs an html string")
@@ -743,6 +857,8 @@ def decision_index(dec: Dict[str, Any]) -> List[Dict[str, Any]]:
             out.append(_entry(b, "question", recommendation=dict(b["recommendation"])))
         elif b["type"] == "piece":
             out.append(_entry(b, "piece", tag=b["tag"], pinnable="html" in b))
+        elif b["type"] == "artifact" and b.get("markable"):
+            out.append(_entry(b, "artifact", pinnable=True))
     return out
 
 
@@ -752,12 +868,61 @@ def entry_kind(e: Dict[str, Any]) -> str:
 
 
 def mock_index(dec: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Context mocks: pins may land on them (block = their id), but they are not decisions (no marks, no tally)."""
-    return [{"id": b["id"], "title": b["title"]} for b in dec["blocks"] if b["type"] == "mock"]
+    """Context mocks and artifacts that are not markable: pins may land on them (block = their id), but they are not
+    decisions (no marks, no tally). `kind` is set on an artifact only."""
+    return [dict({"id": b["id"], "title": b["title"]}, **({"kind": "artifact"} if b["type"] == "artifact" else {}))
+            for b in dec["blocks"] if b["type"] == "mock" or (b["type"] == "artifact" and not b.get("markable"))]
 
 
 def round_mocks(r: Dict[str, Any]) -> List[Dict[str, Any]]:
     return (r.get("mocks") or []) if r.get("kind") == "decisions" else []
+
+
+def round_artifacts(r: Dict[str, Any]) -> List[str]:
+    """The ids of the round's artifact blocks, markable and not. The board's page-state store is per block, and only
+    these ids may carry state."""
+    if r.get("kind") != "decisions":
+        return []
+    ids = [e["id"] for e in (r.get("decisions") or []) if entry_kind(e) == "artifact"]
+    ids += [m["id"] for m in round_mocks(r) if m.get("kind") == "artifact"]
+    return ids
+
+
+SECTION_TITLES = {"text": "Text", "cards": "Cards", "callout": "Callout", "table": "Table", "settled": "Already decided",
+                  "recap": "Recap", "defaults": "How I read the rest", "question": "Question", "decision": "Decision",
+                  "piece": "Piece", "mock": "Mock", "artifact": "Artifact"}
+
+# The three board-level surfaces of a decisions round. Each names exactly one rendered element and is refused as a
+# decisions.json block id.
+RESERVED_REFS = ("page", "else", "doc")
+RESERVED_REF_WHERE = {"page": "board header", "else": "board's \"Anything else\" section", "doc": "board canvas"}
+
+
+def section_index(dec: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """One pinnable entry per block of decisions.json, in file order: `ref` is the block id when it has one, else a
+    generated `s<N>` that never collides with a block id (ids and generated refs are one namespace). `page`, `else`
+    and `doc` are reserved for the board header, "Anything else" and the board canvas; they are refused as block ids
+    by validate_decisions and are not part of this index."""
+    ids = {b["id"] for b in dec["blocks"] if b.get("id")}
+    out: List[Dict[str, Any]] = []
+    n = 0
+    for b in dec["blocks"]:
+        ref = b.get("id")
+        if not ref:
+            n += 1
+            ref = f"s{n}"
+            while ref in ids:
+                n += 1
+                ref = f"s{n}"
+        title = b.get("title") or SECTION_TITLES.get(b["type"], b["type"].title())
+        out.append({"ref": ref, "type": b["type"], "title": title})
+    return out
+
+
+def round_sections(r: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The round's rendered sections: one entry per block, in file order. The reserved board refs (`page`, `else`,
+    `doc`) are not listed."""
+    return (r.get("sections") or []) if r.get("kind") == "decisions" else []
 
 
 PROTOTYPE_INDEX = [{"id": "proto", "title": "Prototype", "tag": "", "nav": "", "layout": "prototype", "options": [],
@@ -765,10 +930,12 @@ PROTOTYPE_INDEX = [{"id": "proto", "title": "Prototype", "tag": "", "nav": "", "
 
 
 def round_index(r: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The round's markable index, each entry carrying the block's current `rev` (0 on old rounds and unpatched blocks)."""
+    revs = r.get("blocks_rev") or {}
     if r.get("kind") == "decisions":
-        return r.get("decisions") or []
+        return [dict(e, rev=int(revs.get(e["id"], 0) or 0)) for e in (r.get("decisions") or [])]
     if r.get("kind") == "prototype":
-        return PROTOTYPE_INDEX
+        return [dict(PROTOTYPE_INDEX[0], rev=int(revs.get(PROTOTYPE_INDEX[0]["id"], 0) or 0))]
     return []
 
 
@@ -808,25 +975,68 @@ def inject_probe(html: str) -> str:
     return html[:idx] + probe + html[idx:]
 
 
-def _copy_assets(src_dir: Path, dest_dir: Path) -> None:
-    """Copy a variant's sibling assets/ dir. Symlinks are skipped, size is capped."""
-    total = 0
+def _copy_assets(src_dir: Path, dest_dir: Path, used: int = 0) -> None:
+    """Copy a variant's sibling assets/ dir (or a design profile). Dot entries are never copied (dotfiles and whole
+    dot-directories), symlinks are never followed, and a source that is itself a symlink or resolves outside the
+    directory the caller named is refused. Size is capped; `used`: bytes the round already holds (its artifacts'
+    inlined media), counted against the same cap."""
+    src_dir = Path(src_dir)
+    if src_dir.is_symlink():
+        raise ReviewError(f"refusing to copy {src_dir}: it is a symlink")
+    if src_dir.resolve() != src_dir.parent.resolve() / src_dir.name:
+        raise ReviewError(f"refusing to copy {src_dir}: it resolves outside {src_dir.parent}")
+    total = used
     for root, dirs, files in os.walk(src_dir, followlinks=False):
         rootp = Path(root)
-        dirs[:] = [d for d in dirs if not (rootp / d).is_symlink()]
+        dirs[:] = [d for d in dirs if not d.startswith(".") and not (rootp / d).is_symlink()]
         for name in files:
+            if name.startswith("."):
+                continue
             f = rootp / name
             if f.is_symlink() or not f.is_file():
                 continue
             total += f.stat().st_size
             if total > MAX_ASSETS_BYTES:
-                raise ReviewError(f"assets dir {src_dir} is larger than 50 MB")
+                raise ReviewError(f"assets dir {src_dir} is larger than {size_label(MAX_ASSETS_BYTES)}"
+                                  + (" together with the round's artifact media" if used else ""))
             target = dest_dir / f.relative_to(src_dir)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(f, target)
 
 
+def artifact_page(html: str) -> str:
+    """The served file of an artifact: the CSP meta first (nothing runs before it), then the probe, then the page.
+    The page's own doctype is dropped (ours leads, so the page is never in quirks mode); its <html>/<head> tags merge
+    into the document the parser has already opened. The probe sits at the top so `window.mockreview` exists before the
+    page's own scripts run."""
+    html = re.sub(r"\A\ufeff?\s*<!doctype[^>]*>", "", html, count=1, flags=re.I)
+    csp = ARTIFACT_CSP.replace("&", "&amp;").replace('"', "&quot;")
+    return ('<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="' + csp + '">'
+            + _probe() + html)
+
+
+def _stored_decisions(dec: Dict[str, Any], vdir: Path, used: int = 0) -> Tuple[Dict[str, Any], int]:
+    """decisions.json as the board reads it, and the bytes of media the round's artifacts hold inline (`used` on entry:
+    what the caller already counted). An artifact's page goes to blocks/<id>.html (served sandboxed, with the CSP meta
+    and the probe) and the block keeps only `file`: neither its html nor the owner's `src` path is stored. Every `src`
+    page is bundled against the one round budget, so a spec that did not pass through `api._spec` cannot exceed it."""
+    blocks = []
+    for b in dec["blocks"]:
+        if b["type"] != "artifact":
+            blocks.append(b)
+            continue
+        html = b.get("html")
+        if html is None:
+            from . import bundle   # lazy: bundle imports this module
+            html, used = bundle.bundle_artifact(b["src"], b["id"], used)
+        (vdir / "blocks").mkdir(exist_ok=True)
+        (vdir / "blocks" / f"{b['id']}.html").write_text(artifact_page(html), encoding="utf-8")
+        blocks.append({k: v for k, v in b.items() if k not in ("html", "src")} | {"file": f"blocks/{b['id']}.html"})
+    return dict(dec, blocks=blocks), used
+
+
 def _install_round(review_id: str, n: int, spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+    from .targets import stamp_html, stamp_decisions
     base = review_dir(review_id) / "rounds" / str(n)
     if base.exists():
         shutil.rmtree(base)
@@ -834,10 +1044,12 @@ def _install_round(review_id: str, n: int, spec: Dict[str, Any]) -> List[Dict[st
     if spec["kind"] == "decisions":
         vdir = base / "a"
         vdir.mkdir(parents=True)
-        (vdir / "decisions.json").write_text(json.dumps(spec["decisions"], ensure_ascii=False), encoding="utf-8")
+        # `inlined`: media bundle.bundle_artifacts already inlined into the artifacts' pages (not rebundled here)
+        stored, used = _stored_decisions(spec["decisions"], vdir, spec.get("inlined", 0))
+        (vdir / "decisions.json").write_text(json.dumps(stamp_decisions(stored), ensure_ascii=False), encoding="utf-8")
         assets = spec["src"].parent / "assets"
         if assets.is_dir() and not assets.is_symlink():
-            _copy_assets(assets, vdir / "assets")
+            _copy_assets(assets, vdir / "assets", used)      # one round budget: artifact media inline plus this copy
         variants.append({"id": "a", "label": "Decisions", "stance": "", "file": f"rounds/{n}/a/decisions.json",
                          "source": str(spec["src"])})
     else:
@@ -847,11 +1059,10 @@ def _install_round(review_id: str, n: int, spec: Dict[str, Any]) -> List[Dict[st
         for vid, p in zip(VARIANT_IDS, pages):
             vdir = base / vid
             vdir.mkdir(parents=True)
-            # A bundled page (bundle.py) carries its assets inline: no assets/ folder goes into the round.
-            html = p["html"] if p.get("bundled") else p["src"].read_text(encoding="utf-8", errors="replace")
-            (vdir / "index.html").write_text(inject_probe(html), encoding="utf-8")
+            html = p["src"].read_text(encoding="utf-8", errors="replace")
+            (vdir / "index.html").write_text(inject_probe(stamp_html(html) if spec['kind'] == 'prototype' else html), encoding="utf-8")
             assets = p["src"].parent / "assets"
-            if not p.get("bundled") and assets.is_dir() and not assets.is_symlink():
+            if assets.is_dir() and not assets.is_symlink():
                 _copy_assets(assets, vdir / "assets")
             variants.append({"id": vid, "label": p["label"], "stance": p["stance"],
                              "file": f"rounds/{n}/{vid}/index.html", "source": str(p["src"])})
@@ -876,9 +1087,11 @@ def _strip_projects(d: Path) -> None:
 
 def _round_record(n: int, spec: Dict[str, Any], variants: List[Dict[str, Any]]) -> Dict[str, Any]:
     r: Dict[str, Any] = {"n": n, "kind": spec["kind"], "created_at": now_iso(), "variants": variants,
-                         "feedback": None, "submission": None}
+                         "feedback": None, "submission": None,
+                         "pin_requests": {}, "pin_fix": {}, "blocks_rev": {}, "history": []}
     if spec["kind"] == "decisions":
         r["decisions"] = decision_index(spec["decisions"])
+        r["sections"] = section_index(spec["decisions"])
         mocks = mock_index(spec["decisions"])
         if mocks:
             r["mocks"] = mocks
@@ -917,8 +1130,7 @@ def normalize_origin(origin: Any, wake: bool = True) -> Dict[str, str]:
 
 
 def create_review(title: str, brief: str, origin: Any, mode: str, spec: Any,
-                  look: Optional[Dict[str, Any]] = None, wake: bool = True,
-                  password: Optional[bool] = None) -> Dict[str, Any]:
+                  look: Optional[Dict[str, Any]] = None, wake: bool = True) -> Dict[str, Any]:
     """`look`: the per-review settings (settings.review_settings()); stored so the review never changes under the
     reviewer when config changes. None = old behaviour (the board's built-in defaults)."""
     spec = _as_spec(spec)
@@ -955,11 +1167,6 @@ def create_review(title: str, brief: str, origin: Any, mode: str, spec: Any,
             data["off_brand"] = spec["off_brand"]
         if not wake:
             data["wake"] = False       # a board nobody is woken by: Send stores feedback, sends nothing
-        if mode == "herenow":
-            enabled = settings.get("herenow_password", password)
-            data["herenow"] = {"slug": None, "site_url": None, "processed_records": [], "last_poll": None,
-                               "password_enabled": enabled, "password": passwords.generate() if enabled else None,
-                               "password_applied": None, "password_status": "pending"}
         save(rid, data)
     return data
 
@@ -1008,49 +1215,44 @@ def get_round(data: Dict[str, Any], n: Optional[int]) -> Dict[str, Any]:
     raise ReviewError(f"round {n} not found", 404)
 
 
-def gated_prototype(data: Dict[str, Any]) -> bool:
-    """A password-gated review whose newest round is a prototype: the one case a reviewer's sandboxed frame can lose
-    its assets to the gate, so the published board must be loaded in a browser before anyone is given the link."""
-    return ((data.get("herenow") or {}).get("password_enabled") is True
-            and (data.get("rounds") or [{}])[-1].get("kind") == "prototype")
-
-
-def verify_blocks(data: Dict[str, Any]) -> bool:
-    """The browser check has not cleared the board AND still applies. A failed or pending check only withholds the link
-    while the newest round is a gated prototype: once the password is off, or a later round is not a prototype, there
-    is nothing left for it to guard (a gated prototype round is checked again when it is added or the gate is set)."""
-    return (data.get("herenow") or {}).get("verify_status") in ("pending", "failed") and gated_prototype(data)
+def guest_submission(round_: Dict[str, Any]) -> bool:
+    """True when the round's canonical submission was made by a share-link guest: owner-only data, never agent data."""
+    return bool((round_.get("submission") or {}).get("guest"))
 
 
 def review_url(data: Dict[str, Any]) -> str:
-    if data["mode"] == "herenow":
-        hn = data.get("herenow") or {}
-        if "password_enabled" in hn and hn.get("password_status") != "applied":
-            return ""
-        if verify_blocks(data):
-            return ""
-        return hn.get("site_url") or ""
     if data["mode"] == "local":
         return f"{config.local_link_base()}/r/{data['id']}"
-    base = config.public_base()
+    base = config.public_link_base()
     return f"{base}/r/{data['id']}" if base else ""
 
 
-def public_state(data: Dict[str, Any], submit_kind: str = "local") -> Dict[str, Any]:
-    """What the board sees. No thread id, no filesystem paths."""
+def public_state(data: Dict[str, Any]) -> Dict[str, Any]:
+    """What the board sees. No thread id, no filesystem paths; pin-fix history stays for the agent."""
+    from . import service   # service imports this module at load time
     rounds = []
     for r in data["rounds"]:
         sub = r.get("submission") or None
+        pin_requests = {}
+        for pid, q in (r.get("pin_requests") or {}).items():
+            status = service.pin_fix_status(data, q)
+            pin_requests[q.get("id") or pid] = {
+                "id": q.get("id") or pid, "block": q.get("block"), "option": q.get("option"),
+                "status": status["state"], "requested_at": q.get("requested_at"),
+                "done_at": q.get("done_at"), "rev": q.get("rev"), "detail": status["detail"],
+            }
         rounds.append({
             "n": r["n"],
             "kind": r.get("kind", "variants"),
             "design": r.get("design"),
             "decisions": round_index(r),
+            "sections": round_sections(r),
             "preset": r.get("preset", "design"),
             "gate": r.get("gate"),
             "created_at": r["created_at"],
             "variants": [{k: v[k] for k in ("id", "label", "stance", "file")} for v in r["variants"]],
             "feedback": r.get("feedback"),
+            "pin_requests": pin_requests,
             "submission": None if not sub else {
                 "status": sub.get("status"),
                 "submitted_at": sub.get("submitted_at"),
@@ -1066,16 +1268,57 @@ def public_state(data: Dict[str, Any], submit_kind: str = "local") -> Dict[str, 
         "brief": data.get("brief", ""),
         "mode": data["mode"],
         "status": data["status"],
+        "wake": data.get("wake") is not False,
         "token": data["token"],
         "current_round": data["rounds"][-1]["n"],
         "rounds": rounds,
-        "submit": {"kind": submit_kind},
+        "submit": {"kind": "local"},
         "settings": data.get("settings"),
         "generated_at": now_iso(),
     }
-    if submit_kind == "sitedata":
-        state["submit"].update({"collection": "feedback", "max_payload": 15000})
     return state
+
+
+def variant_has_artifact(review_id: str, round_n: str, variant: str) -> bool:
+    """True when this round's folder holds an artifact page (blocks/<id>.html, written by `_stored_decisions` and nowhere
+    else). The server then gives every file of the folder the artifact-grade header, so a page that navigates its own
+    frame to another file of the round still has no network. Looks at the folder only: no decisions.json parse, and a
+    symlinked `blocks` or page is not counted."""
+    if not re.fullmatch(r"[0-9]{1,3}", round_n) or not VARIANT_RE.match(variant):
+        return False
+    d = review_dir(review_id) / "rounds" / str(int(round_n)) / variant / "blocks"
+    try:
+        if d.is_symlink() or not d.is_dir():
+            return False
+        return any(e.name.endswith(".html") and e.is_file(follow_symlinks=False) for e in os.scandir(d))
+    except OSError:
+        return False
+
+
+def review_has_artifact(review_id: str) -> bool:
+    """True when any round of this review holds an artifact page (blocks/<id>.html). The server then gives every round
+    file of the review the artifact-grade header, not only the artifact's own round: a document navigated into the
+    artifact frame from an older round must have no network either. Folder scan only, like `variant_has_artifact`;
+    a symlinked round, variant or `blocks` folder and a symlinked page are not counted. False on a bad id or a read
+    error."""
+    try:
+        rounds = review_dir(review_id) / "rounds"
+        if rounds.is_symlink() or not rounds.is_dir():
+            return False
+        for rd in os.scandir(rounds):
+            if not rd.is_dir(follow_symlinks=False) or not re.fullmatch(r"[0-9]{1,3}", rd.name):
+                continue
+            for vd in os.scandir(rd.path):
+                if not vd.is_dir(follow_symlinks=False) or not VARIANT_RE.match(vd.name):
+                    continue
+                blocks = Path(vd.path) / "blocks"
+                if blocks.is_symlink() or not blocks.is_dir():
+                    continue
+                if any(e.name.endswith(".html") and e.is_file(follow_symlinks=False) for e in os.scandir(blocks)):
+                    return True
+        return False
+    except (OSError, ReviewError):
+        return False
 
 
 def safe_variant_file(review_id: str, round_n: str, variant: str, rel: str) -> Path:

@@ -5,6 +5,7 @@ import json
 import os
 
 import pytest
+import yaml
 
 from conftest import ROOT, load_plugin
 from mockreview import settings, store
@@ -61,20 +62,21 @@ def snapshot(root):
 
 def test_register_registers_everything_and_writes_nothing(env, plugin, tmp_path):
     before = snapshot(tmp_path)
-    ctx = FakeCtx({"ask_host_each_time": False, "default_host": "herenow"})
+    ctx = FakeCtx({"ask_host_each_time": False, "default_host": "public"})
     plugin.register(ctx)
     assert snapshot(tmp_path) == before                       # no writes at register time
     assert set(ctx.tools) == {"mock_review_create", "mock_review_add_round", "mock_review_feedback", "mock_review_ack",
-                              "mock_review_list"}
+                              "mock_review_list", "mock_review_patch_block"}
     assert {t["toolset"] for t in ctx.tools.values()} == {"mock-review"}
     assert set(ctx.skills) == {"usage"} and ctx.skills["usage"]["path"].is_file()
     assert set(ctx.commands) == {"mockreview"} and set(ctx.cli) == {"mockreview"}
     assert "ask_host_each_time" in ctx.config_reads              # settings come through get_config
     mode = ctx.tools["mock_review_create"]["schema"]["parameters"]["properties"]["mode"]
-    assert "herenow" in mode["description"] and "Ask" not in mode["description"]
+    assert mode["enum"] == ["tailnet", "local", "public"]
+    assert "public" in mode["description"] and "Ask" not in mode["description"]
     for t in ctx.tools.values():                                # short descriptions (they cost tokens every turn)
         assert len(t["schema"]["description"]) < 120
-    assert len(json.dumps([t["schema"] for t in ctx.tools.values()])) < 6000
+    assert len(json.dumps([t["schema"] for t in ctx.tools.values()])) < 6600
     # the woken agent must learn that a build means building now, not acking
     assert "build" in ctx.tools["mock_review_feedback"]["schema"]["description"]
     assert "building" in ctx.tools["mock_review_ack"]["schema"]["description"]
@@ -166,5 +168,12 @@ def test_manifest_schema_matches_settings_spec():
     for line in ("name: mock-review", "manifest_version: 2", "api_version: 1", "kind: standalone"):
         assert line in text.splitlines()
     for tool in ("mock_review_create", "mock_review_add_round", "mock_review_feedback", "mock_review_ack",
-                 "mock_review_list"):
+                 "mock_review_list", "mock_review_patch_block"):
         assert f"  - {tool}" in text
+
+
+def test_manifest_parses_and_its_defaults_are_the_spec_defaults():
+    # Hermes skips a plugin whose plugin.yaml does not parse, so a default like [127.0.0.1, ::1] must be quoted.
+    schema = yaml.safe_load((ROOT / "plugin.yaml").read_text(encoding="utf-8"))["config_schema"]
+    for s in settings.SPEC:
+        assert schema[s.name]["default"] == s.default, s.name

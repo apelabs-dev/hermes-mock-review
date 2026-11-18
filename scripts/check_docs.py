@@ -12,9 +12,10 @@ What it does:
   4. The decisions.json and design.json examples in docs/decisions-format.md pass the plugin's own validators.
   5. The generated pages are current (scripts/gen_docs_reference.py --check).
   6. The documented commands run against a throwaway HERMES_HOME created next to the real one, with the plugin copied
-     in: setup, settings, owner, design, create, feedback, add-round, list, close, housekeeping, poll, notify-test
+     in: setup, settings, owner, design, create, feedback, add-round, list, close, housekeeping, migrate, notify-test
      against a local stand-in receiver, and `serve` in the foreground. Nothing touches the real Hermes home, the live
      gateway or the webhook port. The throwaway home and every process this script starts are removed at the end.
+  7. Docs and package prose name no internal tracker id, which public readers cannot look up.
 
 Needs the `hermes` CLI (0.22.0 or newer) on PATH.
 """
@@ -43,9 +44,12 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import check_identifiers  # noqa: E402
 from mockreview import cli, settings, store  # noqa: E402
+from mockreview.users import SIGNER_MISSING  # noqa: E402
 
 DOC_FILES = ["README.md", "CHANGELOG.md", "AGENTS.md", "CLAUDE.md", "skills/usage/SKILL.md",
-             "docs/decisions-format.md", "docs/hosting.md", "docs/security.md", "docs/troubleshooting.md"]
+             "docs/comments.md", "docs/decisions-format.md", "docs/design.md", "docs/hosting.md", "docs/migrating-to-2.md",
+             "docs/security.md", "docs/public-hosting.md", "docs/public-hosting-live-checks.md",
+             "docs/troubleshooting.md"]
 GENERATED = ["docs/settings.md", "docs/cli.md"]
 PLUGIN_FILES = ("__init__.py", "plugin.yaml", "mockreview", "skills")
 PATH_EXT = (".py", ".md", ".png", ".json", ".yaml", ".html", ".css", ".js", ".sh")
@@ -53,6 +57,9 @@ PATH_ROOTS = ("docs/", "scripts/", "mockreview/", "skills/", "tests/", "bin/", "
 SCRIPT_FILES = ["scripts/gen_docs_reference.py", "scripts/gen_plugin_manifest.py", "scripts/check_docs.py",
                 "scripts/check_identifiers.py"]
 REPO_SLUG: Optional[str] = None
+INTERNAL_ID_RULES = [re.compile(r"(?<![0-9A-Za-z_])t_[0-9a-f]{8}(?![0-9a-fA-Za-z_])"),
+                     re.compile(r"(?<![0-9A-Za-z_])[Cc]ards? E[0-9]"),
+                     re.compile(r"(?<![0-9A-Za-z_])E[0-9]{1,2}[a-z]?(?![0-9A-Za-z_])")]
 
 results: List[Tuple[str, str, str]] = []
 
@@ -148,6 +155,33 @@ def check_identifiers_in_docs() -> None:
     scope = f"{len(tokens)} private token(s)" if tokens else f"generic denylist only, {check_identifiers.ENV_VAR} unset"
     record("FAIL" if hits else "OK", f"identifier sweep = {len(hits)} hit(s) ({len(files)} files, {scope})",
            "; ".join(hits[:8]))
+
+
+def check_internal_ids() -> None:
+    """Fail when docs or package prose name an internal tracker id, which public readers cannot look up.
+
+    `tests/` is developer notes and not scanned: two of its files belong to work still in flight.
+    """
+    vendor = ROOT / "mockreview" / "board" / "vendor"
+    files = [ROOT / "README.md", ROOT / "AGENTS.md", ROOT / "CLAUDE.md"]
+    files.extend(sorted((ROOT / "docs").glob("*.md")))
+    files.extend(sorted((ROOT / "skills").glob("**/*.md")))
+    files.extend(sorted(p for p in (ROOT / "mockreview").glob("**/*")
+                        if p.suffix in (".py", ".js", ".css") and vendor not in p.parents))
+    hits: List[str] = []
+    checked = 0
+    for p in files:
+        if not p.is_file():
+            continue
+        try:
+            text = p.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        checked += 1
+        rel = p.relative_to(ROOT).as_posix()
+        hits.extend(f"{rel}:{n}" for n, line in enumerate(text.splitlines(), 1)
+                    if any(rule.search(line) for rule in INTERNAL_ID_RULES))
+    record("FAIL" if hits else "OK", f"internal ids = {len(hits)} hit(s) ({checked} files)", "; ".join(hits[:8]))
 
 
 def indented_json(text: str) -> List[dict]:
@@ -392,12 +426,25 @@ def live_run(tmp_base: Path) -> None:
                     break
             except OSError:
                 time.sleep(0.5)
-        record("OK" if up else "FAIL", f"ran: hermes mockreview serve (healthz answers on port {port})")
+        missing_dep = False
+        if not up and serve.poll() is not None:
+            # exactly what `serve` prints when it refuses to start without itsdangerous (auth.check_startup)
+            missing_dep = f"mock-review: {SIGNER_MISSING}" in (serve.stdout.read() if serve.stdout else "")
+        if missing_dep:
+            # the copied plugin's pyproject dependencies are installed by `hermes plugins install` / `hermes pm
+            # repair`, which this throwaway home must not run: it would change the real Hermes environment
+            record("SKIP", "hermes mockreview serve: Hermes's interpreter has no itsdangerous, so the server refused "
+                           "to start as designed; the checks that need the running board are skipped")
+        else:
+            record("OK" if up else "FAIL", f"ran: hermes mockreview serve (healthz answers on port {port})")
 
         rep = L.run(H + ["setup", "--yes", "--hosting", "local", "--origin-platform", "telegram", "--port", str(port)],
                     label="hermes mockreview setup --yes ... (second run, board now running)")
-        record("OK" if "test review created" in rep.stdout else "FAIL", "second setup run created the test review",
-               (rep.stdout.strip().splitlines() or [""])[-1][:120])
+        if up or not missing_dep:
+            record("OK" if "test review created" in rep.stdout else "FAIL", "second setup run created the test review",
+                   (rep.stdout.strip().splitlines() or [""])[-1][:120])
+        else:
+            record("SKIP", "second setup run created the test review (needs the running board)")
 
         L.run(H + ["owner"])
         L.run(H + ["design", "list"])
@@ -424,14 +471,15 @@ def live_run(tmp_base: Path) -> None:
             L.run(H + ["add-round", rid, "--decisions", str(dec)])
             L.run(H + ["list"])
             L.run(H + ["list", "--all"])
-            status, body = http_get(f"http://127.0.0.1:{port}/r/{rid}/state.json")
-            record("OK" if status == 200 and json.loads(body)["id"] == rid else "FAIL",
-                   "the board serves the review's state.json")
+            if up:
+                status, body = http_get(f"http://127.0.0.1:{port}/r/{rid}/state.json")
+                record("OK" if status == 200 and json.loads(body)["id"] == rid else "FAIL",
+                       "the board serves the review's state.json")
             L.run(H + ["notify-test", rid, "--to", hook + "-telegram"])
             sig = bool(Receiver.hits) and "X-Webhook-Signature-V2" in Receiver.hits[-1][1]
             record("OK" if sig else "FAIL", "notify-test delivered a signed request to the stand-in receiver")
             L.run(H + ["housekeeping"])
-            L.run(H + ["poll"])
+            L.run(H + ["migrate", "--dry-run"])
             L.run(H + ["close", rid])
 
         L.run([sys.executable, str(ROOT / "bin" / "mockreview"), "settings"], label="bin/mockreview settings")
@@ -439,8 +487,6 @@ def live_run(tmp_base: Path) -> None:
         L.run(["hermes", "config", "set", "plugins.entries.mock-review.settings.host", "0.0.0.0"])
         L.run(["hermes", "config", "set", "plugins.entries.mock-review.settings.public_base",
                "https://machine.example.test"], label="hermes config set ...settings.public_base <example address>")
-        L.run(["hermes", "config", "set", "HERENOW_API_KEY", "docs-check-placeholder"],
-              label="hermes config set HERENOW_API_KEY <placeholder>")
 
         secret = ""
         env_file = home / ".env"
@@ -454,8 +500,8 @@ def live_run(tmp_base: Path) -> None:
         mode = oct(env_file.stat().st_mode & 0o777) if env_file.exists() else "missing"
         record("OK" if mode == "0o600" else "FAIL", f".env permissions are {mode}")
         record("OK", "documented, not run (needs network, a live gateway or an external tool): hermes plugins install, "
-                     "hermes gateway restart, hermes skills install, hermes mockreview publish, hermes mockreview adopt, "
-                     "tailscale; their syntax is checked above")
+                     "hermes gateway restart, hermes skills install, hermes mockreview adopt, tailscale; their syntax "
+                     "is checked above")
     finally:
         for p in procs:
             try:
@@ -485,6 +531,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
     check_links_and_paths()
     check_identifiers_in_docs()
+    check_internal_ids()
     check_examples()
     check_generated()
     base = settings.default_hermes_home()
@@ -499,7 +546,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         shutil.rmtree(probe, ignore_errors=True)
     live_run(base)
     fails = [r for r in results if r[0] == "FAIL"]
-    print(f"\n{len(results) - len(fails)} OK, {len(fails)} FAIL")
+    skips = [r for r in results if r[0] == "SKIP"]
+    print(f"\n{len(results) - len(fails) - len(skips)} OK, {len(skips)} SKIP, {len(fails)} FAIL")
     return 1 if fails else 0
 
 

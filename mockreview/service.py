@@ -1,4 +1,4 @@
-"""Submission handling shared by the local board POST and the here.now poller."""
+"""Submission handling shared by the board POST and the server's delivery passes."""
 
 from __future__ import annotations
 
@@ -9,10 +9,15 @@ import logging
 import time
 from typing import Any, Dict, Optional
 
-from . import config, feedback, notify, owner, settings, store, wakeguard
+from . import config, feedback, notify, owner, settings, store, targets, wakeguard
 from .store import ReviewError
 
 log = logging.getLogger("mockreview.service")
+
+# One string for every store-but-never-wake caller: the route passes it for a share-link guest, and the response's
+# `detail` says why nothing was delivered.
+GUEST_NO_WAKE = "a share-link guest never wakes Hermes: what you sent is saved for the owner"
+GUEST_NEVER_DELIVERED = "a share-link guest's feedback is never delivered to Hermes"
 
 
 class AlreadySubmitted(ReviewError):
@@ -26,7 +31,8 @@ def _write_feedback_files(data: Dict[str, Any], round_: Dict[str, Any]) -> str:
     store.atomic_write(
         d / "feedback.json",
         json.dumps({"review_id": data["id"], "round": round_["n"], "submission": round_["submission"],
-                    "feedback": round_["feedback"]}, indent=2, ensure_ascii=False),
+                    "feedback": None if store.guest_submission(round_) else round_["feedback"]},
+                   indent=2, ensure_ascii=False),
     )
     return str(d / "feedback.md")
 
@@ -99,11 +105,16 @@ def feedback_path(review_id: str, n: int) -> str:
 
 
 def submit(review_id: str, round_n: Any, raw: Any, token: Any, amend: bool = False,
-           source: str = "local", record_id: Optional[str] = None, do_notify: bool = True) -> Dict[str, Any]:
+           source: str = "local", record_id: Optional[str] = None, do_notify: bool = True,
+           no_wake_reason: str = "", author: str = "", guest: bool = False) -> Dict[str, Any]:
     """Store feedback for the current round (idempotent per round) and wake Hermes.
 
+    A non-empty `no_wake_reason` stores the feedback as `stored` and never delivers it (a share-link guest);
+    a wake-off board keeps its own message, which wins when both apply. `guest` marks the caller as a share-link
+    guest: its submission is always `stored` and never delivered, and it can only replace its own record.
     Raises ReviewError (403 bad token, 409 already submitted / closed / old round).
     """
+    is_guest = bool(guest)
     with store.locked(review_id):
         data = store.load(review_id)
         if not isinstance(token, str) or not hmac.compare_digest(token.encode(), data["token"].encode()):
@@ -115,27 +126,45 @@ def submit(review_id: str, round_n: Any, raw: Any, token: Any, amend: bool = Fal
             raise ReviewError(
                 f"Round {round_n} is read-only — only the current round ({current['n']}) takes feedback.", 409)
         prev = current.get("submission")
-        if current.get("feedback") and not amend:
+        if is_guest:
+            if prev and (not prev.get("guest") or prev.get("author") != author):
+                raise AlreadySubmitted(
+                    f"Feedback for round {current['n']} was already sent by someone else. "
+                    "A share-link guest can only change its own.", 409)
+            if prev and not amend:
+                raise AlreadySubmitted(
+                    f"Feedback for round {current['n']} was already sent ({_human(prev.get('submitted_at'))}). "
+                    "Use “Amend feedback” to replace it.", 409)
+        elif prev and prev.get("guest"):
+            # A member or the owner sends over a guest record: the guest copy is kept in the review record (not shown
+            # on the board), and this submission takes the canonical slot (seq continues so delivery ids stay unique).
+            current.setdefault("guest_submissions", {})[prev.get("author") or "guest"] = {
+                "feedback": current.get("feedback"), "submission": prev}
+        elif current.get("feedback") and not amend:
             raise AlreadySubmitted(
                 f"Feedback for round {current['n']} was already sent ({_human(prev.get('submitted_at'))}). "
                 "Use “Amend feedback” to replace it.", 409)
         fb = feedback.sanitize_for_round(raw, current, data.get("settings"))
         seq = (prev or {}).get("seq", 0) + 1
-        no_wake = data.get("wake") is False
+        wake_off = data.get("wake") is False
+        no_wake = wake_off or bool(no_wake_reason) or is_guest
+        status = "stored" if no_wake else "pending_notify"
         current["feedback"] = fb
         current["submission"] = {
             "seq": seq,
+            "author": author,
+            "guest": is_guest,
             "source": source,
             "record_id": record_id,
             "submitted_at": store.now_iso(),
-            "status": "stored" if no_wake else "pending_notify",
+            "status": status,
             "attempts": 0,
             "last_error": None,
             "next_attempt": 0,
             "notified_at": None,
             "delivery_id": f"mockreview-{review_id}-r{current['n']}-s{seq}",
             "notice": {
-                "status": "stored" if no_wake else "pending_notify",
+                "status": status,
                 "attempts": 0,
                 "last_error": None,
                 "next_attempt": 0,
@@ -143,12 +172,16 @@ def submit(review_id: str, round_n: Any, raw: Any, token: Any, amend: bool = Fal
                 "delivery_id": f"mockreview-{review_id}-r{current['n']}-s{seq}-notice",
             },
         }
-        store.save(review_id, data)
         _write_feedback_files(data, current)
+        store.save(review_id, data)
     result = {"ok": True, "review_id": review_id, "round": round_n, "amended": seq > 1,
               "status": "pending_notify", "notified": False}
-    if no_wake:
+    if wake_off:
         result.update(status="stored", detail="this board has wake off: feedback is stored, nobody is notified")
+    elif is_guest:
+        result.update(status="stored", detail=no_wake_reason or GUEST_NO_WAKE)
+    elif no_wake_reason:
+        result.update(status="stored", detail=no_wake_reason)
     elif do_notify:
         (ok, msg), (notice_ok, notice_msg) = deliver_submission(review_id, round_n)
         result.update(notified=ok, status="notified" if ok else "pending_notify", detail=msg,
@@ -167,6 +200,8 @@ def _wake_note(data: Dict[str, Any], round_: Dict[str, Any]) -> str:
 
 
 def build_payload(data: Dict[str, Any], round_: Dict[str, Any]) -> Dict[str, Any]:
+    if store.guest_submission(round_):
+        raise ReviewError(GUEST_NEVER_DELIVERED, 409)
     note = _wake_note(data, round_)
     payload = _build_payload(data, round_)
     if note:
@@ -193,6 +228,303 @@ def _build_payload(data: Dict[str, Any], round_: Dict[str, Any]) -> Dict[str, An
 
 SEND_LEASE_SECONDS = 30.0
 STALLED_SCAN_SECONDS = 30.0   # minimum interval between watchdog directory scans in the worker tick
+PIN_TERMINAL = ("done", "failed", "timeout")
+
+
+def _review_setting(data: Dict[str, Any], name: str) -> Any:
+    """A pin_fix* setting as stored in this review (an old review lacks it: the current default applies)."""
+    return settings.get(name, (data.get("settings") or {}).get(name))
+
+
+def _pin_html_refs(review_id: str, n: int) -> "tuple[Dict[str, Any], Dict[str, Any]]":
+    """The round's stored decisions.json and {ref: block} for every block, including generated `sN` refs."""
+    path = store.safe_variant_file(review_id, str(n), "a", "decisions.json")
+    try:
+        dec = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise ReviewError(f"round {n} decisions.json cannot be read: {e}", 409)
+    sections = store.section_index(dec)
+    return dec, {s["ref"]: dec["blocks"][i] for i, s in enumerate(sections) if i < len(dec["blocks"])}
+
+
+def _pin_editable(block: Dict[str, Any]) -> bool:
+    """True when patch_block can replace this block's HTML (the wording of the refusal names the same kinds)."""
+    t = block.get("type")
+    if t == "decision":
+        return bool(block.get("options"))
+    if t in ("mock", "piece"):
+        return isinstance(block.get("html"), str)
+    return t == "artifact" and bool(block.get("file"))
+
+
+def request_pin_fix(review_id: str, round_n: Any, pin: Any, token: Any, idem: Any = None,
+                    do_notify: bool = True, requester: Optional[str] = None,
+                    no_wake_reason: str = "") -> Dict[str, Any]:
+    """Store one reviewer pin fix for the newest round and, from the board server, wake Hermes once.
+
+    A non-empty `no_wake_reason` stores the request marked `quiet` and never delivers it (a share-link guest);
+    a wake-off board keeps its own message, which wins when both apply.
+    Raises ReviewError (403 bad token, 409 closed/old round/pin_fix off/a block without HTML, 429 a cap).
+    The request is deduped by a non-empty `idem` from the same `requester`; nothing here sends a chat ack.
+    """
+    with store.locked(review_id):
+        data = store.load(review_id)
+        if not isinstance(token, str) or not hmac.compare_digest(token.encode(), data["token"].encode()):
+            raise ReviewError("This link's submit token is not valid for this review.", 403)
+        if data["status"] != "open":
+            raise ReviewError("This review is closed — feedback can no longer be sent.", 409)
+        current = data["rounds"][-1]
+        if not isinstance(round_n, int) or isinstance(round_n, bool) or round_n != current["n"]:
+            raise ReviewError(
+                f"Round {round_n} is read-only — only the current round ({current['n']}) takes feedback.", 409)
+        if not _review_setting(data, "pin_fix"):
+            raise ReviewError("this review does not take pin fixes (pin_fix is off)", 409)
+        if not isinstance(pin, dict):
+            raise ReviewError("a pin fix needs a pin with a block and text", 409)
+        ref = pin.get("block")
+        text = feedback.clean_line(pin.get("text"), 2000)
+        try:
+            _dec, by_ref = _pin_html_refs(review_id, current["n"])
+        except ReviewError:
+            by_ref = {}
+        block = by_ref.get(ref) if isinstance(ref, str) else None
+        if ref in store.RESERVED_REFS or block is None or not _pin_editable(block):
+            raise ReviewError(
+                "a pin fix edits a block that has HTML (a mock, a decision option, a piece or an artifact); "
+                f"this pin is on {ref}", 409)
+        if not text:
+            raise ReviewError("a pin fix needs text (what to change)", 409)
+        option = None
+        if block.get("type") == "decision":
+            oids = [o.get("id") for o in (block.get("options") or [])]
+            option = pin.get("option") if pin.get("option") in oids else None
+        requests = current.get("pin_requests")
+        if not isinstance(requests, dict):
+            requests = current["pin_requests"] = {}
+        idem_key = idem.strip() if isinstance(idem, str) else ""
+        if idem_key:
+            for q in requests.values():
+                if q.get("idem") == idem_key and q.get("idem_owner") == requester:
+                    return {"ok": True, "review_id": review_id, "round": current["n"], "request": q,
+                            "status": q.get("status"), "notified": False, "duplicate": True,
+                            "detail": "duplicate request: this pin fix is already stored"}
+        per_round = int(_review_setting(data, "pin_fix_max_per_round"))
+        if len(requests) >= per_round:
+            raise ReviewError(f"this round takes at most {per_round} pin fix requests (pin_fix_max_per_round)", 429)
+        now = time.time()
+        per_hour = int(_review_setting(data, "pin_fix_max_per_hour"))
+        recent = 0
+        for round_ in data["rounds"]:
+            for q in (round_.get("pin_requests") or {}).values():
+                ts = _parse_iso(q.get("requested_at"))
+                if ts is not None and now - ts < 3600.0:
+                    recent += 1
+        if recent >= per_hour:
+            raise ReviewError(f"this review takes at most {per_hour} pin fix requests an hour (pin_fix_max_per_hour)",
+                              429)
+        used = set(requests)
+        pid = pin.get("id") if isinstance(pin.get("id"), str) and store.PIN_ID_RE.fullmatch(pin["id"]) else None
+        if not pid or pid in used:
+            pid = store.new_pin_id()
+            while pid in used:
+                pid = store.new_pin_id()
+        req = {"id": pid, "block": ref, "option": option, "text": text,
+               "target": targets.clean_target(pin.get("target")),
+               "rev": int((current.get("blocks_rev") or {}).get(ref, 0) or 0),
+               "status": "queued", "idem": idem_key, "idem_owner": requester,
+               "requested_at": store.now_iso(), "wake_seq": 0, "done_at": None, "detail": ""}
+        if data.get("wake") is False or no_wake_reason:
+            req["quiet"] = True   # stored and visible, but the coalesce must never carry it into a wake
+        requests[pid] = req
+        store.save(review_id, data)
+    notified, detail = False, ""
+    if data.get("wake") is False:
+        detail = "this board has wake off: the request is stored, nobody is notified"
+    elif no_wake_reason:
+        detail = no_wake_reason
+    elif do_notify:
+        notified, detail = flush_pin_fixes(review_id)
+        try:
+            stored = store.load(review_id)
+            fresh = (stored["rounds"][-1].get("pin_requests") or {}).get(pid)
+            if fresh:
+                req = fresh
+        except (ReviewError, ValueError, OSError):
+            pass
+    return {"ok": True, "review_id": review_id, "round": round_n, "request": req,
+            "status": req.get("status"), "notified": notified, "detail": detail}
+
+
+def _last_wake_at(data: Dict[str, Any], state: Dict[str, Any]) -> float:
+    """The per-review wake clock, falling back to the round-local one for reviews written before it moved."""
+    review_state = data.get("pin_fix")
+    if isinstance(review_state, dict) and review_state.get("last_wake_at") is not None:
+        return float(review_state.get("last_wake_at") or 0)
+    return float(state.get("last_wake_at") or 0)
+
+
+def _stamp_wake(data: Dict[str, Any], state: Dict[str, Any], now: float) -> None:
+    """One wake attempt stamps the clock per review and per round: a new round must not reset the spacing."""
+    state["last_wake_at"] = now
+    review_state = data.get("pin_fix")
+    if not isinstance(review_state, dict):
+        review_state = data["pin_fix"] = {}
+    review_state["last_wake_at"] = now
+
+
+def flush_pin_fixes(review_id: str, now: Optional[float] = None) -> "tuple[bool, str]":
+    """Coalesce queued pin fixes into one wake and deliver it; retry a pending one when due.
+
+    Only the owning board server delivers (`owner.is_bound()` means a CLI/tool call: store, do not send). A burst
+    inside `pin_fix_window_seconds` becomes one wake carrying every queued request id; `pin_fix_min_seconds` spaces
+    two wakes apart. Returns (delivered, detail).
+    """
+    if owner.is_bound():
+        return False, "not the owner service: only the board server delivers wake-ups"
+    now = time.time() if now is None else now
+    with store.locked(review_id):
+        data = store.load(review_id)
+        if data.get("status") != "open":
+            return False, "review is closed"
+        r = data["rounds"][-1]
+        if data.get("wake") is False:
+            return False, "this board has wake off"
+        requests = r.get("pin_requests") or {}
+        queued = sorted((q for q in requests.values() if q.get("status") == "queued" and not q.get("quiet")),
+                        key=lambda q: q.get("requested_at") or "")
+        state = r.get("pin_fix") or {}
+        wake = state.get("wake") or {}
+        in_flight = float(wake.get("sending_until") or 0) > now
+        min_seconds = float(_review_setting(data, "pin_fix_min_seconds"))
+        window = float(_review_setting(data, "pin_fix_window_seconds"))
+        newest = _parse_iso(max((q.get("requested_at") or "" for q in queued), default=""))
+        ready = (bool(queued) and not in_flight and now - _last_wake_at(data, state) >= min_seconds
+                 and newest is not None and now - newest >= window)
+        pending_due = (wake.get("status") == "pending_notify"
+                       and float(wake.get("next_attempt") or 0) <= now)
+        if pending_due and not in_flight:
+            ids = list(wake.get("requests") or [])
+            wake["sending_until"] = now + SEND_LEASE_SECONDS
+            _stamp_wake(data, state, now)
+            r["pin_fix"] = state
+            store.save(review_id, data)
+        elif ready and wake.get("status") != "pending_notify":
+            seq = int(state.get("seq") or 0) + 1
+            ids = [q["id"] for q in queued]
+            for q in queued:
+                q["wake_seq"] = seq
+            wake = {"status": "pending_notify", "requests": ids,
+                    "delivery_id": f"mockreview-{review_id}-r{r['n']}-p{seq}", "attempts": 0,
+                    "next_attempt": 0.0, "sending_until": now + SEND_LEASE_SECONDS,
+                    "last_error": None, "notified_at": None}
+            state.update(seq=seq, wake=wake)
+            _stamp_wake(data, state, now)
+            r["pin_fix"] = state
+            store.save(review_id, data)
+        elif pending_due and in_flight:
+            return False, "a send for this pin fix wake is already in flight"
+        else:
+            return False, "nothing to wake"
+        delivery_id = wake["delivery_id"]
+        ids = list(wake.get("requests") or [])
+        try:
+            payload = {"event_type": "review.pin_fix", "review_id": review_id, "round": r["n"],
+                       **store.normalize_origin(data.get("origin")), "title": data["title"],
+                       "review_url": store.review_url(data), "mode": data["mode"], "action": "pin_fix",
+                       "requests": ids,
+                       "summary": (f"{len(ids)} pin fix request(s) on {data['title']} round {r['n']} — "
+                                   f"{', '.join((requests.get(i) or {}).get('block') or '?' for i in ids[:2])}: "
+                                   f"{feedback.clean_line((requests.get(ids[0]) or {}).get('text'), 160)}")}
+        except ReviewError as e:
+            for i in ids:
+                q = requests.get(i)
+                if q and q.get("status") not in PIN_TERMINAL:
+                    q.update(status="failed", detail=e.message)
+            wake.update(status="failed", sending_until=0.0, last_error=e.message, next_attempt=0.0)
+            _stamp_wake(data, state, now)
+            r["pin_fix"] = state
+            store.save(review_id, data)
+            return False, e.message
+        held = wakeguard.review_exposure(data)
+        if held:   # create/add-round refuse this; the setting or host may have changed since
+            detail = f"held, not woken: {held}"
+            for i in ids:
+                q = requests.get(i)
+                if q and q.get("status") not in PIN_TERMINAL:
+                    q.update(status="failed", detail=detail)
+            wake.update(status="failed", sending_until=0.0, last_error=detail, next_attempt=0.0)
+            _stamp_wake(data, state, now)
+            r["pin_fix"] = state
+            store.save(review_id, data)
+            log.warning("mock-review: pin fix wake for %s round %s held: %s", review_id, r["n"], held)
+            return False, detail
+    try:
+        ok, msg = notify.send(payload, delivery_id)
+    except Exception as e:
+        log.exception("pin fix wake send raised for %s", review_id)
+        ok, msg = False, f"pin fix send raised: {e}"
+    with store.locked(review_id):
+        data = store.load(review_id)
+        r = data["rounds"][-1]
+        requests = r.get("pin_requests") or {}
+        state = r.get("pin_fix") or {}
+        wake = state.get("wake") or {}
+        if wake.get("delivery_id") != delivery_id or wake.get("status") != "pending_notify":
+            return ok, msg    # superseded while we were sending (a newer round or a newer wake owns the outcome)
+        wake["sending_until"] = 0.0
+        wake["attempts"] = int(wake.get("attempts") or 0) + 1
+        if ok:
+            for i in ids:
+                q = requests.get(i)
+                if q and q.get("status") == "queued":
+                    q.update(status="woken", detail="")
+            wake.update(status="notified", notified_at=store.now_iso(), last_error=None, next_attempt=0.0)
+            log.info("pin fix wake delivered for %s round %s (%s)", review_id, r["n"], msg)
+        elif msg.startswith(("HTTP 400", "HTTP 413", "HTTP 422")):
+            for i in ids:
+                q = requests.get(i)
+                if q and q.get("status") == "queued":
+                    q.update(status="failed", detail=msg)
+            wake.update(status="failed", last_error=msg, next_attempt=0.0)
+        else:
+            wake.update(status="pending_notify", last_error=msg, next_attempt=now + config.retry_seconds())
+            log.error("pin fix wake failed for %s round %s, will retry: %s", review_id, r["n"], msg)
+        _stamp_wake(data, state, now)
+        r["pin_fix"] = state
+        store.save(review_id, data)
+    return ok, msg
+
+
+def pin_fix_status(data: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]:
+    """The single status seam the thread chip consumes: request status -> chip state + its detail.
+
+    Pure: no IO, no locks. `data` is accepted so the caller can pass the review it already holds.
+    """
+    state = {"queued": "queued", "woken": "working", "done": "done",
+             "failed": "failed", "timeout": "failed"}.get((request or {}).get("status"), "queued")
+    return {"state": state, "detail": (request or {}).get("detail") or ""}
+
+
+def _timeout_pin_requests(review_id: str, now: float, minutes: float) -> int:
+    """Mark every non-terminal pin fix on the newest round older than `minutes` as timed out; one save."""
+    with store.locked(review_id):
+        data = store.load(review_id)
+        if data.get("status") != "open":
+            return 0
+        r = data["rounds"][-1]
+        n = 0
+        for q in (r.get("pin_requests") or {}).values():
+            if q.get("status") in PIN_TERMINAL:
+                continue
+            if q.get("quiet"):   # never sent (a guest's pin fix): it waits for the owner to wake Hermes
+                continue
+            ts = _parse_iso(q.get("requested_at"))
+            if ts is not None and now - ts > minutes * 60.0:
+                q.update(status="timeout", detail=f"no patch within {minutes:g} min")
+                n += 1
+        if n:
+            store.save(review_id, data)
+        return n
 
 
 def notify_round(review_id: str, round_n: int, url: Optional[str] = None) -> "tuple[bool, str]":
@@ -212,10 +544,12 @@ def notify_round(review_id: str, round_n: int, url: Optional[str] = None) -> "tu
             return False, "this board has wake off"
         if not sub or not r.get("feedback"):
             return False, "no submission"
+        if store.guest_submission(r):
+            return False, GUEST_NEVER_DELIVERED
         if sub.get("status") == "notified":
             return True, "already notified"
-        held = wakeguard.review_exposure(data, live=True)
-        if held:   # create/add-round/password refuse this; the setting or host may have changed since
+        held = wakeguard.review_exposure(data)
+        if held:   # create/add-round refuse this; the setting or host may have changed since
             sub.update(last_error=f"held, not woken: {held}", next_attempt=time.time() + config.retry_seconds())
             store.save(review_id, data)
             log.warning("mock-review: wake for %s round %s held: %s", review_id, round_n, held)
@@ -294,6 +628,8 @@ def _deliver_notice(review_id: str, round_n: int, key: str, url: Optional[str] =
             return False, "this board has wake off"
         if not sub or not r.get("feedback"):
             return False, "no submission"
+        if store.guest_submission(r):
+            return False, GUEST_NEVER_DELIVERED
         state = sub.get(key) or {}
         if state.get("status") == "notified":
             return True, "already notified"
@@ -309,6 +645,8 @@ def _deliver_notice(review_id: str, round_n: int, key: str, url: Optional[str] =
         if key == "stalled_notice":
             if not minutes:
                 return False, "stale-after pings are off"
+            if sub.get("status") == "stored":
+                return False, "stored, not delivered: nothing can have stalled"
             # The ping is for a likely stall only: not for a round that asks for no more work, not once the session
             # acknowledged it, and after a read only once the longer read window passed.
             skip = ("nothing to build: every decision approved or skipped" if nothing_to_build(r)
@@ -410,10 +748,14 @@ def notify_stalled(review_id: str, round_n: int, url: Optional[str] = None,
 
 
 def deliver_submission(review_id: str, round_n: int) -> "tuple[tuple[bool, str], tuple[bool, str]]":
-    """Deliver one submission: the wake-up first, then the ack straight after it. The local server's submit, the
-    here.now poller and retry_pending all go through here, so they order and gate the two the same way. A failed
-    wake leaves the ack pending (it is never sent for an un-woken submission); an ack failure never affects the
-    wake. Returns ((wake_ok, detail), (ack_ok, detail))."""
+    """Deliver one submission: the wake-up first, then the ack straight after it. The local server's submit and
+    retry_pending both go through here, so they order and gate the two the same way. A failed wake leaves the ack
+    pending (it is never sent for an un-woken submission); an ack failure never affects the wake.
+    Returns ((wake_ok, detail), (ack_ok, detail))."""
+    with store.locked(review_id):
+        data = store.load(review_id)
+        if store.guest_submission(store.get_round(data, round_n)):
+            return (False, GUEST_NEVER_DELIVERED), (False, GUEST_NEVER_DELIVERED)
     wake = notify_round(review_id, round_n)
     return wake, notify_notice(review_id, round_n)
 
@@ -425,6 +767,7 @@ def check_stalled(now: Optional[float] = None) -> int:
     if not settings.get("stale_after_minutes") or owner.is_bound():
         return 0
     now = time.time() if now is None else now
+    minutes = settings.get("stale_after_minutes")
     sent = 0
     for rid in store.list_ids():
         try:
@@ -433,9 +776,15 @@ def check_stalled(now: Optional[float] = None) -> int:
             continue
         if data.get("status") != "open" or data.get("wake") is False:
             continue
+        try:
+            _timeout_pin_requests(rid, now, minutes)
+        except (ReviewError, ValueError, OSError):
+            log.exception("pin fix timeout pass failed for %s", rid)
         r = data["rounds"][-1]
         sub = r.get("submission")
         if not sub or not r.get("feedback"):
+            continue
+        if sub.get("status") == "stored":   # never delivered (a guest's Send): nothing can have stalled
             continue
         state = sub.get("stalled_notice") or {}
         if state.get("status") in TERMINAL_NOTICE:
@@ -445,9 +794,6 @@ def check_stalled(now: Optional[float] = None) -> int:
         ok, _ = notify_stalled(rid, r["n"], now=now)
         if ok:
             sent += 1
-            if data["mode"] == "herenow":   # the hosted board only learns about the ping from a republish
-                from . import herenow
-                herenow.republish_quietly(rid)
     return sent
 
 
@@ -463,15 +809,18 @@ def retry_pending(now: Optional[float] = None) -> int:
             continue
         for r in data["rounds"]:
             sub = r.get("submission") or {}
+            if sub.get("guest"):   # a share-link guest's stored record is never delivered
+                continue
             if sub.get("status") == "pending_notify" and sub.get("next_attempt", 0) <= now:
                 (ok, _), _ack = deliver_submission(rid, r["n"])
                 if ok:
                     done += 1
-                    if data["mode"] == "herenow" and data["status"] == "open":
-                        from . import herenow
-                        herenow.republish_quietly(rid)
             elif sub.get("status") == "notified":
                 notice = sub.get("notice") or {}
                 if notice.get("status") == "pending_notify" and notice.get("next_attempt", 0) <= now:
                     notify_notice(rid, r["n"])
+        try:
+            flush_pin_fixes(rid, now)   # a due pin fix wake retries on the worker tick (every 5 s)
+        except Exception:
+            log.exception("pin fix flush failed for %s", rid)
     return done

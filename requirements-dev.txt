@@ -1,0 +1,9 @@
+# Development-only test tooling. Never installed by the plugin runtime: pyproject.toml's [project] dependencies
+# (itsdangerous) and plugin.yaml are unchanged. CI and local runs install this file with `uv run --with-requirements`.
+# pytest 9 needs Python 3.10, so this file runs on every Python the plugin supports; the plugin itself requires
+# 3.11-3.14 as of 2.0.0. 9.0.3 is the first release without PYSEC-2026-1845.
+pytest==9.2.0
+pytest-xdist==3.8.0
+pyyaml==6.0.3
+itsdangerous==2.2.0
+pyjwt[crypto]==2.15.1

@@ -98,7 +98,8 @@ def test_the_round_record_and_public_state_carry_preset_gate_and_the_new_index(e
     assert by["q1"]["pinnable"] is False and by["defaults"]["pinnable"] is False and by["d1"]["pinnable"] is True
     assert by["p1"]["group"] == "Sync engine" and by["p2"]["revised"] == "Revised"
     st = store.public_state(data)["rounds"][0]
-    assert st["preset"] == "plan" and st["gate"] == r["gate"] and st["decisions"] == r["decisions"]
+    assert st["preset"] == "plan" and st["gate"] == r["gate"]
+    assert st["decisions"] == [dict(d, rev=0) for d in r["decisions"]]
     stored = json.loads((store.review_dir(data["id"]) / "rounds/1/a/decisions.json").read_text(encoding="utf-8"))
     assert stored["notes_answered"][0]["ref"] == "p2" and stored["gate"]["later"]
 
@@ -515,3 +516,80 @@ def test_static_mocks_get_a_hint_while_interactive_elements_is_on(env, tmp_path)
     assert more["hint"] == api.INTERACTIVE_HINT
     ok = api.add_round(res["review_id"], decisions=_mock_file(tmp_path, '<details><summary>Snooze</summary>3 days</details>', "c.json"))
     assert "hint" not in ok
+
+
+# ---------- board pins on rendered sections ----------
+
+def test_board_pins_land_on_sections_page_and_questions(env, tmp_path):
+    dec = _with({"type": "text", "title": "Rollout plan", "text": "ship in phases"})
+    r = _review(tmp_path, dec)["rounds"][0]
+    assert [s["ref"] for s in r["sections"]][:2] == ["s1", "defaults"]
+    assert r["sections"][-1] == {"ref": "s2", "type": "text", "title": "Rollout plan"}
+    pins = [
+        {"block": "q1", "option": "a", "w": "desktop", "x": 0.1, "y": 0.2, "text": "which q", "on": "board"},
+        {"block": "s2", "w": "phone", "x": 0.5, "y": 0.5, "text": "on the plan", "on": "board"},
+        {"block": "page", "w": "desktop", "x": 0, "y": 1, "text": "header", "on": "board"},
+        {"block": "else", "w": "desktop", "x": 0.5, "y": 0.5, "text": "anything else", "on": "board"},
+        {"block": "doc", "w": "desktop", "x": 0.5, "y": 0.5, "text": "empty canvas", "on": "board"},
+        {"block": "s99", "w": "desktop", "x": 0, "y": 0, "text": "unknown", "on": "board"},
+        {"block": "d1", "option": "b", "w": "desktop", "x": 0.3, "y": 0.4, "text": "mock pin"}]
+    out = feedback.sanitize_for_round({"pins": pins}, r)
+    assert [(p["block"], p.get("on"), p["option"]) for p in out["pins"]] == [
+        ("q1", "board", None), ("s2", "board", None), ("page", "board", None), ("else", "board", None),
+        ("doc", "board", None), ("d1", None, "b")]
+    capped = feedback.sanitize_for_round({"pins": pins}, r, {"max_pins": 2})
+    assert [p["block"] for p in capped["pins"]] == ["q1", "s2"]      # one shared budget with mock pins
+    five = feedback.sanitize_for_round({"pins": pins}, r, {"max_pins": 5})
+    assert [p["block"] for p in five["pins"]] == ["q1", "s2", "page", "else", "doc"]
+    r.pop("sections")
+    old = feedback.sanitize_for_round({"pins": pins}, r)
+    assert [p["block"] for p in old["pins"]] == ["d1"]
+
+
+def test_a_board_pin_keeps_a_bounded_document_spot(env, tmp_path):
+    r = _review(tmp_path)["rounds"][0]
+    pins = [
+        {"block": "doc", "w": "desktop", "x": 0.5, "y": 0.5, "text": "kept", "on": "board",
+         "doc": {"x": 123.456789, "y": 987.5}},
+        {"block": "page", "w": "desktop", "x": 0.1, "y": 0.2, "text": "clamped", "on": "board",
+         "doc": {"x": -5, "y": 1000001}},
+        {"block": "else", "w": "desktop", "x": 0.1, "y": 0.2, "text": "absent", "on": "board"},
+        {"block": "doc", "w": "desktop", "x": 0.2, "y": 0.3, "text": "nan", "on": "board",
+         "doc": {"x": float("nan"), "y": 10}},
+        {"block": "doc", "w": "desktop", "x": 0.2, "y": 0.3, "text": "inf", "on": "board",
+         "doc": {"x": 10, "y": float("inf")}},
+        {"block": "d1", "option": "b", "w": "desktop", "x": 0.3, "y": 0.4, "text": "mock",
+         "doc": {"x": 1, "y": 2}},
+    ]
+    out = feedback.sanitize_for_round({"pins": pins}, r)
+    by = {p["text"]: p for p in out["pins"]}
+    assert set(by) == {"kept", "clamped", "absent", "nan", "inf", "mock"}
+    assert by["kept"]["doc"] == {"x": 123.456789, "y": 987.5}
+    assert by["clamped"]["doc"] == {"x": 0.0, "y": 1000000.0}   # out of range is clamped
+    assert "doc" not in by["absent"]                            # a pin without one is still accepted
+    assert "doc" not in by["nan"] and "doc" not in by["inf"]    # non-finite is dropped
+    assert "doc" not in by["mock"]                              # mock pins are unchanged
+
+
+def test_board_pin_markdown_names_the_section_and_quotes_once(env, tmp_path):
+    dec = _with({"type": "text", "title": "Rollout plan", "text": "ship in phases"})
+    data = _review(tmp_path, dec)
+    r = data["rounds"][0]
+    target = {"path": "p:nth-of-type(1)", "sig": {"tag": "p", "h": "abc123"}, "x": 0.4, "y": 0.2,
+              "label": "Rollout plan > p", "quote": {"exact": "ship in phases"}}
+    r["feedback"] = feedback.sanitize_for_round({"pins": [
+        {"block": "s2", "w": "desktop", "x": 0.1, "y": 0.2, "text": "too vague", "on": "board", "target": target}]}, r)
+    md = feedback.render_decisions_markdown(data, r)
+    assert '1. [s2 "Rollout plan", board, desktop] on "ship in phases": too vague' in md
+    assert md.count("ship in phases") == 1
+    assert "quote:" not in md
+    assert "1. [p1, desktop]" not in md
+
+
+def test_a_board_pin_alone_makes_nothing_to_build_false(env, tmp_path):
+    r = _review(tmp_path)["rounds"][0]
+    r["feedback"] = feedback.sanitize_for_round({"marks": _all_resolved(q2={"choice": "recommended"}), "pins": [
+        {"block": "page", "w": "desktop", "x": 0.5, "y": 0.5, "text": "one more thing", "on": "board"}]}, r)
+    assert service.nothing_to_build(r) is False
+    r["feedback"]["pins"] = []
+    assert service.nothing_to_build(r) is True

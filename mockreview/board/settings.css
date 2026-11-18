@@ -1,0 +1,118 @@
+/* mock-review Settings — look A (graphite + indigo), shared with the board. Sections are a side list on desktop
+   and a horizontal tab row on a phone; every setting is a row with a label, one line of help and its control. */
+* { box-sizing: border-box; }
+body { margin: 0; padding-bottom: 0; background: var(--bg, #fafafa); color: var(--text, #17171c);
+  font: 14px/1.45 var(--font, -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif);
+  -webkit-font-smoothing: antialiased; }
+a { color: var(--accent, #4f46e5); }
+.page { max-width: 960px; margin: 0 auto; padding: 24px 20px 64px; }
+.muted { color: var(--muted, #666672); font-size: 13px; }
+.err { color: var(--err, #dc2626); font-size: 12px; min-height: 1em; margin-top: 8px; }
+
+.settings-bar { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 8px 0 16px;
+  border-bottom: 1px solid var(--line, #e2e2e8); }
+.brand-link { display: inline-flex; flex: none; border-radius: 8px; text-decoration: none; }
+.brand-mark { width: 28px; height: 28px; border-radius: 8px; background: transparent;
+  color: var(--accent-ink, #fff); display: block; flex: none; }
+.settings-title { display: grid; line-height: 1.25; min-width: 0; }
+.settings-title strong { font-size: 16px; font-weight: 600; }
+.settings-title span { font-size: 12px; color: var(--muted, #666672); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.settings-spacer { flex: 1; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 36px; min-height: 36px;
+  padding: 0 12px; border: 1px solid var(--line, #e2e2e8); border-radius: var(--r, 10px); background: transparent;
+  color: var(--text, #17171c); font: inherit; font-size: 13px; font-weight: 500; white-space: nowrap;
+  text-decoration: none; cursor: pointer; }
+.btn:hover:not(:disabled) { background: var(--surface-2, #f1f1f4); }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn.pri { background: var(--accent, #4f46e5); border-color: transparent; color: var(--accent-ink, #fff); font-weight: 600; }
+.btn.danger { color: var(--err, #dc2626); }
+.back { flex: none; }
+:focus-visible { outline: 2px solid var(--accent, #4f46e5); outline-offset: 2px; }
+
+.settings-body { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 32px; padding-top: 24px; }
+.settings-nav { display: flex; flex-direction: column; gap: 2px; align-self: start; }
+.settings-tab { display: flex; align-items: center; height: 36px; min-height: 36px; padding: 0 12px; border: 0;
+  border-radius: var(--r, 10px); background: transparent; color: var(--muted, #666672); font: inherit;
+  font-size: 13px; font-weight: 500; text-align: left; white-space: nowrap; cursor: pointer; }
+.settings-tab:hover { background: var(--surface-2, #f1f1f4); color: var(--text, #17171c); }
+.settings-tab.on { background: var(--surface-2, #f1f1f4); color: var(--text, #17171c); }
+.settings-content { min-width: 0; }
+.settings-pane { display: none; }
+.settings-pane.on { display: block; }
+.pane-head { margin: 0 0 16px; }
+.pane-head h2 { margin: 0 0 4px; font-size: 20px; line-height: 1.25; font-weight: 600; letter-spacing: -.01em; }
+.setting-help { display: block; font-size: 13px; color: var(--muted, #666672); }
+.pane-sec { margin: 24px 0 8px; font-size: 12px; font-weight: 500; color: var(--muted, #666672); }
+.setting-list { border: 1px solid var(--line, #e2e2e8); border-radius: var(--rc, 12px);
+  background: var(--surface, #fff); overflow: hidden; }
+.setting-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 64px;
+  padding: 12px 16px; border-top: 1px solid var(--line, #e2e2e8); }
+.setting-row:first-child { border-top: 0; }
+.setting-main { min-width: 0; }
+.row-title { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 14px; font-weight: 600; }
+.row-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.setting-control { flex: none; display: flex; align-items: center; gap: 8px; }
+.av { width: 28px; height: 28px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 12px;
+  font-weight: 600; color: var(--accent, #4f46e5); background: var(--accent-soft, rgba(79, 70, 229, .1)); flex: none; }
+.av.warn { background: var(--ok-soft, rgba(21, 128, 61, .1)); color: var(--ok, #15803d); }
+/* One deterministic fill per person, keyed by data-av (see avatar.js). Every fill is opaque and every ink
+   clears 4.5:1 against its own fill; the dark theme uses lighter fills with dark inks. Installed after
+   `.av.warn` on purpose: equal specificity, so a palette fill wins over the role colour in the light theme
+   while the dark selectors below already out-specify it. */
+.av[data-av="0"] { background: #b91c1c; color: #ffffff; }
+.av[data-av="1"] { background: #b45309; color: #ffffff; }
+.av[data-av="2"] { background: #15803d; color: #ffffff; }
+.av[data-av="3"] { background: #0f766e; color: #ffffff; }
+.av[data-av="4"] { background: #1d4ed8; color: #ffffff; }
+.av[data-av="5"] { background: #5b21b6; color: #ffffff; }
+.av[data-av="6"] { background: #a21caf; color: #ffffff; }
+.av[data-av="7"] { background: #64748b; color: #ffffff; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .av[data-av="0"] { background: #f87171; color: #450a0a; }
+  :root:not([data-theme="light"]) .av[data-av="1"] { background: #fbbf24; color: #451a03; }
+  :root:not([data-theme="light"]) .av[data-av="2"] { background: #4ade80; color: #052e16; }
+  :root:not([data-theme="light"]) .av[data-av="3"] { background: #2dd4bf; color: #042f2e; }
+  :root:not([data-theme="light"]) .av[data-av="4"] { background: #60a5fa; color: #172554; }
+  :root:not([data-theme="light"]) .av[data-av="5"] { background: #818cf8; color: #1e1b4b; }
+  :root:not([data-theme="light"]) .av[data-av="6"] { background: #e879f9; color: #4a044e; }
+  :root:not([data-theme="light"]) .av[data-av="7"] { background: #94a3b8; color: #0f172a; }
+}
+:root[data-theme="dark"] .av[data-av="0"] { background: #f87171; color: #450a0a; }
+:root[data-theme="dark"] .av[data-av="1"] { background: #fbbf24; color: #451a03; }
+:root[data-theme="dark"] .av[data-av="2"] { background: #4ade80; color: #052e16; }
+:root[data-theme="dark"] .av[data-av="3"] { background: #2dd4bf; color: #042f2e; }
+:root[data-theme="dark"] .av[data-av="4"] { background: #60a5fa; color: #172554; }
+:root[data-theme="dark"] .av[data-av="5"] { background: #818cf8; color: #1e1b4b; }
+:root[data-theme="dark"] .av[data-av="6"] { background: #e879f9; color: #4a044e; }
+:root[data-theme="dark"] .av[data-av="7"] { background: #94a3b8; color: #0f172a; }
+.badge { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 999px;
+  background: var(--surface-2, #f1f1f4); color: var(--muted, #666672); font-size: 12px; font-weight: 500; white-space: nowrap; }
+.badge.ok { background: var(--ok-soft, rgba(21, 128, 61, .1)); color: var(--ok, #15803d); }
+select.sel { height: 36px; min-height: 36px; padding: 0 8px; border: 1px solid var(--line, #e2e2e8);
+  border-radius: var(--r, 10px); background: var(--surface, #fff); color: var(--text, #17171c); font: inherit; font-size: 13px; }
+.inp { height: 36px; min-height: 36px; padding: 0 12px; border: 1px solid var(--line, #e2e2e8);
+  border-radius: var(--r, 10px); background: var(--bg, #fafafa); color: var(--text, #17171c); font: inherit;
+  font-size: 13px; flex: 1 1 200px; min-width: 0; }
+.inp:focus { outline: none; border-color: var(--accent, #4f46e5); box-shadow: 0 0 0 3px var(--accent-soft, rgba(79, 70, 229, .1)); }
+.invite-control { flex: 1 1 auto; justify-content: flex-end; }
+.setting-link { margin-top: 8px; }
+.link { display: block; padding: 8px 12px; border: 1px solid var(--line, #e2e2e8); border-radius: var(--r, 10px);
+  background: var(--surface-2, #f1f1f4); font-family: ui-monospace, monospace; font-size: 12px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; user-select: all; }
+.empty { margin: 12px 16px; color: var(--muted, #666672); font-size: 13px; }
+.pane-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
+
+@media (max-width: 760px) {
+  .page { padding: 16px 12px 40px; }
+  .settings-bar { padding-bottom: 12px; }
+  .settings-body { display: block; padding-top: 12px; }
+  .settings-nav { flex-direction: row; gap: 4px; overflow-x: auto; margin: 0 -12px 12px; padding: 0 12px;
+    scrollbar-width: none; }
+  .settings-tab { height: 44px; min-height: 44px; flex: none; padding: 0 12px; }
+  .setting-row { align-items: flex-start; flex-direction: column; gap: 8px; padding: 12px; }
+  .setting-control { width: 100%; }
+  .setting-control select, .setting-control .btn { width: 100%; }
+  .invite-control { flex-direction: column; align-items: stretch; }
+  .inp, .btn, select.sel { height: 44px; min-height: 44px; }
+  .back { display: none; }
+}

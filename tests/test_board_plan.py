@@ -12,7 +12,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = (ROOT / 'mockreview/board/board.js').read_text(encoding='utf-8')
 NAMES = ['h', 'append', 'paras', 'entryKind', 'capCustom', 'isResolved', 'gateState', 'progressLine', 'isMarkableBlock',
          'groupBlocks', 'approveRestIds', 'groupHasBulk', 'gateIcon', 'endLine', 'icon', 'updateGate', 'gateReason', 'gateTitle', 'renderGate', 'updateSendbar', 'cleanMarks', 'answerText', 'payload', 'renderQuestion', 'renderPiece',
-         'renderSettled', 'renderRecapNote', 'renderAsked', 'renderNotesAnswered', 'markEmpty', 'submittedFeedback', 'watchWindowMs']
+         'renderSettled', 'renderRecapNote', 'renderAsked', 'renderNotesAnswered', 'renderBlock', 'savedCopy', 'markEmpty', 'submittedFeedback', 'watchWindowMs',
+         'newPinId', 'uuid', 'isEl', 'closestOf', 'num', 'scrollPoint', 'docPoint', 'pct', 'sectionOf', 'sectionRef',
+         'canvasBox', 'canvasClick']
 
 
 def run(test):
@@ -22,7 +24,9 @@ def run(test):
     parts = [re.search(r'^  var LIMIT = .*$', SRC, re.M).group(0), "var PROGRESS = " + re.search(r'^  var PROGRESS = (.*);$', SRC, re.M).group(1) + ";",
              "var NOTE_CHIP = " + re.search(r'^  var NOTE_CHIP = (.*);$', SRC, re.M).group(1) + ";",
              "var WATCH_EVERY = " + re.search(r'^  var WATCH_EVERY = (.*);$', SRC, re.M).group(1) + ";",
-             "var GATE_BTN = " + re.search(r"^  var GATE_BTN = ([^;]*);", SRC, re.M).group(1) + ";"]
+             "var GATE_BTN = " + re.search(r"^  var GATE_BTN = ([^;]*);", SRC, re.M).group(1) + ";",
+             "var PIN_SKIP = " + re.search(r"^  var PIN_SKIP = (.*);$", SRC, re.M).group(1) + ";",
+             "var SECTIONS = new Map();"]
     for name in NAMES:
         start = re.search(r'^  function ' + name + r'\(', SRC, re.M)
         assert start, name
@@ -83,6 +87,17 @@ assert.equal(payload(d, 'build').action, 'build');
 assert.equal(payload(d, 'send').action, 'send');
 assert.equal('action' in payload(d), false);
 assert.deepEqual(payload(d, 'build').marks.q1, {choice: 'recommended'});
+''')
+
+
+def test_payload_carries_pin_ids():
+    run('''
+const d = {marks: {}, pins: [{id: 'p1a2b3c4', block: 'm1', option: null, w: 'desktop', x: 0.1, y: 0.2, text: 'fix'}], guidelines: ''};
+const out = payload(d, 'send');
+assert.equal(out.pins[0].id, 'p1a2b3c4');
+assert.equal(out.pins[0].block, 'm1');
+const bare = {marks: {}, pins: [{block: 'm1', option: null, w: 'desktop', x: 0.1, y: 0.2, text: 'fix'}], guidelines: ''};
+assert.equal('id' in payload(bare, 'send').pins[0], false);
 ''')
 
 
@@ -239,6 +254,7 @@ const round = {n: 1, decisions: I, gate: g};
 let sent = [], toasts = []; let ed = true;
 global.sendbar = document.createElement('footer'); global.footMsg = null;
 global.S = {draft: {marks: {}}, sending: false, amending: false, error: null}; global.DOC = {dec: {gate: g}};
+global.isGuest = () => false;
 global.R = () => ({status: 'open', current_round: 1, submit: {kind: 'local'}}); global.viewed = () => round;
 global.isNew = () => true; global.isEditable = () => ed; global.submittedFeedback = () => null;
 global.missingNotes = () => []; global.hasContent = d => Object.keys(d.marks).length > 0;
@@ -283,4 +299,62 @@ assert.equal(el.querySelectorAll('li').length, 2); assert.equal(el.querySelector
 assert.ok(el.textContent.includes('Agreed so far') && el.textContent.includes('Header at 48 px'));
 assert.ok(renderRecapNote({id: 'recap', items: ['x']}).textContent.includes('Recap'));
 ''')
-    assert "if (b.type === 'recap' && b.markable === false) return renderRecapNote(b);" in SRC
+    run('''
+const el = renderBlock(null, null, {type: 'recap', id: 'recap', markable: false, items: ['x', 'y']});
+assert.equal(el.querySelectorAll('li').length, 2);
+assert.equal(el.querySelectorAll('button').length, 0);
+''')
+
+
+def test_the_saved_copy_says_a_wake_off_board_does_not_ping_hermes():
+    run('''
+global.isGuest = () => false;
+assert.equal(savedCopy({wake: true}, 'Sent - Hermes is on it'), 'Sent - Hermes is on it');
+assert.equal(savedCopy({wake: false}, 'Sent - Hermes is on it'), 'Saved. This board does not ping Hermes: tell it in chat.');
+assert.equal(savedCopy(null, 'old'), 'old');
+''')
+
+
+def test_canvas_pin_skips_controls_and_records_section():
+    run('''
+    global.window = { crypto: globalThis.crypto };
+global.S = {commentMode: true, width: 'desktop', draft: {pins: []}};
+global.isEditable = () => true; global.pinsOn = () => true; global.viewed = () => ({}); global.canComment = () => true;
+global.canvasBox = () => ({left: 0, top: 0, width: 200, height: 100});
+global.wlabel = w => w; global.anchorFor = () => null;
+global.canvasLayer = () => ({layer: document.createElement('div'), list: document.createElement('ol')});
+global.saveDraft = () => {}; global.redrawCanvasPins = () => {}; global.toast = () => {};
+// Saving a canvas pin also posts a thread. The thread POST has its own tests; here the seam is stubbed so this
+// test keeps checking exactly what it checked before: the ref, the geometry and the pin's shape.
+global.saveNewThread = (pin, text) => { pin.text = text; S.draft.pins.push(pin); };
+let popped = null;
+global.notePop = o => { popped = o; if (o.onClose) o.onClose(); if (o.onSave) o.onSave('too vague'); };
+function sec(ref, title) { const s = document.createElement('section'); s.setAttribute('data-mr-ref', ref); s.setAttribute('data-mr-title', title); return s; }
+function click(el, x, y) { canvasClick({clientX: x === undefined ? 50 : x, clientY: y === undefined ? 50 : y, composedPath: () => [el], target: el}); }
+const s2 = sec('s2', 'Rollout plan');
+const button = document.createElement('button'); s2.appendChild(button);
+const area = document.createElement('textarea'); s2.appendChild(area);
+const input = document.createElement('input'); s2.appendChild(input);
+const link = document.createElement('a'); s2.appendChild(link);
+const mpin = document.createElement('div'); mpin.setAttribute('class', 'mpin'); s2.appendChild(mpin);
+const mock = document.createElement('div'); mock.setAttribute('class', 'mock');
+const inner = document.createElement('p'); mock.appendChild(inner); s2.appendChild(mock);
+for (const el of [button, area, input, link, mpin, inner]) click(el);
+assert.equal(S.draft.pins.length, 0);
+assert.equal(sectionRef(s2), 's2');
+assert.equal(sectionRef(button), 's2');
+const outside = document.createElement('div');
+assert.equal(sectionRef(outside), '');
+click(s2);
+assert.equal(S.draft.pins.length, 1);
+assert.ok(/^p[0-9a-f]{8}$/.test(S.draft.pins[0].id));
+delete S.draft.pins[0].id;
+assert.deepEqual(S.draft.pins, [{block: 's2', option: null, w: 'desktop', x: 0.25, y: 0.5, text: 'too vague', on: 'board', doc: {x: 50, y: 50}}]);
+assert.equal(popped.title, 'New pin · Rollout plan');
+assert.equal(popped.where, 'desktop · ~25%, 50%');
+const head = sec('page', 'Board');
+click(head, 100, 20);
+assert.equal(S.draft.pins.length, 2);
+assert.equal(S.draft.pins[1].block, 'page');
+assert.equal(S.draft.pins[1].x, 0.5); assert.equal(S.draft.pins[1].y, 0.2);
+''')

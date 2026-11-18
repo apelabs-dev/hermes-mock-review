@@ -41,6 +41,9 @@ def raw(port, method, path, host, extra="", body=b""):
     return int(resp.split(b" ", 2)[1]), resp
 
 
+CSRF = "Cookie: mr_csrf=t0ken\r\nX-CSRF-Token: t0ken\r\n"
+
+
 def submit_body(review):
     return json.dumps({"round": 1, "token": review["token"], "feedback": FEEDBACK}).encode()
 
@@ -91,11 +94,19 @@ def test_allowlist_bind_host_and_lan_address(monkeypatch):
 
 def test_origin_allowed():
     allowed = srv.build_allowed_hosts("127.0.0.1")
-    for ok in ("http://127.0.0.1:8790", "http://localhost:8790", "https://localhost", "http://[::1]:8790"):
-        assert srv.origin_allowed(ok, allowed), ok
+    for ok in ("http://127.0.0.1:8790", "http://localhost:8790", "http://[::1]:8790"):
+        assert srv.origin_allowed(ok, allowed, "127.0.0.1:8790", False), ok
     for bad in ("http://attacker.example", "http://attacker.example:8790", "null", "file://", "ftp://localhost",
-                "http://localhost:8790/x", "http://user@localhost:8790", "localhost:8790", ""):
-        assert not srv.origin_allowed(bad, allowed), bad
+                "http://localhost:8790/x", "http://user@localhost:8790", "localhost:8790", "",
+                "http://localhost:3000",                    # a different port
+                "https://127.0.0.1:8790",                   # https origin on an http request
+                "http://127.0.0.1:notaport"):               # an unparsable port
+        assert not srv.origin_allowed(bad, allowed, "127.0.0.1:8790", False), bad
+    assert srv.origin_allowed("https://localhost", allowed, "localhost", True)   # no port means 443
+    assert srv.origin_allowed("https://localhost:443", allowed, "localhost", True)
+    assert not srv.origin_allowed("http://localhost", allowed, "localhost", True)   # http origin on an https request
+    assert srv.origin_allowed("http://localhost", allowed, "localhost", False)      # no port means 80
+    assert not srv.origin_allowed("http://localhost:8790", allowed, "localhost:\xb2", False)  # unicode digit
 
 
 def test_local_request():
@@ -128,10 +139,17 @@ def review_untouched(review):
 
 
 def test_allowed_hosts_are_served(board, review):
-    for host in (f"localhost:{board}", f"[::1]:{board}", f"127.0.0.1:{board}", PUBLIC, f"{PUBLIC}:8790"):
+    for host in (f"localhost:{board}", f"[::1]:{board}", f"127.0.0.1:{board}"):
         code, resp = raw(board, "GET", f"/r/{review['id']}/state.json", host)
         assert code == 200, host
         assert raw(board, "GET", "/healthz", host)[0] == 200, host
+    # public_base is an allowed host but not a public name: from 127.0.0.1 with no proxy headers it is the loopback
+    # owner, while Serve's X-Forwarded-For still keeps a proxied request from being the owner
+    for host in (PUBLIC, f"{PUBLIC}:8790"):
+        assert raw(board, "GET", f"/r/{review['id']}/state.json", host)[0] == 200, host
+        assert raw(board, "GET", "/healthz", host)[0] == 200, host
+        assert raw(board, "GET", f"/r/{review['id']}/state.json", host,
+                   extra="X-Forwarded-For: 198.51.100.7\r\n")[0] == 401, host
 
 
 def test_cross_origin_post_refused_without_side_effects(board, review, env):
@@ -155,21 +173,28 @@ def test_same_origin_post_works(board, review, env):
 
 
 def test_public_origin_post_works(board, review):
-    code, _ = raw(board, "POST", f"/r/{review['id']}/api/submit", PUBLIC,
-                  extra=f"Origin: https://{PUBLIC}:8790\r\n", body=submit_body(review))
+    """A real Serve request: the tailnet Host on the served port, HTTPS reported by the trusted proxy, and the Origin
+    naming that same scheme, host and port. A public Host is not the loopback owner, so the reviewer's session carries
+    the request."""
+    import authkit
+    reviewer = authkit.account(review["id"], role="reviewer")
+    cookies = "".join(f"{k}: {v}\r\n" for k, v in authkit.signed_in(reviewer).items())
+    code, _ = raw(board, "POST", f"/r/{review['id']}/api/submit", f"{PUBLIC}:8790",
+                  extra=f"Origin: https://{PUBLIC}:8790\r\nX-Forwarded-Proto: https\r\n" + cookies,
+                  body=submit_body(review))
     assert code == 200
 
 
-def test_index_local_only(board, review, monkeypatch):
+def test_index_needs_sign_in_off_this_computer(board, review, monkeypatch):
     host = f"127.0.0.1:{board}"
     code, resp = raw(board, "GET", "/", host)
-    assert code == 200 and b"Mock reviews" in resp
+    assert code == 200 and b"Mock reviews" in resp          # loopback = owner
     code, resp = raw(board, "GET", "/", host, extra="X-Forwarded-For: 100.64.0.9\r\n")
-    assert code == 404 and b"Mock reviews" not in resp
-    assert raw(board, "HEAD", "/", host, extra="Forwarded: for=100.64.0.9\r\n")[0] == 404
-    assert raw(board, "GET", "/", PUBLIC, extra="Tailscale-User-Login: someone\r\n")[0] == 404
+    assert code == 401 and b"Mock reviews" not in resp and b"Sign in" in resp
+    assert raw(board, "HEAD", "/", host, extra="Forwarded: for=100.64.0.9\r\n")[0] == 401
+    assert raw(board, "GET", "/", PUBLIC, extra="Tailscale-User-Login: someone\r\n")[0] == 401
     monkeypatch.setattr(srv, "LOCAL_PEERS", ())     # as seen from a non-loopback peer
     code, resp = raw(board, "GET", "/", host)
-    assert code == 404 and b"Mock reviews" not in resp
-    assert raw(board, "HEAD", "/", host)[0] == 404
-    assert raw(board, "GET", f"/r/{review['id']}/state.json", host)[0] == 200   # the review URL still works
+    assert code == 401 and b"Mock reviews" not in resp
+    assert raw(board, "HEAD", "/", host)[0] == 401
+    assert raw(board, "GET", f"/r/{review['id']}/state.json", host)[0] == 401   # the review URL needs sign-in too

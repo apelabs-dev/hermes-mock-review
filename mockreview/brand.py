@@ -544,6 +544,9 @@ def allowed_for(info: Dict[str, Any], mock_css: str = "", fonts_css: str = "") -
     return Allowed(rgbs, fams)
 
 
+_DATA_URI = re.compile(r"data:[^\"'()\s>]{200,}")
+
+
 def violations(decisions: Dict[str, Any], allow: Allowed) -> List[Found]:
     """(path, what) for every colour or font outside `allow`, in document order, each pair once."""
     raw: List[Found] = []
@@ -551,7 +554,9 @@ def violations(decisions: Dict[str, Any], allow: Allowed) -> List[Found]:
         if not isinstance(b, dict):
             continue
         if isinstance(b.get("html"), str):
-            raw.extend((f"blocks[{i}].html", w) for w in scan_html(b["html"], allow))
+            # An artifact's bundled media is megabytes of base64, never a colour or a font: scan around it.
+            page = _DATA_URI.sub("data:", b["html"]) if b.get("type") == "artifact" else b["html"]
+            raw.extend((f"blocks[{i}].html", w) for w in scan_html(page, allow))
         for j, o in enumerate(b.get("options") or []):
             if isinstance(o, dict) and isinstance(o.get("html"), str):
                 oid = o.get("id") or "abcdef"[j % 6]
