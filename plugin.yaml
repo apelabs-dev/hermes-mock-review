@@ -3,15 +3,11 @@ version: 1.2.0  # x-release-please-version
 requires_hermes: ">=0.22.0"
 capabilities: []
 requires_env:
-  - name: HERENOW_API_KEY
-    optional: true
-    secret: true
-    description: Leave empty unless you use here.now hosting.
   - name: MOCKREVIEW_WEBHOOK_SECRET
     optional: true
     secret: true
     description: "Leave empty: hermes mockreview setup generates and stores it."
-description: "Review boards for UI mockups: five mock_review tools, the mockreview CLI and slash command, the usage skill, a webhook platform connect handler for optional in-gateway autostart, and a stdio MCP server for other coding agents."
+description: "Review boards for UI mockups: six mock_review tools, the mockreview CLI and slash command, the usage skill, a webhook platform connect handler for optional in-gateway autostart, and a stdio MCP server for other coding agents."
 platforms: [webhook]
 provides_hooks: []
 kind: standalone
@@ -25,6 +21,7 @@ provides_tools:
   - mock_review_feedback
   - mock_review_ack
   - mock_review_list
+  - mock_review_patch_block
 config_schema:
   devices:
     type: list
@@ -76,7 +73,27 @@ config_schema:
   interactive_elements:
     type: bool
     default: true
-    description: "Mocks carry working controls. On: build every control in a mock so it responds (a dropdown opens, a switch flips, a tab changes, a field takes text), and the board opens on Tap so taps reach the mock; the reviewer switches to Pin in the header to comment. Off: mocks are static pictures and the board opens on Pin. Env: MOCKREVIEW_INTERACTIVE_ELEMENTS."
+    description: "Mocks carry working controls. On: build every control in a mock so it responds (a dropdown opens, a switch flips, a tab changes, a field takes text); the comment toggle is always one press away (C). Off: mocks are static pictures. Env: MOCKREVIEW_INTERACTIVE_ELEMENTS."
+  pin_fix:
+    type: bool
+    default: false
+    description: "Let a reviewer ask Hermes to patch one block of the current round in place, from a pin or an @Hermes comment, instead of sending a new round. Off: pins and comments are notes only. Env: MOCKREVIEW_PIN_FIX."
+  pin_fix_window_seconds:
+    type: float
+    default: 20.0
+    description: "Requests that arrive within this many seconds of each other share one wake-up. Env: MOCKREVIEW_PIN_FIX_WINDOW_SECONDS."
+  pin_fix_min_seconds:
+    type: float
+    default: 60.0
+    description: "Minimum seconds between two pin-fix wake-ups for one review. Env: MOCKREVIEW_PIN_FIX_MIN_SECONDS."
+  pin_fix_max_per_hour:
+    type: int
+    default: 60
+    description: "Most pin-fix requests one review accepts in a rolling hour. Env: MOCKREVIEW_PIN_FIX_MAX_PER_HOUR."
+  pin_fix_max_per_round:
+    type: int
+    default: 60
+    description: "Most pin-fix requests one round accepts. Env: MOCKREVIEW_PIN_FIX_MAX_PER_ROUND."
   webhook_url:
     type: str
     default: "http://localhost:8644/webhooks/mock-review"
@@ -108,28 +125,28 @@ config_schema:
   wake_toolsets:
     type: list
     default: []
-    description: "Hermes toolsets the session woken by Send may use, for example mock-review, terminal, file (the list replaces Hermes's webhook default). hermes mockreview setup prints the toolsets line to add by hand to the wake route in webhook_subscriptions.json; add it again after every setup run. Empty: Hermes's safe webhook tools only, and the build continues in the origin chat's session. Refused for a waking board whose Send is ungated (a here.now board with its password off, or any board while host listens beyond loopback), because that board text would reach these tools. Env: MOCKREVIEW_WAKE_TOOLSETS."
-  poll_seconds:
-    type: float
-    default: 60.0
-    description: "Seconds between here.now Site Data polls. Env: MOCKREVIEW_POLL_SECONDS."
+    description: "Hermes toolsets the session woken by Send may use, for example mock-review, terminal, file (the list replaces Hermes's webhook default). hermes mockreview setup prints the toolsets line to add by hand to the wake route in webhook_subscriptions.json; add it again after every setup run. Empty: Hermes's safe webhook tools only, and the build continues in the origin chat's session. Refused for a waking board whose Send is ungated (any board while host listens beyond loopback), because that board text would reach these tools. Env: MOCKREVIEW_WAKE_TOOLSETS."
   default_host:
     type: str
     default: "local"
-    enum: ["tailnet", "local", "herenow"]
-    description: "Where a review is hosted when the call doesn't say: tailnet (private, over Tailscale), local (this computer's own address, no Tailscale) or herenow (internet link, password protected by default). Env: MOCKREVIEW_DEFAULT_HOST."
-  herenow_password:
-    type: bool
-    default: true
-    description: "Password protect new here.now reviews. Stored per review; change an existing review with mockreview password <id> on|off. Env: MOCKREVIEW_HERENOW_PASSWORD."
+    enum: ["tailnet", "local", "public"]
+    description: "Where a review is hosted when the call doesn't say: tailnet (private, over Tailscale), local (this computer's own address, no Tailscale) or public (an internet URL behind Tailscale Funnel or any TLS proxy). Env: MOCKREVIEW_DEFAULT_HOST."
   ask_host_each_time:
     type: bool
     default: true
-    description: "Ask the user tailnet, local or here.now before every review (read by the skill and tool text, not enforced in code). Env: MOCKREVIEW_ASK_HOST_EACH_TIME."
+    description: "Ask the user tailnet, local or public before every review (read by the skill and tool text, not enforced in code). Env: MOCKREVIEW_ASK_HOST_EACH_TIME."
   public_base:
     type: str
     default: ""
     description: "Tailnet URL for review links. Empty: detect MagicDNS with tailscale status --json. Env: MOCKREVIEW_PUBLIC_BASE."
+  public_url:
+    type: str
+    default: ""
+    description: "The public HTTPS URL a TLS proxy serves this board at (Caddy, nginx, Cloudflare Tunnel, oauth2-proxy). Empty: the Tailscale Funnel URL when Funnel serves the board, else public_base. Env: MOCKREVIEW_PUBLIC_URL."
+  funnel_port:
+    type: int
+    default: 8443
+    description: "HTTPS port `hermes mockreview public on` maps through Tailscale Funnel. Funnel allows only 443, 8443 and 10000; 443 is usually taken. Env: MOCKREVIEW_FUNNEL_PORT."
   host:
     type: str
     default: "127.0.0.1"
@@ -152,6 +169,30 @@ config_schema:
     type: str
     default: ""
     description: "Address local-mode links use. Empty: this computer's network address, detected (127.0.0.1 while the server binds loopback only). Env: MOCKREVIEW_LAN_ADDRESS."
+  loopback_owner:
+    type: bool
+    default: true
+    description: "A request from this computer that did not come through a proxy is the install's owner (an admin) with no sign-in. Off: everyone signs in, the owner with mockreview login. Env: MOCKREVIEW_LOOPBACK_OWNER."
+  trusted_proxies:
+    type: list
+    default: ["127.0.0.1", "::1"]
+    description: "Addresses or networks of the reverse proxies whose identity headers are read (tailscale serve, cloudflared and most local proxies connect from loopback). Identity headers from any other peer are ignored. Env: MOCKREVIEW_TRUSTED_PROXIES."
+  tailscale_identity:
+    type: bool
+    default: true
+    description: "Sign in a tailnet person whose Tailscale Serve identity (Tailscale-User-Login) is linked to an account. Read only from trusted_proxies, only when X-Forwarded-For is the single tailnet address Serve sets (100.64.0.0/10 or fd7a:115c:a1e0::/48), and never for a Funnel request, a public host, or a request that also carries another source's identity headers. Any other proxy in trusted_proxies must strip Tailscale-User-* headers, or turn this off. Env: MOCKREVIEW_TAILSCALE_IDENTITY."
+  forwarded_identity:
+    type: bool
+    default: false
+    description: "Sign in a person whose X-Forwarded-User / X-Forwarded-Email (oauth2-proxy, Authelia) is linked to an account. Read only from trusted_proxies; turn it on only when that proxy strips these headers from incoming requests. Refused on a public host and with the Funnel marker (Funnel and Serve connect from a trusted loopback proxy and strip only Tailscale-* headers). Env: MOCKREVIEW_FORWARDED_IDENTITY."
+  cloudflare_team:
+    type: str
+    default: ""
+    description: "Cloudflare Access team name (the <team> in <team>.cloudflareaccess.com). With cloudflare_audience set, the Cf-Access-Jwt-Assertion JWT signs in a linked account; needs the plugin's crypto extra (PyJWT with cryptography) or the server refuses to start. Env: MOCKREVIEW_CLOUDFLARE_TEAM."
+  cloudflare_audience:
+    type: str
+    default: ""
+    description: "The Cloudflare Access application's AUD tag; a JWT for any other audience is refused. Env: MOCKREVIEW_CLOUDFLARE_AUDIENCE."
   offer_live_demo:
     type: bool
     default: false
@@ -163,7 +204,7 @@ config_schema:
   auto_close_idle_days:
     type: int
     default: 0
-    description: "Close an open review after this many days without a new round or feedback (here.now: its public site is deleted). 0 = never. Env: MOCKREVIEW_AUTO_CLOSE_IDLE_DAYS."
+    description: "Close an open review after this many days without a new round or feedback. 0 = never. Env: MOCKREVIEW_AUTO_CLOSE_IDLE_DAYS."
   keep_closed_days:
     type: int
     default: 0
@@ -172,15 +213,14 @@ config_schema:
     type: int
     default: 3600
     description: "Seconds between the server's auto-close/prune passes. Env: MOCKREVIEW_HOUSEKEEPING_SECONDS."
+  sse_heartbeat_seconds:
+    type: int
+    default: 15
+    description: "Seconds between heartbeat comments on a quiet server-sent-events stream, so proxies do not drop it. Env: MOCKREVIEW_SSE_HEARTBEAT_SECONDS."
   autostart:
     type: bool
     default: false
     description: "Start the board server inside the Hermes gateway process (a background thread serving host:port) when the gateway's webhook platform connects. Off (default): nothing runs in the background; run `hermes mockreview serve` yourself. Restart the gateway after changing it, host or port. Env: MOCKREVIEW_AUTOSTART."
-  herenow_api_key:
-    type: secret
-    env: HERENOW_API_KEY
-    required: false
-    description: "Optional here.now key; required only for public hosting."
   webhook_secret:
     type: secret
     env: MOCKREVIEW_WEBHOOK_SECRET

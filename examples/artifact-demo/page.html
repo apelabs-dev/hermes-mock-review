@@ -1,0 +1,112 @@
+<style>
+  :root { color-scheme: light; }
+  body { margin: 0; padding: 20px; background: #f4f4ec; color: #1f2a1f; font: 15px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif; }
+  h2 { font: 700 24px/1.2 Georgia, serif; color: #14301f; margin: 28px 0 10px; }
+  h2:first-child { margin-top: 0; }
+  p.lead { max-width: 640px; margin: 0 0 14px; }
+  code { font: 13px ui-monospace, Menlo, monospace; background: #e8e8dc; padding: 1px 5px; border-radius: 4px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; }
+  .card { background: #fbfbf6; border: 1px solid #cfcfbf; border-radius: 12px; padding: 14px; }
+  .card h3 { font: 700 16px Georgia, serif; margin: 0 0 8px; }
+  .card .take { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
+  .card .take span { width: 22px; font: 12px ui-monospace, Menlo, monospace; color: #6b6b55; }
+  .card audio { flex: 1; min-width: 0; height: 34px; }
+  .card p { margin: 8px 0 0; font-size: 13px; color: #44483c; }
+  .tl { position: relative; margin: 36px 0 6px; height: 44px; display: flex; gap: 2px; }
+  .tl .s { flex: var(--w) 1 0; min-width: 0; background: #e6e6d4; border: 1px solid #cfcfbf; border-radius: 4px; font: 12px ui-monospace, Menlo, monospace; display: grid; place-items: center; color: #44483c; }
+  .tl .s.live { background: #dcefe4; }
+  .tl .s.hot { background: #bfae66; color: #fff; font-weight: 700; }
+  .tl .f { position: absolute; top: -26px; transform: translateX(-50%); font: 11px ui-monospace, Menlo, monospace; color: #8a7a2a; text-align: center; }
+  .tl .f::after { content: ""; display: block; width: 1px; height: 12px; margin: 2px auto 0; background: #bfae66; }
+  .axis { display: flex; justify-content: space-between; border-top: 1px solid #cfcfbf; padding-top: 4px; font: 11px ui-monospace, Menlo, monospace; color: #6b6b55; }
+  figure { margin: 0; }
+  video { display: block; width: 100%; border-radius: 12px; border: 1px solid #b9b9a6; background: #0e1f16; }
+  figcaption { font-size: 13px; color: #44483c; margin: 8px 0 0; }
+  .tablewrap { overflow-x: auto; border: 1px solid #cfcfbf; border-radius: 10px; background: #fbfbf6; }
+  table { border-collapse: collapse; width: 100%; min-width: 640px; }
+  th { text-align: left; background: #e6e6d4; font: 11px ui-monospace, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; color: #44483c; padding: 10px 12px; }
+  td { padding: 10px 12px; border-top: 1px solid #d9d9c8; vertical-align: top; font-size: 14px; }
+  td.n, td.t { font: 12px ui-monospace, Menlo, monospace; white-space: nowrap; }
+  td.say { font-family: Georgia, serif; font-style: italic; color: #4a4a30; }
+  .tag { font: 11px ui-monospace, Menlo, monospace; padding: 1px 7px; border-radius: 999px; }
+  .tag.built { background: #f1e4b6; color: #6a5412; }
+  .tag.live { background: #d3ebdd; color: #1f5a37; }
+</style>
+
+<h2>Interface sounds</h2>
+<p class="lead">Synthetic tones, three takes each. Sounds sit about 18 dB under the voice. This page is one <code>artifact</code> block: plain HTML, CSS and script, media inlined as <code>data:</code> URIs.</p>
+<div class="cards" id="cards"></div>
+
+<h2>Where the frames sit in the film</h2>
+<div class="tl" id="tl"></div>
+<div class="axis"><span>0 s</span><span>20 s</span><span>40 s</span><span>60 s</span><span>80 s</span></div>
+
+<h2>Watch it</h2>
+<figure>
+  <video controls preload="metadata" poster="assets/poster.png" playsinline>
+    <source src="assets/film.mp4" type="video/mp4">
+  </video>
+  <figcaption>4.0 s · 640×360 · 24 fps · a silent test clip standing in for the 1080p delivery picture. Captions would be in the player's CC menu.</figcaption>
+</figure>
+
+<h2>Shot list</h2>
+<div class="tablewrap"><table>
+  <thead><tr><th>Beat</th><th>Starts</th><th>Narration</th><th>On screen</th><th>Source</th></tr></thead>
+  <tbody id="rows"></tbody>
+</table></div>
+
+<script>
+  var CARDS = [
+    ['Click', 'assets/click.wav', 'The cursor clicks. Take 3 lands fastest, 15 ms after the start.'],
+    ['Key tick', 'assets/tick.wav', 'Each take holds three strokes. One stroke per keystroke.'],
+    ['Whoosh', 'assets/whoosh.wav', 'Scene moves only. Bright and airy, no low rumble.'],
+    ['Chime', 'assets/chime.wav', 'The success pill. Take 2 is the fullest; it sits under the voice.']
+  ];
+  var el = document.getElementById('cards');
+  CARDS.forEach(function (c) {
+    var d = document.createElement('div'); d.className = 'card';
+    var h = document.createElement('h3'); h.textContent = c[0]; d.appendChild(h);
+    for (var i = 1; i <= 3; i++) {
+      var t = document.createElement('div'); t.className = 'take';
+      var s = document.createElement('span'); s.textContent = 'v' + i; t.appendChild(s);
+      var a = document.createElement('audio'); a.controls = true; a.preload = 'none'; a.src = c[1]; t.appendChild(a);
+      d.appendChild(t);
+    }
+    var p = document.createElement('p'); p.textContent = c[2]; d.appendChild(p);
+    el.appendChild(d);
+  });
+
+  var SEGS = [['S1', 10], ['S2', 8], ['S3', 3], ['S4', 6], ['S5', 8], ['S6', 18], ['S7', 5], ['S8', 6], ['S9', 8], ['S10', 6], ['S11', 4], ['S12', 3]];
+  var LIVE = { S3: 1, S4: 1, S8: 1, S10: 1, S11: 1 };
+  var total = SEGS.reduce(function (n, s) { return n + s[1]; }, 0), at = 0, tl = document.getElementById('tl');
+  SEGS.forEach(function (s) {
+    var d = document.createElement('div'); d.className = 's' + (LIVE[s[0]] ? ' live' : '') + (s[0] === 'S7' ? ' hot' : '');
+    d.style.setProperty('--w', s[1]); d.textContent = s[0]; tl.appendChild(d);
+  });
+  [['SF1', 6], ['SF2', 38], ['SF3', 53], ['SF4', 66]].forEach(function (f) {
+    var m = document.createElement('div'); m.className = 'f'; m.textContent = f[0]; m.style.left = (f[1] / total * 100) + '%'; tl.appendChild(m);
+  });
+
+  var ROWS = [
+    ['1', '0:00.0', 'Before Sam can apply, Example Roofing has to become a merchant.', 'Story card, eyebrow "Stage 1 of 4": Example Roofing · Sam Taylor · Roofing.', 'built'],
+    ['2', '0:06.9', 'A merchant is the contractor’s business. First your integration creates it, then the platform reviews it.', 'Three surfaces light in turn; the onboarding node splits into two paths.', 'built'],
+    ['3', '0:21.1', 'Open the onboarding guide in the portal.', 'Live portal docs: the guide, "How it works" steps in view.', 'live'],
+    ['4', '0:26.3', 'Pick the merchant’s industries from your partner list.', 'listIndustries: request, then the 200 list; Roofing highlighted.', 'live'],
+    ['5', '0:31.5', 'Then create the merchant with its business and contact details. Save both IDs.', 'createMerchant request → 201 with id, userId and the onboarding URL.', 'live'],
+    ['6', '0:50.8', 'Email verification should be built into your integration.', 'Your app: "Check your inbox" → verified tick for sam@example.test.', 'built'],
+    ['7a', '1:00.9', 'Then the contractor supplies the business details,', 'Hosted onboarding: business info filled with fake data. Tax ID masked.', 'live'],
+    ['7b', '1:07.2', 'the owner’s identity, and each co-owner if there are several,', 'Hosted: principal owner, "Other owners?" answered No. ID masked.', 'live']
+  ];
+  var rows = document.getElementById('rows');
+  ROWS.forEach(function (r) {
+    var tr = document.createElement('tr');
+    r.forEach(function (v, i) {
+      var td = document.createElement('td');
+      td.className = ['n', 't', 'say', '', ''][i];
+      if (i === 4) { var g = document.createElement('span'); g.className = 'tag ' + v; g.textContent = v; td.appendChild(g); }
+      else td.textContent = v;
+      tr.appendChild(td);
+    });
+    rows.appendChild(tr);
+  });
+</script>

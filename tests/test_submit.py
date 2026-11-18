@@ -1,4 +1,5 @@
 import json
+import threading
 
 import pytest
 
@@ -45,6 +46,45 @@ def test_submit_notifies_and_is_idempotent(server, review, env):
     data = store.load(rid)
     assert data["rounds"][0]["feedback"]["guidelines"] == "Actually: drop the table."
     assert data["rounds"][0]["submission"]["seq"] == 2
+
+
+def test_the_record_is_not_published_until_the_feedback_files_exist(review):
+    """review.json's feedback is the readiness signal a wake and any reader of feedback_path rely on, so the files
+    must be on disk before the record that names them becomes visible."""
+    rid = review["id"]
+    entered, release = threading.Event(), threading.Event()
+    real = service._write_feedback_files
+
+    def slow_write(data, round_):
+        entered.set()
+        assert release.wait(10), "the test never released the feedback writer"
+        return real(data, round_)
+
+    outcome = {}
+
+    def send():
+        try:
+            outcome["result"] = service.submit(rid, 1, FEEDBACK, review["token"], do_notify=False)
+        except BaseException as e:                     # surfaced below; never swallowed
+            outcome["error"] = e
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(service, "_write_feedback_files", slow_write)
+        sender = threading.Thread(target=send)
+        sender.start()
+        try:
+            assert entered.wait(10), "the feedback files were never written"
+            assert store.load(rid)["rounds"][0].get("feedback") is None, \
+                "review.json carried the feedback before feedback.md existed"
+        finally:
+            release.set()
+            sender.join(10)
+    assert not sender.is_alive()
+    assert "error" not in outcome, outcome.get("error")
+    assert outcome.get("result", {}).get("ok") is True, outcome
+    rounds = config.data_root() / rid / "rounds" / "1"
+    assert (rounds / "feedback.md").is_file() and (rounds / "feedback.json").is_file()
+    assert store.load(rid)["rounds"][0]["feedback"] is not None
 
 
 def test_wrong_token_rejected(server, review):

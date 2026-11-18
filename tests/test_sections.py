@@ -223,8 +223,10 @@ def test_marks_on_context_blocks_are_dropped_pins_on_the_context_mock_are_kept(e
                  {"block": "d5", "option": "e", "w": "desktop", "x": 0.1, "y": 0.1, "text": "on E"},
                  {"block": "cards", "x": 0, "y": 0, "text": "no such block"}]}, r)
     assert out["marks"] == {"d6": {"status": "change", "option": "f", "note": "f"}}
-    assert out["pins"] == [{"block": "today", "option": None, "w": "phone", "x": 0.2, "y": 0.3, "text": "on today"},
-                           {"block": "d5", "option": "e", "w": "desktop", "x": 0.1, "y": 0.1, "text": "on E"}]
+    assert [{k: v for k, v in p.items() if k != "id"} for p in out["pins"]] == [
+        {"block": "today", "option": None, "w": "phone", "x": 0.2, "y": 0.3, "text": "on today"},
+        {"block": "d5", "option": "e", "w": "desktop", "x": 0.1, "y": 0.1, "text": "on E"}]
+    assert all(p["id"].startswith("p") for p in out["pins"])
     with pytest.raises(ReviewError):     # a mark on a context block alone is "nothing to send"
         feedback.sanitize_for_round({"marks": {"today": {"status": "approve"}}, "pins": []}, r)
 
@@ -277,6 +279,19 @@ def test_untitled_context_mock_pin_line_has_no_empty_title(env, tmp_path):
     assert "1. [m2, context mock, desktop] ~(0%,0%) of the mock: hi" in md
 
 
+def test_reserved_board_pin_markdown_names_the_header_else_and_canvas(env, tmp_path):
+    data = _review(tmp_path)
+    r = data["rounds"][0]
+    r["feedback"] = feedback.sanitize_for_round({"pins": [
+        {"block": "page", "w": "desktop", "x": 0.5, "y": 0.5, "text": "header", "on": "board"},
+        {"block": "else", "w": "desktop", "x": 0.5, "y": 0.5, "text": "anything else", "on": "board"},
+        {"block": "doc", "w": "desktop", "x": 0.5, "y": 0.5, "text": "empty canvas", "on": "board"}]}, r)
+    md = feedback.render_decisions_markdown(data, r)
+    assert '1. [page "Board", board, desktop]: header' in md
+    assert '2. [else "Anything else", board, desktop]: anything else' in md
+    assert '3. [doc "Board canvas", board, desktop]: empty canvas' in md
+
+
 
 def test_a_recap_without_the_markable_flag_still_gets_its_buttons():
     """The board reads the round's decisions.json as stored. A hand-fixed round written without validate_decisions has
@@ -288,3 +303,22 @@ def test_a_recap_without_the_markable_flag_still_gets_its_buttons():
     js = (Path(store.__file__).parent / "board" / "board.js").read_text(encoding="utf-8")
     assert "if (b.markable !== false) append(el, decideRow(b, false));" in js
     assert "if (b.markable) append(el, decideRow" not in js
+
+
+def test_old_round_without_sections_drops_board_pins(env, tmp_path):
+    data = _review(tmp_path)
+    r = data["rounds"][0]
+    assert r["sections"][0] == {"ref": "s1", "type": "text", "title": "Why"}
+    st = store.public_state(data)["rounds"][0]
+    assert st["sections"] == r["sections"]
+    raw = {"pins": [
+        {"block": "s2", "w": "desktop", "x": 0.1, "y": 0.2, "text": "on the callout", "on": "board"},
+        {"block": "page", "w": "desktop", "x": 0.3, "y": 0.4, "text": "on the board", "on": "board"},
+        {"block": "today", "w": "phone", "x": 0.2, "y": 0.3, "text": "on the mock"}]}
+    kept = feedback.sanitize_for_round(raw, r)
+    assert [(p["block"], p.get("on")) for p in kept["pins"]] == [("s2", "board"), ("page", "board"), ("today", None)]
+    r.pop("sections")
+    old = feedback.sanitize_for_round(raw, r)
+    assert [{k: v for k, v in p.items() if k != "id"} for p in old["pins"]] == [
+        {"block": "today", "option": None, "w": "phone", "x": 0.2, "y": 0.3, "text": "on the mock"}]
+    assert old["pins"][0]["id"].startswith("p")

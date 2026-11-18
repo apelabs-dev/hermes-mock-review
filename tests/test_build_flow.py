@@ -347,6 +347,16 @@ def test_add_round_refuses_a_round_that_re_asks_approved_blocks_and_answered_que
     assert res["round"] == 2
 
 
+def test_the_reask_refusal_says_revised_must_be_a_short_string(env, tmp_path):
+    rid = _sent(tmp_path, p1={"status": "change", "note": "split it"})
+    with pytest.raises(store.ReviewError) as e:
+        api.add_round(rid, decisions=_same_plan(tmp_path))
+    msg = str(e.value)
+    assert e.value.status == 409 and "short string" in msg and "allow_reask" in msg
+    for settled in ("defaults", "q1", "q2", "p2", "d1"):
+        assert settled in msg
+
+
 def test_a_revised_block_and_allow_reask_pass_the_re_ask_guard(env, tmp_path):
     rid = _sent(tmp_path, p1={"status": "change", "note": "split it"})
     res = api.add_round(rid, decisions=_next_plan(tmp_path, {"p1", "p2"}, revised={"p1", "p2"}))   # p2 approved, but changed

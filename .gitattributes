@@ -1,0 +1,7 @@
+# Everything is text with LF endings, so a Windows checkout (core.autocrlf=true) or a commit there cannot put
+# CRLF into a file the board serves.
+* text=auto eol=lf
+
+# Vendored browser releases are served byte-for-byte and their sha256 is pinned in tests: git must never
+# normalise these bytes on either side, and a checkout must never rewrite them (so no eol rule either).
+mockreview/board/vendor/** -text !eol

@@ -1,4 +1,4 @@
-"""wake_toolsets: the opt-in that lets the woken session act, the here.now guard, and the hand-off a tool-less woken
+"""wake_toolsets: the opt-in that lets the woken session act, the loopback guard, and the hand-off a tool-less woken
 session posts instead of saying it cannot build."""
 
 import builtins
@@ -6,16 +6,19 @@ import io
 import json
 import os
 import re
+import subprocess
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from conftest import ROOT
-from mockreview import api, service, settings, setup, store
+from mockreview import api, config, runtime, service, settings, setup, store, wakeguard
 from mockreview.store import ReviewError
 from test_notice import DEC_FB, ORIGIN, _decisions_file
+from test_owner import Service, start_service, worker  # noqa: F401 (fixtures)
 from test_setup import fake_create, make_shim, no_real_tailscale_serve, run_setup  # noqa: F401 (autouse fixture)
 
 WAKE, NOTICE = "mock-review-telegram", "mock-review-telegram-notice"
@@ -103,32 +106,6 @@ def test_setup_without_wake_toolsets_never_mentions_or_writes_them(monkeypatch, 
     assert all("toolsets" not in r for r in _subs().values())
 
 
-def test_setup_refuses_wake_toolsets_while_an_unpassworded_herenow_review_is_open(env, monkeypatch, tmp_path, capsys):
-    spec = store.parse_round_spec(decisions=str(_decisions_file(tmp_path)))
-    public = store.create_review("Public", "", ORIGIN, "herenow", spec, password=False)
-    monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
-    shim = _shim(tmp_path)
-    fake_create(monkeypatch)
-    rc, out, _ = run_setup(monkeypatch, shim, capsys)
-    assert rc == 1
-    assert "refusing to set wake_toolsets" in out and public["id"] in out
-    assert re.search(r"^\s*wake toolsets\s+failed", out, re.M)
-    assert '"toolsets":' not in out                                # no line to paste while a board is ungated
-    assert _no_toolsets_on_disk()
-
-
-def test_setup_prints_the_line_with_a_passworded_herenow_review_open(env, monkeypatch, tmp_path, capsys):
-    spec = store.parse_round_spec(decisions=str(_decisions_file(tmp_path)))
-    store.create_review("Gated", "", ORIGIN, "herenow", spec, password=True)
-    monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
-    shim = _shim(tmp_path)
-    fake_create(monkeypatch)
-    rc, out, _ = run_setup(monkeypatch, shim, capsys)
-    assert rc == 0, out
-    assert "refusing to set wake_toolsets" not in out
-    assert _line(["terminal"]) in out and _no_toolsets_on_disk()
-
-
 def test_setup_refuses_wake_toolsets_with_lan_hosting(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
     shim = _shim(tmp_path)
@@ -136,17 +113,6 @@ def test_setup_refuses_wake_toolsets_with_lan_hosting(monkeypatch, tmp_path, cap
     rc, out, _ = run_setup(monkeypatch, shim, capsys, args=("--yes", "--hosting", "lan"))
     assert rc == 1
     assert "refusing to set wake_toolsets" in out and "lan hosting" in out
-    assert '"toolsets":' not in out and _no_toolsets_on_disk()
-
-
-def test_setup_refuses_wake_toolsets_with_herenow_hosting_and_password_off(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("MOCKREVIEW_HERENOW_PASSWORD", "false")
-    monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
-    shim = _shim(tmp_path)
-    fake_create(monkeypatch)
-    rc, out, _ = run_setup(monkeypatch, shim, capsys, args=("--yes", "--hosting", "herenow"))
-    assert rc == 1
-    assert "refusing to set wake_toolsets" in out and "herenow_password off" in out
     assert '"toolsets":' not in out and _no_toolsets_on_disk()
 
 
@@ -208,82 +174,99 @@ def test_hermes_reads_the_line_setup_printed(monkeypatch, tmp_path, capsys):
     assert adapter.toolsets_for_source(SimpleNamespace(user_id=f"webhook:{NOTICE}")) is None
 
 
-# ---------------------------------------------------------------- the here.now guard on create / add-round
+# ---------------------------------------------------------------- the loopback guard on create / add-round
 
-def test_create_refuses_an_unpassworded_herenow_board_while_wake_toolsets_is_set(env, monkeypatch, tmp_path):
+def test_guard_allows_wake_off_and_loopback_hosts(env, monkeypatch):
     monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
-    with pytest.raises(ReviewError) as e:
-        api.create("Public", ORIGIN, mode="herenow", decisions=str(_decisions_file(tmp_path)), password=False)
-    assert e.value.status == 409 and "wake_toolsets" in e.value.message and "no password" in e.value.message
-    assert store.list_ids() == []                                # nothing was created
-
-
-def test_herenow_guard_allows_a_password_wake_off_and_loopback_hosts(env, monkeypatch):
-    monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
-    api.check_wake_toolsets("herenow", wake=True, password=True)
-    api.check_wake_toolsets("herenow", wake=False)
     api.check_wake_toolsets("tailscale", wake=True)
     api.check_wake_toolsets("local", wake=True)
-    with pytest.raises(ReviewError, match="no password"):
-        api.check_wake_toolsets("herenow", wake=True, password=False)
+    api.check_wake_toolsets("tailscale", wake=False)
     monkeypatch.delenv("MOCKREVIEW_WAKE_TOOLSETS")
-    api.check_wake_toolsets("herenow", wake=True, password=False)
+    api.check_wake_toolsets("local", wake=True)
 
 
 def test_guard_refuses_every_waking_board_while_the_server_listens_beyond_loopback(env, monkeypatch):
     monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
     monkeypatch.setenv("MOCKREVIEW_HOST", "0.0.0.0")
-    for mode in ("local", "tailscale", "herenow"):
+    for mode in ("local", "tailscale"):
         with pytest.raises(ReviewError, match="beyond loopback"):
-            api.check_wake_toolsets(mode, wake=True, password=True)
+            api.check_wake_toolsets(mode, wake=True)
     api.check_wake_toolsets("local", wake=False)
 
 
-def test_add_round_refuses_an_unpassworded_herenow_review_while_wake_toolsets_is_set(env, monkeypatch, tmp_path):
-    spec = store.parse_round_spec(decisions=str(_decisions_file(tmp_path)))
-    public = store.create_review("Public", "", ORIGIN, "herenow", spec, password=False)
+def test_guard_refuses_a_waking_board_while_a_public_url_is_configured(env, monkeypatch):
     monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
-    with pytest.raises(ReviewError, match="wake_toolsets"):
-        api.add_round(public["id"], decisions=str(_decisions_file(tmp_path)))
-    assert len(store.load(public["id"])["rounds"]) == 1
+    monkeypatch.setenv("MOCKREVIEW_PUBLIC_URL", "https://reviews.example.com")
+    for mode in ("local", "tailscale"):
+        with pytest.raises(ReviewError, match="public URL"):
+            api.check_wake_toolsets(mode, wake=True)
+    api.check_wake_toolsets("local", wake=False)
 
 
-def test_password_off_is_refused_on_a_waking_herenow_board_while_wake_toolsets_is_set(env, monkeypatch, tmp_path):
-    spec = store.parse_round_spec(decisions=str(_decisions_file(tmp_path)))
-    gated = store.create_review("Gated", "", ORIGIN, "herenow", spec, password=True)
+def test_guard_allows_a_waking_board_without_a_public_url(env, monkeypatch):
+    monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
+    monkeypatch.delenv("MOCKREVIEW_PUBLIC_URL", raising=False)
+    monkeypatch.delenv("MOCKREVIEW_HOST", raising=False)
+    assert config.public_url() == ""                       # not vacuous: no public URL and the default loopback host
+    api.check_wake_toolsets("local", wake=True)
+    api.check_wake_toolsets("tailscale", wake=True)
+
+
+def test_guard_still_refuses_public_mode_without_a_public_url(env, monkeypatch):
+    monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
+    monkeypatch.delenv("MOCKREVIEW_PUBLIC_URL", raising=False)
+    with pytest.raises(ReviewError, match="public URL"):
+        api.check_wake_toolsets("public", wake=True)
+
+
+def test_create_refuses_a_waking_board_while_wake_toolsets_is_set(env, monkeypatch, tmp_path):
+    monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
+    monkeypatch.setenv("MOCKREVIEW_HOST", "0.0.0.0")
+    with pytest.raises(ReviewError) as e:
+        api.create("LAN board", ORIGIN, mode="local", decisions=str(_decisions_file(tmp_path)))
+    assert e.value.status == 409 and "wake_toolsets" in e.value.message and "beyond loopback" in e.value.message
+    assert store.list_ids() == []                                # nothing was created
+
+
+def test_create_sees_the_host_the_server_bound_not_the_setting(tmp_path, start_service, worker, monkeypatch):
+    """`serve --host 0.0.0.0` is the real exposure even when the host setting still says loopback."""
+    svc = start_service(host="0.0.0.0")
+    worker(svc.port)
+    monkeypatch.setenv("MOCKREVIEW_HOST", "127.0.0.1")
     monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
     with pytest.raises(ReviewError) as e:
-        api.password(gated["id"], False)
-    assert e.value.status == 409 and "no password" in e.value.message
-    assert store.load(gated["id"])["herenow"]["password_enabled"] is True     # untouched
+        api.create("LAN board", ORIGIN, mode="local", decisions=str(_decisions_file(tmp_path)))
+    assert e.value.status == 409 and "wake_toolsets" in e.value.message and "beyond loopback" in e.value.message
+    assert [p.name for p in svc.root.iterdir() if (p / "review.json").is_file()] == []
 
 
-def _gated_submission(tmp_path, applied):
+def test_a_stale_descriptor_never_masks_a_non_loopback_host_setting(env, monkeypatch):
+    """A descriptor a dead server left behind must not make the setting's 0.0.0.0 look like loopback."""
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    root = config.data_root()
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / runtime.NAME
+    path.write_text(json.dumps({"api": 1, "service": "mock-review", "pid": dead.pid, "base": "http://127.0.0.1:9",
+                                "host": "127.0.0.1", "port": 9, "data_root": str(root), "started_at": time.time(),
+                                "secret": "x" * 32}), encoding="utf-8")
+    path.chmod(0o600)
+    monkeypatch.setenv("MOCKREVIEW_HOST", "0.0.0.0")
+    monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
+    assert runtime.read(root) is not None                 # the descriptor itself is still accepted
+    assert wakeguard.lan_reason() is not None
+    with pytest.raises(ReviewError, match="beyond loopback"):
+        api.check_wake_toolsets("local", wake=True)
+
+
+def test_add_round_refuses_a_waking_board_while_wake_toolsets_is_set(env, monkeypatch, tmp_path):
     spec = store.parse_round_spec(decisions=str(_decisions_file(tmp_path)))
-    data = store.create_review("Gated", "", ORIGIN, "herenow", spec, password=True)
-    with store.locked(data["id"]):
-        d = store.load(data["id"])
-        d["herenow"].update(slug="gated-site-ab12", password_status="applied" if applied else "error",
-                            password_applied=True if applied else None)
-        store.save(data["id"], d)
-    return data
-
-
-def test_wake_is_held_until_here_now_confirms_the_password(env, monkeypatch, tmp_path):
+    data = store.create_review("Local", "", ORIGIN, "local", spec)
     monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
-    data = _gated_submission(tmp_path, applied=False)
-    service.submit(data["id"], 1, DEC_FB, data["token"])
-    assert env["receiver"].wakes == []                                   # not woken
-    sub = store.load(data["id"])["rounds"][0]["submission"]
-    assert sub["status"] == "pending_notify" and "held, not woken" in sub["last_error"]
-
-
-def test_wake_goes_out_for_a_confirmed_password_board(env, monkeypatch, tmp_path):
-    monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
-    data = _gated_submission(tmp_path, applied=True)
-    service.submit(data["id"], 1, DEC_FB, data["token"])
-    assert len(env["receiver"].wakes) == 1
-    assert store.load(data["id"])["rounds"][0]["submission"]["status"] == "notified"
+    monkeypatch.setenv("MOCKREVIEW_HOST", "0.0.0.0")
+    with pytest.raises(ReviewError, match="wake_toolsets"):
+        api.add_round(data["id"], decisions=str(_decisions_file(tmp_path)))
+    assert len(store.load(data["id"])["rounds"]) == 1
 
 
 def test_wake_is_held_for_any_board_once_the_server_listens_beyond_loopback(env, monkeypatch, tmp_path):
@@ -291,6 +274,15 @@ def test_wake_is_held_for_any_board_once_the_server_listens_beyond_loopback(env,
     spec = store.parse_round_spec(decisions=str(_decisions_file(tmp_path)))
     data = store.create_review("Tailnet", "", ORIGIN, "tailscale", spec)
     monkeypatch.setenv("MOCKREVIEW_HOST", "0.0.0.0")
+    service.submit(data["id"], 1, DEC_FB, data["token"])
+    assert env["receiver"].wakes == []
+
+
+def test_wake_is_held_for_any_board_while_a_public_url_is_configured(env, monkeypatch, tmp_path):
+    monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
+    spec = store.parse_round_spec(decisions=str(_decisions_file(tmp_path)))
+    data = store.create_review("Local", "", ORIGIN, "local", spec, wake=True)
+    monkeypatch.setenv("MOCKREVIEW_PUBLIC_URL", "https://reviews.example.com")
     service.submit(data["id"], 1, DEC_FB, data["token"])
     assert env["receiver"].wakes == []
 

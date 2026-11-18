@@ -479,28 +479,23 @@ def test_hosting_lan_warns_then_writes_host(monkeypatch, tmp_path, capsys):
     assert find(read_log(shim), "config", "set", "plugins.entries.mock-review.settings.host", "0.0.0.0")
 
 
-def test_hosting_herenow_prints_install_never_runs(monkeypatch, tmp_path, capsys):
-    shim = make_shim(tmp_path, {"webhook_enabled": True})
-    fake_create(monkeypatch)
-    rc, out, _ = run_setup(monkeypatch, shim, capsys, args=("--yes", "--hosting", "herenow"))
-    assert rc == 0
-    assert setup.HERENOW_INSTALL_CMD in out and "HERENOW_API_KEY" in out
-    assert not any("skills" in entry or "install" in entry for entry in read_log(shim))
+def test_hosting_choices_have_no_public_mode():
+    assert setup.HOSTING_CHOICES == ("local", "tailnet", "lan")
 
 
 # ---------------------------------------------------------------- migration + validate + test review
 
 def test_migration_unsets_obsolete_and_names_them(monkeypatch, tmp_path, capsys):
-    shim = make_shim(tmp_path, {"webhook_enabled": True, "obsolete": {
-        "herenow_credentials": "x", "subscriptions_file": "/tmp/y", "herenow_publish_script": "z"}})
+    from mockreview import migrate
+    obsolete = {key: "x" for key in migrate.OBSOLETE_KEYS}
+    shim = make_shim(tmp_path, {"webhook_enabled": True, "obsolete": obsolete})
     fake_create(monkeypatch)
     rc, out, _ = run_setup(monkeypatch, shim, capsys)
     assert rc == 0
     log = read_log(shim)
     unsets = find(log, "config", "unset")
-    assert {u[2] for u in unsets} == {f"plugins.entries.mock-review.settings.{k}" for k in
-                                      ("herenow_credentials", "subscriptions_file", "herenow_publish_script")}
-    for key in ("herenow_credentials", "subscriptions_file", "herenow_publish_script"):
+    assert {u[2] for u in unsets} == {f"plugins.entries.mock-review.settings.{k}" for k in migrate.OBSOLETE_KEYS}
+    for key in migrate.OBSOLETE_KEYS:
         assert key in out
 
     shim2 = make_shim(tmp_path, {"webhook_enabled": True})
@@ -593,10 +588,11 @@ def test_parse_version_and_redact():
 # ---------------------------------------------------------------- addendum gaps
 
 def test_python_ok_boundary():
-    assert setup.python_ok((3, 9, 0)) is True
-    assert setup.python_ok((3, 9)) is True
+    assert setup.python_ok((3, 11, 0)) is True
+    assert setup.python_ok((3, 11)) is True
     assert setup.python_ok((4, 0, 0)) is True
-    assert setup.python_ok((3, 8, 10)) is False
+    assert setup.python_ok((3, 10, 0)) is False
+    assert setup.python_ok((3, 9, 10)) is False
     assert setup.python_ok((2, 7, 18)) is False
 
 

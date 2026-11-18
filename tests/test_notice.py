@@ -393,21 +393,6 @@ def test_stalled_ping_404_is_terminal(env, tmp_path):
     assert service.check_stalled() == 0 and len(env["receiver"].requests) == n
 
 
-def test_stalled_ping_republishes_a_herenow_board(env, tmp_path, monkeypatch):
-    from mockreview import herenow
-    data = _decisions_review(tmp_path)
-    with store.locked(data["id"]):
-        d = store.load(data["id"])
-        d["mode"] = "herenow"
-        store.save(data["id"], d)
-    service.submit(data["id"], 1, DEC_FB, data["token"])
-    _age_submission(data["id"], 20 * 60)
-    seen = []
-    monkeypatch.setattr(herenow, "republish_quietly", lambda rid: seen.append(rid))
-    assert service.check_stalled() == 1
-    assert seen == [data["id"]]
-
-
 def test_worker_tick_runs_the_watchdog(env, monkeypatch):
     from mockreview import server
     calls = []

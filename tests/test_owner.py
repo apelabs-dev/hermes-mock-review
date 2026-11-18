@@ -3,6 +3,7 @@ wake anyone for. The owner is a REAL board server in a subprocess with its own s
 environment; the worker is this test process with a different HERMES_HOME. Nothing here touches ~/.hermes."""
 
 import hashlib
+import http.client as http_client
 import json
 import os
 import socket
@@ -17,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from conftest import FEEDBACK, ROOT, SECRET, Receiver, http, load_plugin, python_child_env
-from mockreview import api, cli, config, herenow, notify, owner, service, settings, store
+from mockreview import api, cli, config, notify, owner, service, settings, store
 from mockreview.store import ReviewError
 import test_store
 
@@ -58,7 +59,7 @@ def wait_health(port, proc=None, secs=15):
 
 
 class Service:
-    def __init__(self, tmp, secret=SECRET, receiver=None):
+    def __init__(self, tmp, secret=SECRET, receiver=None, host=None):
         self.tmp = tmp
         self.home = tmp / "owner-home"
         self.root = tmp / "owner-store"
@@ -78,8 +79,10 @@ class Service:
         # A file cannot fill a PIPE and deadlock a long-running server.
         self.stderr = tempfile.TemporaryFile(dir=tmp)
         try:
-            self.proc = subprocess.Popen([sys.executable, str(ROOT / "bin" / "mockreview"), "serve", "--port",
-                                          str(self.port)], env=env, stdout=subprocess.DEVNULL, stderr=self.stderr)
+            argv = [sys.executable, str(ROOT / "bin" / "mockreview"), "serve", "--port", str(self.port)]
+            if host:
+                argv += ["--host", host]
+            self.proc = subprocess.Popen(argv, env=env, stdout=subprocess.DEVNULL, stderr=self.stderr)
             wait_health(self.port, self.proc)
         except BaseException as e:
             try:
@@ -281,69 +284,42 @@ def test_owner_service_setting_binds_even_outside_kanban(tmp_path, start_service
     assert create(tmp_path)["owner"]["bound_to_service"] is True and len(reviews_in(svc.root)) == 1
 
 
-# ---------------------------------------------------------------- preflight fails closed BEFORE publish
+# ---------------------------------------------------------------- preflight fails closed BEFORE anything is written
 
-@pytest.fixture
-def publish_calls(monkeypatch):
-    calls = []
-
-    def fake(review_id):
-        calls.append(review_id)
-        d = store.load(review_id)
-        d["herenow"].update(slug="fake-slug", site_url="https://fake-slug.here.now/")
-        store.save(review_id, d)
-        return d
-    monkeypatch.setattr(herenow, "publish", fake)
-    return calls
-
-
-def test_missing_wake_secret_refuses_before_publish(tmp_path, start_service, worker, publish_calls):
+def test_missing_wake_secret_refuses_before_writing(tmp_path, start_service, worker):
     svc = start_service(secret=None)
     worker(svc.port)
     with pytest.raises(owner.OwnerError, match="no wake route") as e:
-        create(tmp_path, mode="herenow")
+        create(tmp_path)
     assert "MOCKREVIEW_WEBHOOK_SECRET is not set" in e.value.message
-    assert publish_calls == [] and reviews_in(svc.root) == []
+    assert reviews_in(svc.root) == []
 
 
-def test_unreachable_owner_fails_closed_for_a_worker(tmp_path, worker, publish_calls):
-    home = worker(free_port())                                                # nothing listens there
-    with pytest.raises(owner.OwnerError, match="cannot reach the board server") as e:
-        create(tmp_path, mode="herenow")
-    assert e.value.status == 503 and publish_calls == [] and not (home / "workspace").exists()
-
-
-def test_unreachable_owner_refuses_a_public_board_even_in_the_default_store(tmp_path, worker, monkeypatch, publish_calls):
+def test_unreachable_owner_allows_a_local_board_in_the_default_store(tmp_path, worker, monkeypatch):
     worker(free_port(), kanban=False)
     user = tmp_path / "worker-user"
     monkeypatch.setenv("HERMES_HOME", str(user / ".hermes"))                  # own store == the default a server watches
-    with pytest.raises(owner.OwnerError, match="refusing to publish a public board"):
-        create(tmp_path, mode="herenow")
-    assert publish_calls == []
-    res = create(tmp_path, mode="local")                                      # tailnet/local keep the old "warning" path
+    res = create(tmp_path, mode="local")
     assert res["owner"]["state"] == "unreachable" and res["server_up"] is False and "warning" in res
 
 
-def test_owner_cannot_load_the_new_board_rolls_back_before_publish(tmp_path, start_service, worker, publish_calls,
-                                                                  monkeypatch):
+def test_owner_cannot_load_the_new_board_rolls_back(tmp_path, start_service, worker, monkeypatch):
     svc = start_service()
     worker(svc.port)
     monkeypatch.setattr(owner, "confirm_visible", lambda rid, ctx, timeout=4.0: False)
     with pytest.raises(owner.OwnerError, match="could not load the review"):
-        create(tmp_path, mode="herenow")
-    assert publish_calls == [] and reviews_in(svc.root) == []
+        create(tmp_path)
+    assert reviews_in(svc.root) == []
 
 
-def test_successful_create_publishes_only_after_the_owner_can_see_it(tmp_path, start_service, worker, publish_calls,
-                                                                    monkeypatch):
+def test_successful_create_confirms_the_owner_can_see_it(tmp_path, start_service, worker, monkeypatch):
     svc = start_service()
     worker(svc.port)
     order = []
     real = owner.confirm_visible
     monkeypatch.setattr(owner, "confirm_visible", lambda *a, **k: (order.append("visible"), real(*a, **k))[1])
-    monkeypatch.setattr(herenow, "publish", lambda rid: (order.append("publish"), store.load(rid))[1])
-    create(tmp_path, mode="herenow")
-    assert order == ["visible", "publish"]
+    res = create(tmp_path)
+    assert order == ["visible"] and reviews_in(svc.root) == [res["review_id"]]
 
 
 class OldServer:
@@ -369,15 +345,136 @@ class OldServer:
         self.httpd.server_close()
 
 
-def test_server_without_owner_api_cannot_vouch_for_a_workers_private_store(tmp_path, worker, publish_calls):
+def test_server_without_owner_api_cannot_vouch_for_a_workers_private_store(tmp_path, worker):
     old = OldServer()
     try:
         home = worker(old.port)
         with pytest.raises(owner.OwnerError, match="predates /api/owner|private to this profile"):
-            create(tmp_path, mode="herenow")
-        assert publish_calls == [] and not (home / "workspace").exists()
+            create(tmp_path)
+        assert not (home / "workspace").exists()
     finally:
         old.close()
+
+
+class Impostor:
+    """A local program on the board port that answers a well-formed /api/owner for a store it does not own."""
+
+    def __init__(self, data_root):
+        outer = self
+        self.hits = 0
+
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                outer.hits += 1
+                if self.path.split("?")[0] == "/api/owner":
+                    body = json.dumps({"ok": True, "service": "mock-review", "api": 1, "pid": 424242,
+                                       "data_root": str(data_root), "hermes_home": str(data_root),
+                                       "wake": {"route": "mock-review", "ready": True, "secret": "set",
+                                                "error": None, "url": "http://127.0.0.1:1/unused"}}).encode()
+                    self.send_response(200)
+                else:
+                    body = b"nope"
+                    self.send_response(404)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}"
+        self.port = self.httpd.server_address[1]
+        threading.Thread(target=self.httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+
+    def close(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+
+class Relay:
+    """Answers /api/owner for a store it does not own, and proxies the challenge to a genuine server."""
+
+    def __init__(self, data_root, genuine_port):
+        outer = self
+        self.hits = 0
+
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                outer.hits += 1
+                if self.path.split("?")[0] == "/api/owner":
+                    code = 200
+                    body = json.dumps({"ok": True, "service": "mock-review", "api": 1, "pid": 424242,
+                                       "data_root": str(data_root), "hermes_home": str(data_root),
+                                       "wake": {"route": "mock-review", "ready": True, "secret": "set",
+                                                "error": None, "url": "http://127.0.0.1:1/unused"}}).encode()
+                elif self.path.split("?")[0] == "/api/owner/challenge":
+                    # `http` is conftest's request helper here, so the stdlib module needs its own name.
+                    conn = http_client.HTTPConnection("127.0.0.1", genuine_port, timeout=2)
+                    try:
+                        conn.request("GET", self.path, headers={"User-Agent": "relay"})
+                        answer = conn.getresponse()
+                        code, body = answer.status, answer.read(65536)
+                    except OSError:
+                        code, body = 502, b"nope"
+                    finally:
+                        conn.close()
+                else:
+                    code, body = 404, b"nope"
+                self.send_response(code)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self.port = self.httpd.server_address[1]
+        threading.Thread(target=self.httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+
+    def close(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+
+def test_a_relay_cannot_prove_a_store_its_answer_reports(tmp_path, start_service, worker):
+    """The proof binds the data_root the answer names: proxying the challenge to a genuine server for this
+    process's store must not make the reported store trusted."""
+    svc = start_service()
+    attacker = tmp_path / "attacker-store"
+    attacker.mkdir()
+    relay = Relay(attacker, svc.port)
+    try:
+        worker(relay.port, kanban=False, MOCKREVIEW_HOME=str(svc.root), MOCKREVIEW_OWNER="service")
+        state, info, _ = owner.probe()
+        assert (state, info) == ("unreachable", None)
+        target, _ = owner.adopt_target()
+        assert target != attacker
+        with pytest.raises(owner.OwnerError):
+            create(tmp_path)
+    finally:
+        relay.close()
+    assert relay.hits > 0
+    assert reviews_in(attacker) == []
+
+
+def test_an_unproven_owner_reply_is_never_trusted(tmp_path, worker):
+    """No descriptor, no proof: the reported store is ignored and the call stays in the local/default store."""
+    attacker = tmp_path / "attacker-store"
+    attacker.mkdir()
+    imp = Impostor(attacker)
+    try:
+        worker(imp.port, kanban=False)
+        res = create(tmp_path, wake=False)
+        target, why = owner.adopt_target()
+    finally:
+        imp.close()
+    assert imp.hits > 0
+    assert config.own_data_root() == owner.default_owner_root()
+    assert reviews_in(config.own_data_root()) == [res["review_id"]]
+    assert reviews_in(attacker) == []
+    assert target == owner.default_owner_root() and "default watched store" in why
 
 
 def test_owner_endpoint_is_loopback_only_and_has_no_secrets(server, env):
@@ -506,20 +603,15 @@ def private(env, tmp_path, monkeypatch):
     priv = tmp_path / "private-store"
     monkeypatch.setenv("MOCKREVIEW_HOME", str(priv))
     spec = store.parse_round_spec(decisions=str(_decisions(tmp_path)), design=str(_design(tmp_path)))
-    data = store.create_review("Synthetic review", "brief", {"platform": "discord", "chat_id": THREAD, "thread_id": THREAD}, "herenow", spec)
+    data = store.create_review("Synthetic review", "brief", {"platform": "discord", "chat_id": THREAD, "thread_id": THREAD}, "local", spec)
     rid = data["id"]
-    with store.locked(rid):
-        d = store.load(rid)
-        d["herenow"].update(slug="synthetic-review-ab12", site_url="https://synthetic-review-ab12.here.now/",
-                            processed_records=["rec_01"], auth_mode="authenticated")
-        store.save(rid, d)
-    service.submit(rid, 1, DEC_FB, data["token"], source="herenow", record_id="rec_01", do_notify=False)
+    service.submit(rid, 1, DEC_FB, data["token"], do_notify=False)
     with store.locked(rid):
         d = store.load(rid)
         d["rounds"][0]["submission"].update(attempts=1, last_error="signing secret missing")
         store.save(rid, d)
-    (priv / rid / "site").mkdir()
-    (priv / rid / "site" / "state.json").write_text('{"public": true}', encoding="utf-8")
+    (priv / rid / "archive").mkdir()
+    (priv / rid / "archive" / "record.json").write_text('{"archived": true}', encoding="utf-8")
     monkeypatch.setenv("MOCKREVIEW_HOME", str(tmp_path / "watched-store"))
     return {"rid": rid, "priv": priv, "src": priv / rid, "watched": tmp_path / "watched-store",
             "backup": tmp_path / "backups", "token": data["token"]}
@@ -540,10 +632,9 @@ def test_adopt_moves_every_byte_adds_only_the_marker_and_keeps_the_delivery_id(p
     for k in ("wake_note", "adopted"):
         old.pop(k)
     assert list(new)[0] == "wake_note" and new["wake_note"]["seq"] == 1 and "no new user instruction" in new["wake_note"]["text"]
-    assert old["rounds"][0]["submission"] == sub0                              # delivery id, record id, feedback untouched
+    assert old["rounds"][0]["submission"] == sub0                              # delivery id, feedback untouched
     assert sub0["delivery_id"] == f"mockreview-{rid}-r1-s1" and old["token"] == private["token"]
-    assert old["herenow"]["site_url"] == "https://synthetic-review-ab12.here.now/"
-    assert store.list_ids() == [rid] if False else rid in reviews_in(private["watched"])
+    assert rid in reviews_in(private["watched"])
     import tarfile
     with tarfile.open(res["backup"]) as tf:                                    # the backup holds the original bytes
         names = {m.name for m in tf.getmembers() if m.isfile()}
@@ -555,7 +646,7 @@ def test_adopt_refuses_a_different_review_with_the_same_id(private, tmp_path):
     rid = private["rid"]
     clash = private["watched"] / rid
     clash.mkdir(parents=True)
-    (clash / "review.json").write_text(json.dumps({"id": rid, "token": "someone-else", "herenow": {"slug": "other"}}), encoding="utf-8")
+    (clash / "review.json").write_text(json.dumps({"id": rid, "token": "someone-else"}), encoding="utf-8")
     src_before = _digest(private["src"])
     with pytest.raises(ReviewError, match="collision") as e:
         owner.adopt(str(private["src"]), str(private["backup"]))
@@ -564,14 +655,12 @@ def test_adopt_refuses_a_different_review_with_the_same_id(private, tmp_path):
     assert not private["backup"].exists()                                       # refused before any backup was made
 
 
-@pytest.mark.parametrize("field,value,msg", [("token", None, "same submit token"), ("slug", "synthetic-review-ab12", "same here.now slug")])
-def test_adopt_refuses_token_or_slug_collisions_with_another_review(private, field, value, msg):
+def test_adopt_refuses_a_token_collision_with_another_review(private):
     other = private["watched"] / "another-review-000000"
     other.mkdir(parents=True)
-    data = {"id": "another-review-000000", "token": private["token"] if field == "token" else "t2", "rounds": [],
-            "herenow": {"slug": value or "x"}}
+    data = {"id": "another-review-000000", "token": private["token"], "rounds": []}
     (other / "review.json").write_text(json.dumps(data), encoding="utf-8")
-    with pytest.raises(ReviewError, match=msg):
+    with pytest.raises(ReviewError, match="same submit token"):
         owner.adopt(str(private["src"]), str(private["backup"]))
     assert private["src"].is_dir()
 
@@ -600,6 +689,7 @@ def test_adopt_validates_its_input(private, tmp_path):
         owner.adopt(str(wrong), str(private["backup"]))
 
 
+@pytest.mark.slow
 def test_adopted_review_is_delivered_once_by_the_real_service(tmp_path, start_service, private, monkeypatch):
     svc = start_service()
     monkeypatch.setenv("MOCKREVIEW_HOME", str(svc.root))                       # the review lands in THE WATCHED store

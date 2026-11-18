@@ -69,24 +69,6 @@ A create call says `Start the board server`. No server is running for a store th
 `A prototype ("try it live") round is turned off`. Prototype rounds need `offer_live_demo` set to true, or
 `--allow-live-demo` on the call.
 
-A create or add-round on a password-gated here.now board says a prototype asset is `file not found`, `leaves the
-prototype's folder` (including a script string such as `'lost/poster.png'` or a `srcset` candidate that names no file),
-is a `symbolic link`, is `too big to inline` or is an unsupported reference (a local frame, another
-page, a manifest, a worker, a `<base href>`). Gated prototype rounds are bundled into one self-contained HTML file so the
-sandboxed frame needs no further requests; every problem is listed with the file and nothing was published. Fix the files
-named, or inline/remove the unsupported reference, and run the call again. See
-[hosting](hosting.md#prototype-rounds-on-a-password-gated-board).
-
-`browser check of the password-gated prototype failed: ...`. After publishing, mock-review loads the board in a real
-headless Chrome, Chromium or Edge, behind its password, in the production `sandbox="allow-scripts"` frame, and counts
-failed requests. That frame has an opaque origin, so the `SameSite=Lax` unlock cookie is not sent with its requests and
-the gate answers 401 for any file the page still loads from the site. `curl` with the cookie returns 200 and proves
-nothing, so it is not used. The message lists the failing paths. The link and password are withheld until a check
-passes: add a fixed round, retry `hermes mockreview publish <review id>`, or turn the password off (the link is then the
-ordinary public one; a later decisions round releases it too). A failure message may also say that a number of requests
-had not finished when the wait ended: the page keeps loading something that never completes. If it says no Chrome, Chromium or Edge was
-found, install one or set `MOCKREVIEW_BROWSER` to its executable; the board stays unshared until it can be checked.
-
 `decisions.json: ...` or `blocks[n]: ...`. The file failed validation. The message names the block. See
 [decisions-format.md](decisions-format.md).
 
@@ -146,8 +128,8 @@ by itself, set `wake_toolsets` (for example `hermes config set plugins.entries.m
 "mock-review,terminal,file"`; include `mock-review` so it can call the mock_review tools) and run `hermes mockreview setup` again. Setup
 prints the `"toolsets": [...]` line and the route to add it to in `webhook_subscriptions.json`; add it by hand (the
 summary shows `wake toolsets manual`). The gateway reads the route file again on its next request. Every setup run
-re-subscribes the routes and drops the key, so add the line again after each run. Setup refuses
-while a waking board would be ungated (a here.now password off, or `host` beyond loopback): see [security](security.md#tools-for-the-woken-session-wake_toolsets).
+re-subscribes the routes and drops the key, so add the line again after each run. Setup refuses while a waking board
+would be ungated (`host` beyond loopback): see [security](security.md#tools-for-the-woken-session-wake_toolsets).
 
 ## Sent but nothing happened
 
@@ -190,8 +172,8 @@ Check them in order:
 
 The round brings back a block the last round approved, or a question it answered, with the same id, still markable and
 without `revised`. Only blocks marked Change, skipped or left open come back; move the settled ones into a `settled`
-block, or set `revised` on a block that really changed. `--allow-reask` (`allow_reask: true` for the tools) asks them
-again on purpose.
+block, or set `revised` on a block that really changed to a short string label such as `Revised`, not a flag.
+`--allow-reask` (`allow_reask: true` for the tools) asks them again on purpose.
 
 ### A round's files were edited after it was added
 
@@ -214,9 +196,9 @@ building posts no round. See [settings.md](settings.md) for the three settings.
 ## Multiplexing gateways
 
 With `gateway.multiplex_profiles` on, one gateway process serves every profile. The board inside that gateway reads its
-signing secret (`MOCKREVIEW_WEBHOOK_SECRET`) and the here.now key (`HERENOW_API_KEY`) from the gateway profile's own
-`HERMES_HOME`: its `.env` and its configured secret sources, the same home its settings and reviews come from. It never
-uses a routed profile's secrets, even when it starts or answers during that profile's turn.
+signing secret (`MOCKREVIEW_WEBHOOK_SECRET`) from the gateway profile's own `HERMES_HOME`: its `.env` and its configured
+secret sources, the same home its settings and reviews come from. It never uses a routed profile's secrets, even when it
+starts or answers during that profile's turn.
 
 The board reports the signing secret as `not-set` (`hermes mockreview owner` shows `"secret": "not-set"` under
 `server.info.wake`) although the gateway has it. On a multiplexing gateway the value must be in that profile's `.env`,
@@ -228,17 +210,6 @@ A rotated secret is used from the next request and the next retry on, without re
 
 `/api/owner` answers HTTP 500 and the gateway log shows `UnscopedSecretError`. The installed plugin predates the fix
 for multiplexing gateways (see [CHANGELOG.md](../CHANGELOG.md)). Update it and run `hermes gateway restart`.
-
-## here.now
-
-`install-here-now-skill`. The here-now skill is not installed in the active Hermes home. Run
-`hermes skills install official/productivity/here-now -y`.
-
-`HERENOW_API_KEY is not set (Hermes secret scope or environment)`. Inside Hermes, run
-`hermes config set HERENOW_API_KEY <key>`; outside Hermes, set `HERENOW_API_KEY` in the process environment.
-
-A published page loads but feedback never comes back with `account_required` in the log. The publish ran without your
-key. Check the key, then run `hermes mockreview publish <review id>` again.
 
 ## Settings
 

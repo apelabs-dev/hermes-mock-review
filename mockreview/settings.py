@@ -15,6 +15,7 @@ notify-test --secret-env selects a scoped secret name; it does not read process 
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import os
@@ -80,9 +81,19 @@ SPEC: List[Setting] = [
             "never offers Build. A round with no gate always has Send.", "feedback",
             choices=("send", "build"), review=True),
     Setting("interactive_elements", "bool", True, "Mocks carry working controls. On: build every control in a mock "
-            "so it responds (a dropdown opens, a switch flips, a tab changes, a field takes text), and the board "
-            "opens on Tap so taps reach the mock; the reviewer switches to Pin in the header to comment. Off: mocks "
-            "are static pictures and the board opens on Pin.", "feedback", review=True),
+            "so it responds (a dropdown opens, a switch flips, a tab changes, a field takes text); the comment toggle "
+            "is always one press away (C). Off: mocks are static pictures.", "feedback", review=True),
+    Setting("pin_fix", "bool", False, "Let a reviewer ask Hermes to patch one block of the current round in place, "
+            "from a pin or an @Hermes comment, instead of sending a new round. Off: pins and comments are notes only.",
+            "feedback", review=True),
+    Setting("pin_fix_window_seconds", "float", 20.0, "Requests that arrive within this many seconds of each other "
+            "share one wake-up.", "feedback", lo=0, hi=600, review=True),
+    Setting("pin_fix_min_seconds", "float", 60.0, "Minimum seconds between two pin-fix wake-ups for one review.",
+            "feedback", lo=0, hi=3600, review=True),
+    Setting("pin_fix_max_per_hour", "int", 60, "Most pin-fix requests one review accepts in a rolling hour.",
+            "feedback", lo=1, hi=600, review=True),
+    Setting("pin_fix_max_per_round", "int", 60, "Most pin-fix requests one round accepts.",
+            "feedback", lo=1, hi=600, review=True),
     Setting("webhook_url", "str", "http://localhost:8644/webhooks/mock-review", "Hermes webhook base URL; the route suffix is selected by origin platform.",
             "feedback"),
     Setting("webhook_route", "str", "mock-review", "Webhook route prefix; setup creates <prefix>-<platform> for each origin platform.", "feedback"),
@@ -106,19 +117,22 @@ SPEC: List[Setting] = [
             "terminal, file (the list replaces Hermes's webhook default). hermes mockreview setup prints the toolsets line to add by hand to the wake "
             "route in webhook_subscriptions.json; add it again after every setup run. Empty: Hermes's safe webhook tools only, and "
             "the build continues in the origin chat's session. Refused for a waking board whose Send is ungated "
-            "(a here.now board with its password off, or any board while host listens beyond loopback), because "
-            "that board text would reach these tools.", "feedback"),
-    Setting("poll_seconds", "float", 60.0, "Seconds between here.now Site Data polls.", "feedback", lo=5, hi=86400),
+            "(any board while host listens beyond loopback), because that board text would reach these tools.",
+            "feedback"),
     # hosting
     Setting("default_host", "str", "local", "Where a review is hosted when the call doesn't say: tailnet "
-            "(private, over Tailscale), local (this computer's own address, no Tailscale) or herenow (internet link, password protected by default).",
-            "hosting", choices=("tailnet", "local", "herenow"),
-            aliases={"tailscale": "tailnet", "here.now": "herenow", "lan": "local"}),
-    Setting("herenow_password", "bool", True, "Password protect new here.now reviews. Stored per review; "
-            "change an existing review with mockreview password <id> on|off.", "hosting"),
-    Setting("ask_host_each_time", "bool", True, "Ask the user tailnet, local or here.now before every review "
+            "(private, over Tailscale), local (this computer's own address, no Tailscale) or public (an "
+            "internet URL behind Tailscale Funnel or any TLS proxy).",
+            "hosting", choices=("tailnet", "local", "public"),
+            aliases={"tailscale": "tailnet", "lan": "local"}),
+    Setting("ask_host_each_time", "bool", True, "Ask the user tailnet, local or public before every review "
             "(read by the skill and tool text, not enforced in code).", "hosting"),
     Setting("public_base", "str", "", "Tailnet URL for review links. Empty: detect MagicDNS with tailscale status --json.", "hosting"),
+    Setting("public_url", "str", "", "The public HTTPS URL a TLS proxy serves this board at (Caddy, nginx, "
+            "Cloudflare Tunnel, oauth2-proxy). Empty: the Tailscale Funnel URL when Funnel serves the board, else "
+            "public_base.", "hosting"),
+    Setting("funnel_port", "int", 8443, "HTTPS port `hermes mockreview public on` maps through Tailscale Funnel. "
+            "Funnel allows only 443, 8443 and 10000; 443 is usually taken.", "hosting", lo=1, hi=65535),
     Setting("host", "str", "127.0.0.1", "Address the board server binds. Loopback (default) keeps it on this "
             "computer (tailnet via tailscale serve); 0.0.0.0 shares it with every device on your network, "
             "unauthenticated, so local links open on other devices.", "hosting",
@@ -133,6 +147,29 @@ SPEC: List[Setting] = [
             "hosting"),
     Setting("lan_address", "str", "", "Address local-mode links use. Empty: this computer's network address, "
             "detected (127.0.0.1 while the server binds loopback only).", "hosting"),
+    # access (who may open a board; see docs/security.md)
+    Setting("loopback_owner", "bool", True, "A request from this computer that did not come through a proxy is the "
+            "install's owner (an admin) with no sign-in. Off: everyone signs in, the owner with mockreview login.",
+            "access"),
+    Setting("trusted_proxies", "list", ["127.0.0.1", "::1"], "Addresses or networks of the reverse proxies whose "
+            "identity headers are read (tailscale serve, cloudflared and most local proxies connect from loopback). "
+            "Identity headers from any other peer are ignored.", "access"),
+    Setting("tailscale_identity", "bool", True, "Sign in a tailnet person whose Tailscale Serve identity "
+            "(Tailscale-User-Login) is linked to an account. Read only from trusted_proxies, only when "
+            "X-Forwarded-For is the single tailnet address Serve sets (100.64.0.0/10 or fd7a:115c:a1e0::/48), and "
+            "never for a Funnel request, a public host, or a request that also carries another source's identity "
+            "headers. Any other proxy in trusted_proxies must strip Tailscale-User-* headers, or turn this off.",
+            "access"),
+    Setting("forwarded_identity", "bool", False, "Sign in a person whose X-Forwarded-User / X-Forwarded-Email "
+            "(oauth2-proxy, Authelia) is linked to an account. Read only from trusted_proxies; turn it on only when "
+            "that proxy strips these headers from incoming requests. Refused on a public host and with the Funnel "
+            "marker (Funnel and Serve connect from a trusted loopback proxy and strip only Tailscale-* headers).",
+            "access"),
+    Setting("cloudflare_team", "str", "", "Cloudflare Access team name (the <team> in <team>.cloudflareaccess.com). "
+            "With cloudflare_audience set, the Cf-Access-Jwt-Assertion JWT signs in a linked account; needs the "
+            "plugin's crypto extra (PyJWT with cryptography) or the server refuses to start.", "access"),
+    Setting("cloudflare_audience", "str", "", "The Cloudflare Access application's AUD tag; a JWT for any other "
+            "audience is refused.", "access"),
     # demo
     Setting("offer_live_demo", "bool", False, "Allow a prototype (\"try it live\") round. Off: create/add-round "
             "refuse one unless the call allows it.", "demo"),
@@ -140,12 +177,14 @@ SPEC: List[Setting] = [
     Setting("data_dir", "str", "", "Where reviews live. Empty: $HERMES_HOME/workspace/mock-reviews.",
             "housekeeping", env="MOCKREVIEW_HOME"),
     Setting("auto_close_idle_days", "int", 0, "Close an open review after this many days without a new round or "
-            "feedback (here.now: its public site is deleted). 0 = never.", "housekeeping", lo=0, hi=3650),
+            "feedback. 0 = never.", "housekeeping", lo=0, hi=3650),
     Setting("keep_closed_days", "int", 0, "Delete a closed review this many days after it closed. "
             "0 = keep forever.", "housekeeping", lo=0, hi=3650),
     Setting("housekeeping_seconds", "int", 3600, "Seconds between the server's auto-close/prune passes.",
             "housekeeping", lo=60, hi=604800),
     # server
+    Setting("sse_heartbeat_seconds", "int", 15, "Seconds between heartbeat comments on a quiet server-sent-events "
+            "stream, so proxies do not drop it.", "server", lo=1, hi=300),
     Setting("autostart", "bool", False, "Start the board server inside the Hermes gateway process (a background "
             "thread serving host:port) when the gateway's webhook platform connects. Off (default): nothing runs in "
             "the background; run `hermes mockreview serve` yourself. Restart the gateway after changing it, host or "
@@ -433,6 +472,23 @@ def file_settings() -> Tuple[Dict[str, Any], Optional[str], str]:
 
 # ---------------------------------------------------------------- coercion + resolution
 
+def valid_public_url(v: str) -> bool:
+    """http(s)://host[:port] with no path, query, fragment or credentials ('' is allowed)."""
+    from urllib.parse import urlsplit
+    if any(c in v for c in " \t\r\n"):
+        return False
+    try:
+        parts = urlsplit(v)
+        port = parts.port
+    except ValueError:
+        return False
+    if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
+        return False
+    if parts.path or parts.query or parts.fragment or parts.username is not None or parts.password is not None:
+        return False
+    return port is None or 1 <= port <= 65535
+
+
 def coerce(s: Setting, v: Any) -> Any:
     """Validate/convert one value for a setting. Raises SettingsError with a message naming the setting."""
     def bad(why: str) -> SettingsError:
@@ -468,6 +524,13 @@ def coerce(s: Setting, v: Any) -> Any:
         if not isinstance(v, (list, tuple)):
             raise bad("must be a list")
         items = [str(x).strip().lower() for x in v]
+        if s.name == "trusted_proxies":
+            for x in items:
+                try:
+                    ipaddress.ip_network(x, strict=False)
+                except ValueError:
+                    raise bad(f"{x!r} is not an IP address or network")
+            return items
         if s.name == "devices":
             if not items:
                 raise bad("needs at least one of desktop, tablet, mobile")
@@ -489,6 +552,8 @@ def coerce(s: Setting, v: Any) -> Any:
     if not isinstance(v, (str, int, float)) or isinstance(v, bool):
         raise bad("must be text")
     v = str(v).strip()
+    if s.name == "public_url" and v and not valid_public_url(v):
+        raise bad("must be an http(s)://host[:port] URL with no path, query, fragment or credentials")
     if s.aliases:
         v = s.aliases.get(v.lower(), v)
     if s.choices:
@@ -595,8 +660,8 @@ def render_config_schema(indent: str = "  ") -> str:
             return "true" if v else "false"
         if isinstance(v, (int, float)):
             return repr(v)
-        if isinstance(v, list):
-            return "[" + ", ".join(v) + "]"
+        if isinstance(v, list):  # bare words stay bare; anything else (an address like ::1) is quoted
+            return "[" + ", ".join(x if re.fullmatch(r"[A-Za-z][\w-]*", x) else json.dumps(x) for x in v) + "]"
         return json.dumps(v)
     lines = ["config_schema:"]
     for s in SPEC:
@@ -607,7 +672,6 @@ def render_config_schema(indent: str = "  ") -> str:
             lines.append(f"{indent * 2}enum: [{', '.join(json.dumps(c) for c in s.choices)}]")
         lines.append(f"{indent * 2}description: {json.dumps(s.description + ' Env: ' + s.env_name + '.')}")
     for name, env, description in (
-        ("herenow_api_key", "HERENOW_API_KEY", "Optional here.now key; required only for public hosting."),
         ("webhook_secret", "MOCKREVIEW_WEBHOOK_SECRET", "Optional signing secret; required only for wake delivery."),
     ):
         lines.extend((f"{indent}{name}:", f"{indent * 2}type: secret", f"{indent * 2}env: {env}",

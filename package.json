@@ -1,0 +1,12 @@
+{
+  "name": "mock-review-ui",
+  "private": true,
+  "scripts": {
+    "build:css": "tailwindcss -i mockreview/board/src/board.src.css -o mockreview/board/tw.css",
+    "check:css": "mkdir -p .dispatch/scratch && tailwindcss -i mockreview/board/src/board.src.css -o .dispatch/scratch/tw.check.css && cmp mockreview/board/tw.css .dispatch/scratch/tw.check.css"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.1.0",
+    "tailwindcss": "^4.1.0"
+  }
+}

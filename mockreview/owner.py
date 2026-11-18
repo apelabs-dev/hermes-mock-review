@@ -1,6 +1,6 @@
 """Board ownership: the running board server owns storage and wake-ups.
 
-A review is only useful when the server that serves the board, polls here.now and POSTs the wake-up can *find* it.
+A review is only useful when the server that serves the board and POSTs the wake-up can *find* it.
 The server reads one store (``data_dir`` / ``$HERMES_HOME/workspace/mock-reviews``) and resolves its signing
 secret through Hermes. Workers may use a different home, so tools verify the owning store before publishing.
 
@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
-from . import config, notify, settings, store
+from . import config, notify, runtime, settings, store
 from .store import ReviewError
 
 SERVICE = "mock-review"
@@ -95,19 +95,40 @@ def describe() -> Dict[str, Any]:
 
 # ---------------------------------------------------------------- client side
 
+def _proves_itself(base: str, info: Dict[str, Any], timeout: float) -> bool:
+    """True when the listener at ``base`` answers the challenge of the store its answer names.
+
+    Only the reported store is a candidate, and only while it exists and holds a trusted descriptor: a relay that
+    proxies the challenge to a genuine server which owns some other store must not prove the store it reports.
+    """
+    raw = str(info.get("data_root") or "").strip()
+    if not raw:
+        return False
+    try:
+        reported = Path(raw).expanduser()
+    except (OSError, ValueError):
+        return False
+    if not reported.is_dir():
+        return False
+    return runtime.read(reported) is not None and runtime.verify(base, reported, timeout=timeout)
+
+
 def probe(timeout: float = 2.0) -> Tuple[str, Optional[Dict[str, Any]], str]:
     """Ask the board server who owns storage.
 
-    ('ok', info, '')            an owner-API server answered
+    ('ok', info, '')            a server answered, and proved it holds the descriptor of a store it names
     ('legacy', None, why)       a server answered /healthz but predates /api/owner (it cannot report its store)
-    ('unreachable', None, why)  nothing answered
+    ('unreachable', None, why)  nothing answered, or the answer could not prove it is this install's board
     """
     base = config.local_base()
     try:
         with urllib.request.urlopen(base + OWNER_PATH, timeout=timeout) as r:
             info = json.loads(r.read(65536).decode("utf-8", "replace"))
         if isinstance(info, dict) and info.get("service") == SERVICE and isinstance(info.get("data_root"), str):
-            return "ok", info, ""
+            if _proves_itself(base, info, timeout):
+                return "ok", info, ""
+            return "unreachable", None, (f"{base}{OWNER_PATH} answered, but the server could not prove it is this "
+                                         "install's board")
         return "unreachable", None, f"{base}{OWNER_PATH} did not answer like a mock-review server"
     except urllib.error.HTTPError as e:
         if e.code == 404:
@@ -264,8 +285,7 @@ def _tree_digest(root: Path) -> Dict[str, str]:
 
 
 def _identity(d: Dict[str, Any]) -> Dict[str, Any]:
-    hn = d.get("herenow") or {}
-    return {"id": d.get("id"), "token": d.get("token"), "slug": hn.get("slug")}
+    return {"id": d.get("id"), "token": d.get("token")}
 
 
 def _pending_submission(d: Dict[str, Any]) -> Optional[Tuple[int, int]]:
@@ -329,7 +349,7 @@ def adopt(src: str, backup_dir: str, note: Optional[str] = None, target: Optiona
             if _identity(ddata) == _identity(sdata):
                 return {"adopted": False, "already_in_store": True, "review_id": rid, "dest": str(dest),
                         "source_left_in_place": str(srcp),
-                        "note": "an identical review (same id, token, here.now slug) is already in the store; "
+                        "note": "an identical review (same id and token) is already in the store; "
                                 "nothing was changed or removed"}
             raise ReviewError(f"collision: {dest} already holds a different review "
                               f"(identity {_identity(ddata)} vs {_identity(sdata)}). Nothing was changed.", 409)
@@ -341,15 +361,13 @@ def adopt(src: str, backup_dir: str, note: Optional[str] = None, target: Optiona
             oid, sid = _identity(od), _identity(sdata)
             if oid["token"] and oid["token"] == sid["token"]:
                 raise ReviewError(f"collision: review {other} in the store has the same submit token", 409)
-            if oid["slug"] and sid["slug"] and oid["slug"] == sid["slug"]:
-                raise ReviewError(f"collision: review {other} in the store is published at the same here.now slug", 409)
         before = _tree_digest(srcp)
         pend = _pending_submission(sdata)
         if dry_run:
             return {"adopted": False, "dry_run": True, "review_id": rid, "source": str(srcp), "dest": str(dest),
                     "target": why_target, "files": len(before), "collisions": None,
                     "pending": {"round": pend[0], "seq": pend[1]} if pend else None,
-                    "source_identity": {"id": rid, "slug": _identity(sdata)["slug"]}}
+                    "source_identity": {"id": rid}}
         bdir = Path(backup_dir).expanduser()
         bdir.mkdir(parents=True, exist_ok=True)
         os.chmod(bdir, 0o700)

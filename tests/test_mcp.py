@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from conftest import ROOT, load_plugin, python_child_env
-from mockreview import mcp, service, store
+from mockreview import config, mcp, service, store
 from test_store import _decisions
 
 FB = {"marks": {"recap": {"status": "approve"}, "d1": {"status": "change", "note": "smaller"}},
@@ -112,16 +112,37 @@ def test_ping_returns_an_empty_result():
 
 # ---------------------------------------------------------------- tools/list
 
-def test_tools_list_has_exactly_the_five_tools_with_object_schemas():
+def test_tools_list_has_exactly_the_nine_tools_with_object_schemas():
     res = mcp.handle_request(request("tools/list"), mcp.Options())
     listed = res["result"]["tools"]
     assert [t["name"] for t in listed] == list(mcp.TOOL_NAMES)
-    assert len(listed) == 5
+    assert len(listed) == 9
+    assert [t["name"] for t in listed[6:]] == list(mcp.COMMENT_TOOL_NAMES)
     for tool in listed:
         schema = tool["inputSchema"]
         assert schema["type"] == "object"
         assert isinstance(schema["properties"], dict) and "required" in schema
         assert tool["description"]
+    patch = {t["name"]: t for t in listed}["mock_review_patch_block"]["inputSchema"]
+    assert patch["required"] == ["review_id", "block", "html", "round", "if_rev"]
+    assert patch["properties"]["round"]["type"] == "integer"
+    assert patch["properties"]["if_rev"]["type"] == "integer"
+    assert patch["properties"]["request_ids"]["items"] == {"type": "string"}
+
+
+def test_comment_tool_schemas_name_their_limits_and_the_hermes_guard():
+    listed = {t["name"]: t for t in mcp.handle_request(request("tools/list"), mcp.Options())["result"]["tools"]}
+    comments = listed["list_comments"]["inputSchema"]
+    assert comments["required"] == ["review_id"]
+    assert comments["properties"]["status"]["enum"] == ["open", "resolved", "all"]
+    reply = listed["reply"]["inputSchema"]
+    assert reply["required"] == ["thread_id", "text"]
+    assert "2000" in reply["properties"]["text"]["description"]
+    assert "hermes" in reply["properties"]["mentions"]["description"].lower()
+    resolve = listed["resolve"]["inputSchema"]
+    assert resolve["required"] == ["thread_id"]
+    assert resolve["properties"]["reopen"]["type"] == "boolean"
+    assert "token" in listed["reply"]["description"].lower()
 
 
 def test_look_keys_come_from_settings_spec():
@@ -133,12 +154,13 @@ def test_look_keys_come_from_settings_spec():
     assert create["devices"]["type"] == "array" and create["devices"]["items"] == {"type": "string"}
     assert create["max_pins"]["type"] == "integer"
     assert create["default_device"]["enum"] == ["auto", "desktop", "tablet", "mobile"]
-    assert create["mode"]["enum"] == ["tailnet", "tailscale", "local", "lan", "herenow"]
+    assert create["mode"]["enum"] == ["tailnet", "local", "public"]
 
 
 def test_tool_names_match_the_plugin_schemas():
     plugin_mod = load_plugin()
-    assert set(plugin_mod.schemas(False, "local", False)) == set(mcp.TOOL_NAMES)
+    assert set(plugin_mod.schemas(False, "local", False)) == set(mcp.BOARD_TOOL_NAMES)
+    assert set(mcp.TOOL_NAMES) == set(mcp.BOARD_TOOL_NAMES) | set(mcp.COMMENT_TOOL_NAMES)
 
 
 # ---------------------------------------------------------------- JSON-RPC errors
@@ -238,6 +260,26 @@ def test_missing_required_arguments_are_tool_errors(env):
     for name in ("mock_review_feedback", "mock_review_ack", "mock_review_add_round"):
         res = call(name, {})
         assert res["isError"] is True and "required" in payload(res)["error"]
+
+
+def test_patch_block_refuses_a_non_integer_round(env, tmp_path):
+    dec = _decisions(tmp_path)
+    data = store.create_review("t", "brief", {"platform": "discord", "chat_id": "c", "thread_id": "t"},
+                               "local", store.parse_round_spec(decisions=str(dec)))
+    rid = data["id"]
+    path = store.review_dir(rid) / "rounds/1/a/decisions.json"
+    before = path.read_text(encoding="utf-8")
+    patch = {"review_id": rid, "block": "d1", "option": "a", "if_rev": 0, "html": "<p>patched</p>"}
+    for bad in (1.9, True):
+        res = call("mock_review_patch_block", dict(patch, round=bad))
+        assert res["isError"] is True, payload(res)
+        assert payload(res)["error"] == "round must be an integer"
+    assert store.load(rid)["rounds"][0].get("blocks_rev", {}).get("d1", 0) == 0
+    assert not (store.review_dir(rid) / "rounds/1/history").exists()
+    assert path.read_text(encoding="utf-8") == before
+    ok = call("mock_review_patch_block", dict(patch, round="1"))
+    assert ok["isError"] is False, payload(ok)
+    assert payload(ok)["rev"] == 1
 
 
 # ---------------------------------------------------------------- real subprocesses
@@ -342,3 +384,18 @@ def test_stdio_encoding_round_trips_non_ascii_output(env, tmp_path):
     assert proc.returncode == 0, proc.stderr.decode("utf-8", "replace")
     response = json.loads(proc.stdout.decode("utf-8").splitlines()[0])      # strict: cp1252 bytes would raise
     assert [r["title"] for r in payload(response["result"])["reviews"]] == [title]
+
+
+def test_create_tool_text_names_the_artifact_block():
+    listed = {t["name"]: t for t in mcp.handle_request(request("tools/list"), mcp.Options())["result"]["tools"]}
+    assert "artifact" in listed["mock_review_create"]["description"]
+
+
+def test_create_with_an_artifact_block_through_the_tool(env, tmp_path):
+    f = tmp_path / "art" / "decisions.json"
+    f.parent.mkdir()
+    f.write_text(json.dumps({"blocks": [{"type": "artifact", "id": "film", "html": "<p>hi</p><script>1</script>"}]}), encoding="utf-8")
+    res = call("mock_review_create", {"title": "Art board", "decisions": str(f)})
+    assert res["isError"] is False
+    body = payload(res)
+    assert (config.data_root() / body["review_id"] / "rounds/1/a/blocks/film.html").is_file()

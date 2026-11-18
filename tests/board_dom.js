@@ -48,6 +48,9 @@ function fromTree(tree) {
   return n;
 }
 global.Node = Node;
+// Board functions guard element calls with `instanceof Element`. This harness has no real DOM, so its
+// fake nodes ARE the elements: make the two names aliases rather than leaving Element undefined.
+global.Element = Node;
 global.document = {
   createElement(tag) {
     const el = new Node(tag);

@@ -195,15 +195,31 @@ assert.equal(root.querySelectorAll('area')[0].getAttribute('href'), null);
 ''', [html])
 
 
+def test_one_comment_toggle_and_no_seg_pickers():
+    src = (ROOT / 'mockreview' / 'board' / 'board.js').read_text(encoding='utf-8')
+    state = re.search(r'var S = \{(.*?)\n  \};', src, re.S)
+    assert state and re.search(r'\bcommentMode:\s*false\b', state.group(1)), \
+        'S.commentMode must exist in the state initialiser and default to false'
+    for gone in ('mockTool', 'protoTool', "'interact'"):
+        assert gone not in src, f'{gone} must no longer appear in board.js'
+    load = re.search(r'^  function loadCfg\(st\) \{(.*?)\n  \}', src, re.M | re.S)
+    assert load, 'loadCfg not found'
+    assert 'interactive_elements' not in load.group(1), 'interactive_elements must not choose the starting mode'
+    toggle = re.search(r'^  function commentToggle\([^)]*\) \{(.*?)\n  \}', src, re.M | re.S)
+    assert toggle and "'aria-pressed': on ? 'true' : 'false'" in toggle.group(1)
+    mode = re.search(r'^  function setCommentMode\(on\) \{(.*?)\n  \}', src, re.M | re.S)
+    assert mode and re.search(r"classList\.toggle\('use',\s*!want\)", mode.group(1)), \
+        'setCommentMode must keep .mock-host.use off while comment mode is on'
+
+
 def test_mock_links_receive_pointer_events():
-    """`.cq` turns pointer events off for the whole mock (taps go to the pin layer). A link inside it
-    inherits that and can't be clicked, even though its href/target/rel are right, so MOCK_BASE must
-    switch pointer events back on for links."""
+    """Comment mode needs real element hit testing, native controls and text selection."""
     src = (ROOT / 'mockreview' / 'board' / 'board.js').read_text(encoding='utf-8')
     base = re.search(r"var MOCK_BASE = ((?:'[^']*'\s*\+?\s*)+);", src)
     assert base, 'MOCK_BASE not found'
     css = ''.join(re.findall(r"'([^']*)'", base.group(1)))
-    assert re.search(r'\.cq\{[^}]*pointer-events:\s*none', css), 'expected the mock to block pointer events'
+    assert re.search(r'\.cq\{[^}]*pointer-events:\s*auto', css), 'comment mode must allow element hit testing'
+    assert 'user-select:none' not in css
     rule = re.search(r'([^{}]*a\[href\][^{}]*)\{([^}]*)\}', css)
     assert rule and re.search(r'pointer-events:\s*auto', rule.group(2)), 'links in mocks must get pointer-events:auto'
     assert re.search(r':host\(\.use\) \.cq\{pointer-events:\s*auto\}', css), 'Tap must let the mock take pointer events'

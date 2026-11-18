@@ -142,7 +142,7 @@ def test_archive_keys_use_posix_spelling_for_windows_paths(monkeypatch):
 def test_child_environment_keeps_windows_runtime_and_isolates_apps(tmp_path, monkeypatch):
     for key in ("SystemRoot", "WINDIR", "COMSPEC", "PATHEXT"):
         monkeypatch.setenv(key, "runtime-value")
-    for key in ("HERMES_HOME", "MOCKREVIEW_HOME", "PYTHONPATH", "PYTHONHOME", "HERENOW_API_KEY"):
+    for key in ("HERMES_HOME", "MOCKREVIEW_HOME", "PYTHONPATH", "PYTHONHOME", "MOCKREVIEW_WEBHOOK_SECRET"):
         monkeypatch.setenv(key, "discard-me")
     env = python_child_env(tmp_path)
     runtime = {key.upper(): value for key, value in env.items()}

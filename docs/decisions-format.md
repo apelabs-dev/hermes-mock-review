@@ -16,14 +16,14 @@ file itself, so there is no page to build. The file must be under 3 MB.
       "blocks": [ ... ]
     }
 
-`blocks` is required, holds 1 to 60 entries and renders in order. Every block has a `type` and an optional `title`
-(200 characters). `decision`, `question`, `piece` and `mock` blocks need an `id`: lowercase letters, digits and dashes,
+`blocks` is required, holds 1 to 60 entries and renders in order. Every block has a `type` and an optional `title`; exports render every block type statically.
+(200 characters). `decision`, `question`, `piece`, `mock` and `artifact` blocks need an `id`: lowercase letters, digits and dashes,
 starting with a letter or digit, at most 24 characters (`d1`, `q1`, `p1`, `today`). A `defaults` block's `id` follows
 the same rule and defaults to `defaults`. Ids are unique across the file. Pins and `notes_answered` refer to them.
 
 The markable blocks collect a mark from the reviewer: `decision`, `question`, `piece`, `defaults` and a `recap` that is
 markable. The other types (`text`, `callout`, `cards`, `mock`, `table`, `settled`) are context and never count toward
-the tally.
+the tally. An `artifact` is context unless it sets `"markable": true`.
 
 Text fields longer than their limit are cut to it. A list with too many or too few entries, a missing required field or
 a wrong type fails validation.
@@ -96,6 +96,96 @@ add `text` (600), `pill` (40) and `tone` (default `neutral`).
 mark it.
 
     {"type": "mock", "id": "today", "title": "Today", "html": "<div class=\"card\">...</div>", "caption": "Current checkout"}
+
+`artifact`: your own page, with script, shown in a sandboxed frame. Use it where a mock cannot do the job: audio and
+video players, a timeline, anything that needs script. Give exactly one of `html` (the page, up to 2 MB) or `src` (an
+absolute path to an `.html` file). Optional `text` (2000) and `caption` (300), both plain text; `height` (`"auto"`, the
+default, follows the page up to 4000 px, or a fixed 80 to 4000); `desktop_width` as for `mock`; `display` (`"frame"`,
+the default, or `"page"`); `markable` (default `false`; `true` adds the keys every markable block takes, and the reviewer
+can approve or change it). Reviewers can pin it in Pin mode either way.
+
+    {"type": "artifact", "id": "clip", "title": "Click sound", "html": "<audio controls src=\"data:audio/wav;base64,UklGRg==\"></audio><script>document.title = 'ok'</script>", "caption": "Take 3", "markable": true}
+
+`display: "page"` is the same page-mode frame a prototype round gets: the frame is the full width of the window and one
+viewport tall (between the board header and the docked decide bar), the page scrolls inside it, and there is no 4000 px
+cap and no card frame around it. It ignores `height` and `desktop_width`. The block's title, `text` and `caption` stay
+in the document column, and its pins keep working.
+
+With `src` the block is `{"type": "artifact", "id": "film", "src": "/abs/film/page.html"}` and the page's folder supplies the media.
+
+How it runs:
+
+- The page is written to `rounds/<n>/a/blocks/<id>.html` and loaded in an `<iframe sandbox="allow-scripts">`. No
+  `allow-same-origin`, so the page has an opaque origin: it cannot read the board, its cookies or storage, cannot post to
+  `api/submit`, cannot navigate the board, open windows or submit forms. It is not `srcdoc`: a `srcdoc` frame would inherit
+  the board's CSP and its inline script would not run.
+- The file starts with a Content-Security-Policy meta: `default-src 'none'; script-src 'unsafe-inline'; style-src
+  'unsafe-inline'; img-src data:; media-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; base-uri
+  'none'; frame-src 'none'`. Inline script and style run; the page itself loads nothing from the network. Every file of
+  the round (the block file, `assets/`, `design/`, `decisions.json`) is also served with `Content-Security-Policy: sandbox
+  allow-scripts; ` followed by that same policy, so a page that navigates its own frame to another file of the round
+  still gets a document with no network, even if the meta were ignored. A round with no artifact is served with
+  `sandbox allow-scripts` alone. A frame that ends up anywhere but its block file (it does not answer the board's ping)
+  is reset to the block file up to three times, then removed; the board's own policy already refuses navigation to
+  another site.
+- Everything the page shows is inside the file. With `src`, the board bundles the page's local files in as `data:` URIs:
+  images, audio, video, fonts, stylesheets and scripts (a local `<script src>` becomes an inline script; a local ES module
+  `import` is refused). Paths are relative to the page's folder, may not leave it or go through a symbolic link. This
+  happens on every board, whatever the hosting mode. Limits: 2 MB for the page itself (inline `html`, or the `src` file),
+  25 MB per asset, 50 MB of assets per round across all its artifacts and the round's copied `assets/` folder. A missing
+  or oversized asset fails the create or add-round call and names the artifact and the asset.
+- The page can keep state and use three board facilities, all through `window.mockreview.use(name)`. The hook is
+  synchronous, frozen and defined before the page's own scripts. Inside the frame of an artifact block's own page
+  (`rounds/<n>/a/blocks/<id>.html`) `use('data')`, `use('marks')` and `use('clipboard')` return their objects; every
+  other name returns `null`, as they all do on a prototype or variant page, whose `mockreview.comments` API still works.
+- `use('data')` is a per-review, per-round key/value store for the page. `get(key)` resolves with the value or
+  `undefined` (it waits for the board's first state message, so it never answers a stale `undefined`); `set(key, value)`
+  resolves `true`; `list()` resolves the sorted keys; `remove(key)` resolves `true`. `await use('data')` is a no-op, so a
+  page may write `var data = await window.mockreview.use('data')`. Values must be JSON-serialisable and are capped at
+  8 KB each (`JSON.stringify(value)`, UTF-8), 64 keys per block and 256 KB per round across all blocks. A refusal rejects
+  the promise with an `Error` naming the limit (`value over 8 KB`, `block has 64 keys`, `round state over 256 KB`).
+  The probe also keeps its own outgoing bucket: it posts at most 40 messages a second (its height reports and taps
+  included), so a call past that bucket rejects at once with `rate limited` instead of being dropped by the board, and a
+  pending call that gets no answer within 3 seconds rejects with the same error, so no call is left pending.
+  The store survives a board reload, is scoped to the block's id, and reaches Hermes in the submit under
+  `page_state[<block id>]`; the feedback markdown prints it under `## Page state`.
+- `use('marks')` is for a markable artifact block: `await use('marks').set({status: 'approve' | 'change' | 'skip', note:
+  '…'})` writes the same mark the board's own Approve/Change/Skip row writes and redraws it. A non-markable block is
+  refused, and the reviewer still presses Send.
+- `use('clipboard').writeText(text)` copies text with the page's own Clipboard API and only within 1 second of a real tap
+  in the frame; a call with no recent tap rejects with `no recent tap`. The artifact iframe's `allow="clipboard-write"`
+  enables the page's own Clipboard API for every script in the frame while the frame has focus, so a direct
+  `navigator.clipboard.writeText` call — the page's own, or one a script it bundles makes — skips both the tap rule and
+  the board's wrapper. The frame cannot read the clipboard, and the board is not in the clipboard path.
+- The board reads these messages from the frame: its height, its background colour, a tap, a pin edit, `data` set/remove/list, a `mark` and
+  nothing else. A message from a frame that is not a block of the round the board is showing, or tagged with an earlier
+  round, is ignored. Messages are rate-limited per frame (a frame that floods is ignored, not obeyed) and height changes
+  are bounded. A tap can open a pin draft (in Pin mode); only the reviewer saves it.
+
+A page that uses all three:
+
+    <script>
+    var data = window.mockreview.use('data');
+    data.get('pick').then(function (pick) { /* restore a control, or undefined */ });
+    data.set('pick', 'b').then(function () {}, function (e) { console.log(e.message); });
+    data.list().then(function (keys) {});
+    // on a markable artifact: the reviewer still presses Send
+    window.mockreview.use('marks').set({status: 'approve', note: 'Looks right'});
+    // from a real Copy button: no tap in the last second -> a rejected promise
+    window.mockreview.use('clipboard').writeText('summary text');
+    </script>
+
+- The brand check scans the page's html like any mock (bundled `data:` media is skipped). Colours and fonts the profile
+  does not allow fail the call, or pass `off_brand`.
+- An artifact counts as interactive for the `interactive_elements` hint: it runs script.
+
+Build it like this when an artifact is the right block: write `page.html` and its media in a folder of their own (not next
+to `decisions.json`, whose sibling `assets/` folder is copied into the round too), then point `src` at it.
+[examples/artifact-demo/make_demo.py](../examples/artifact-demo/make_demo.py) writes a demo round with audio cards and a
+timeline, a video, and a shot-list table:
+
+    python examples/artifact-demo/make_demo.py /tmp/artifact-demo
+    mockreview create --title "Artifact demo" --decisions /tmp/artifact-demo/decisions.json ...
 
 `table`: compares options. `columns` holds 2 to 6 headings (60 characters each). `rows` holds 1 to 30 rows, each a list
 with one cell per column (240 characters per cell; numbers are allowed). `highlight_col` is an optional column index that
@@ -180,7 +270,7 @@ with options, the round 2+ keys and a `gate` with `after` and `later`.
 ## HTML in mocks
 
 The board parses mock, option and piece HTML without running it and removes `script`, `iframe`, `frame`, `object`,
-`embed`, `base`, `meta`, `link` and `form` elements, `on*` attributes and `javascript:` URLs. Style it with `extra_css`,
+`embed`, `base`, `meta` and `link` elements, `on*` attributes and `javascript:` URLs. Style it with `extra_css`,
 with the design profile's `mock.css`, or with inline `style` attributes. Anchor hrefs retain only absolute HTTP(S) URLs
 without whitespace/control characters; relative URLs and all other protocols are removed. Safe links open in a new tab
 with `target="_blank" rel="noopener noreferrer"`; clicking one does not add a pin.
@@ -196,9 +286,64 @@ every control a mock shows so that it responds, using markup that needs no scrip
 - text fields: `<input>` and `<textarea>`;
 - hover and focus states: `:hover` and `:focus-visible`.
 
-The board then opens on Tap, so a tap reaches the mock's own controls; the reviewer switches to Pin in the header to
-comment on a spot. A create or add-round whose mocks have no such control returns a `hint` saying so. With the setting
-off, mocks are static pictures and the board opens on Pin, where every tap on a mock drops a pin.
+The board opens usable: taps reach the mock's own controls, and pressing Comment (or `C`) turns comment mode on, where
+a tap on noninteractive content pins a note on its element. Native controls, links, forms and text selection stay live;
+comment mode never cancels their mouse, drag or submit events. The existing board CSP and opaque iframe sandbox still
+restrict form navigation. A create or add-round whose mocks have no such control returns a `hint` saying so. The setting controls the authoring hint; it does not disable native controls.
+
+### Element and text anchors
+
+Give meaningful elements a stable `data-mr-part`, for example
+`<section data-mr-part="order-summary">…</section>`. Keep part names unique within each mock and at most 40 characters.
+New rounds automatically stamp `data-mr-id` on anchorable HTML at installation; these IDs are stored with the round,
+without changing the source file. Dynamic content gets an ID when first observed. Highlight wrappers get no IDs.
+
+In Comment mode the hovered content has an outline, and a pin's composer shows `on <label>`: its nearest heading,
+then role/type and up to 40 characters of text (120 characters total). A heading uses its own text. Pins follow their
+element on move/resize. Removing it leaves an indigo pin (55% opacity) at the last position with **Element removed**; restoring a
+unique matching element reattaches it. Empty-space and older coordinate-only pins retain their positions.
+
+Selecting up to 160 characters on noninteractive content and releasing opens a range comment. The anchor stores W3C
+TextQuoteSelector and TextPositionSelector data in addition to the element identity. Reanchoring requires an exact,
+uniquely contextual quote; ambiguous matches detach. Highlights use CSS Custom Highlight where supported and text-only
+`mark` wrappers otherwise. Recovery tries auto ID, part, finder path, then a unique tag/text signature.
+
+#### Pins on the board itself
+
+Every rendered section of a decisions round is pinnable in Comment mode: the doc header, text, cards, callout, table,
+"Already decided", recap items, defaults, a question, an option caption, the decide row and "Anything else". A section
+without a block id gets a stable `s<N>` ref. Three reserved refs name the board surfaces: `page` is the header, `else`
+is "Anything else", and `doc` is the bare board canvas (empty space between sections). They are reserved, so a block may
+not use them as an id. A pin on the decide row pins the section on its padding: its buttons stay live. The markdown line
+names the section and the quoted text, and the quote is not printed again in the target suffix.
+
+A board pin remembers its spot in page (document) coordinates: a pin with an element target keeps it in `target.doc`, and
+a pin without one (a click on empty canvas) keeps `doc` on the pin. Detached and empty-canvas pins are drawn from that
+point, so deleting the anchored element or growing a section's pin list never moves the marker; the outer `x/y`
+fractions are kept for older readers and the markdown.
+
+Prototype pages may call `window.mockreview?.comments.openComposer({element})` or `openComposer({range})` while Comment
+is active. `window.mockreview?.comments.anchorFor(element)` describes an element without opening UI. A page registers
+extra anchors with `window.mockreview.comments.registerAnchors(fn)` (call it after the probe has run, for example on
+`load`); `window.mockreview?.comments.customAnchors()` returns the validated list from that function (at most 60, an
+empty list when none is registered or it throws). Assigning `window.mockreview.customAnchors` directly is not supported.
+These hooks add no network or board-control access. The shell owns the composer and submission. Inline mocks remain
+script-free.
+
+### Media in a plain mock
+
+A mock needs no script to show media. A decisions round copies the `assets/` folder next to its `decisions.json` into
+the round (50 MB, shared with the media of the round's artifacts, symbolic links skipped), and the board serves it
+from its own origin at `rounds/<n>/a/assets/<file>`,
+so mock HTML can use `<img>`, `<audio controls>` and `<video controls>` with a path like
+`src="rounds/1/a/assets/click.wav"` (`<n>` is the round the block is in, relative to the board's address). The board's
+policy allows same-origin media, and the HTML cleaner keeps those tags. The board answers `Range` requests with `206` and
+`Content-Range`, and every response carries `Accept-Ranges: bytes`, so audio and video get a duration and can be scrubbed,
+and Safari plays video served from a round; a request for several ranges at once is answered with the whole file. One
+limit: the media stays beside the round instead of inside the block. Use an `artifact` when the page needs script, or its
+media must play everywhere. Page mode (a prototype round, or an artifact with `"display": "page"`) is the framed mode's
+full-bleed sibling: the page fills the window and scrolls inside its frame, and its media still seeks because the board
+answers `Range` the same way.
 
 ## Design profiles
 

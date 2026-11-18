@@ -8,12 +8,12 @@ Every command is available as `hermes mockreview <command>`. Without the Hermes 
 
 ```text
 usage: hermes mockreview [-h]
-                         {setup,create,add-round,design,feedback,ack,list,close,settings,housekeeping,owner,adopt,notify-test,publish,password,poll,serve,mcp} ...
+                         {setup,create,add-round,design,feedback,ack,list,close,settings,housekeeping,public,owner,adopt,migrate,notify-test,serve,login,users,invite,admin,share,tokens,mcp} ...
 
 mock-review CLI. First time? Run: hermes mockreview setup. `hermes mockreview settings` prints each setting and its source.
 
 positional arguments:
-  {setup,create,add-round,design,feedback,ack,list,close,settings,housekeeping,owner,adopt,notify-test,publish,password,poll,serve,mcp}
+  {setup,create,add-round,design,feedback,ack,list,close,settings,housekeeping,public,owner,adopt,migrate,notify-test,serve,login,users,invite,admin,share,tokens,mcp}
     setup               onboard mock-review: secret, wake and notice routes,
                         hosting, autostart, a test review
     create              create a review (round 1 = --decisions or --prototype)
@@ -24,24 +24,30 @@ positional arguments:
     ack                 mark a round's submission as handled: no stalled ping
                         for it
     list                list open reviews
-    close               close a review (herenow: archive Site Data, delete the
-                        site)
+    close               close a review: no more rounds or feedback
     settings            print the resolved settings and where each value came
                         from
     housekeeping        run the auto-close / prune pass once (the server runs
                         it hourly)
+    public              serve the board on a public HTTPS URL through
+                        Tailscale Funnel
     owner               show who owns storage and wake-ups and whether a
                         create would pass preflight
     adopt               move one review from a private store into the watched
                         store (backup, collision checks, nothing lost)
+    migrate             convert reviews from the removed 1.x hosting mode to
+                        local or tailnet
     notify-test         send the wake-up payload to --to (testing only)
-    publish             re-publish a herenow review
-    password            set or remove an open here.now review's password gate
-    poll                poll here.now Site Data once (what the server does
-                        every poll_seconds)
     serve               run the board server in the foreground until Ctrl+C
                         (works with autostart off; exits 2 if the port is
                         taken)
+    login               print a one-time link that signs this computer's owner
+                        in from another browser
+    users               list people and change their role or access
+    invite              print a single-use invite link that creates an account
+    admin               admin tasks for a person who cannot sign in
+    share               show, create, regenerate or stop a review's guest link
+    tokens              personal access tokens (stored hashed)
     mcp                 run the MCP server on stdio (Claude Code, Codex,
                         OpenCode)
 
@@ -53,7 +59,7 @@ options:
 
 ```text
 usage: hermes mockreview setup [-h] [-y] [--dry-run]
-                               [--hosting {local,tailnet,lan,herenow}]
+                               [--hosting {local,tailnet,lan}]
                                [--origin-platform NAME] [--port PORT]
                                [--webhook-route WEBHOOK_ROUTE]
                                [--no-autostart] [--plugin-dir PLUGIN_DIR]
@@ -63,7 +69,7 @@ options:
   -h, --help            show this help message and exit
   -y, --yes             non-interactive: accept defaults and make the changes
   --dry-run             print the whole plan and change nothing
-  --hosting {local,tailnet,lan,herenow}
+  --hosting {local,tailnet,lan}
                         how reviews are hosted (default: local)
   --origin-platform NAME
                         origin platform to create the wake and notice routes
@@ -85,7 +91,7 @@ options:
 usage: hermes mockreview create [-h] --title TITLE [--brief BRIEF]
                                 --platform PLATFORM --chat-id CHAT_ID
                                 [--thread THREAD]
-                                [--mode {tailscale,tailnet,local,lan,herenow}]
+                                [--mode {tailnet,tailscale,local,lan,public}]
                                 [--decisions /abs/decisions.json]
                                 [--prototype /abs/index.html]
                                 [--design NAME|/abs/dir] [--allow-live-demo]
@@ -100,7 +106,6 @@ usage: hermes mockreview create [-h] --title TITLE [--brief BRIEF]
                                 [--no-require-note] [--max-pins N]
                                 [--footer-button {send,build}] [--interactive]
                                 [--no-interactive] [--wake] [--no-wake]
-                                [--password] [--no-password]
 
 options:
   -h, --help            show this help message and exit
@@ -109,7 +114,7 @@ options:
   --platform PLATFORM   origin platform, for example discord or telegram
   --chat-id CHAT_ID     origin chat identifier on that platform
   --thread THREAD       optional origin thread/topic identifier
-  --mode {tailscale,tailnet,local,lan,herenow}
+  --mode {tailnet,tailscale,local,lan,public}
                         hosting (default: the default_host setting)
   --decisions /abs/decisions.json
                         a decision round: the board renders these decisions +
@@ -136,9 +141,6 @@ options:
                         (the default)
   --no-wake             a board nobody is woken by: no wake-route check, Send
                         stores feedback and notifies no one
-  --password            password protect this here.now review (default: saved
-                        setting)
-  --no-password         publish this here.now review without a password
 
 per-review look (default: saved settings; stored in the review):
   --devices desktop,tablet,mobile
@@ -157,8 +159,8 @@ per-review look (default: saved settings; stored in the review):
   --footer-button {send,build}
                         the footer button on a round with a gate: Build
                         (default) or Send
-  --interactive         mocks carry working controls; the board opens on Tap
-  --no-interactive      static mocks; the board opens on Pin
+  --interactive         mocks carry working controls
+  --no-interactive      static mocks
 ```
 
 ## `hermes mockreview add-round --help`
@@ -228,8 +230,8 @@ per-review look (default: saved settings; stored in the review):
   --footer-button {send,build}
                         the footer button on a round with a gate: Build
                         (default) or Send
-  --interactive         mocks carry working controls; the board opens on Tap
-  --no-interactive      static mocks; the board opens on Pin
+  --interactive         mocks carry working controls
+  --no-interactive      static mocks
 ```
 
 ## `hermes mockreview design --help`
@@ -379,6 +381,54 @@ options:
   -h, --help  show this help message and exit
 ```
 
+## `hermes mockreview public --help`
+
+```text
+usage: hermes mockreview public [-h] {status,on,off} ...
+
+positional arguments:
+  {status,on,off}
+    status         show the Funnel mapping for this board
+    on             map a Funnel HTTPS port to this board (prints the URL)
+    off            remove this board's Funnel mapping
+
+options:
+  -h, --help       show this help message and exit
+```
+
+## `hermes mockreview public status --help`
+
+```text
+usage: hermes mockreview public status [-h] [--port PORT]
+
+options:
+  -h, --help   show this help message and exit
+  --port PORT  HTTPS port: 443, 8443 or 10000 (default: the funnel_port
+               setting, 8443)
+```
+
+## `hermes mockreview public on --help`
+
+```text
+usage: hermes mockreview public on [-h] [--port PORT]
+
+options:
+  -h, --help   show this help message and exit
+  --port PORT  HTTPS port: 443, 8443 or 10000 (default: the funnel_port
+               setting, 8443)
+```
+
+## `hermes mockreview public off --help`
+
+```text
+usage: hermes mockreview public off [-h] [--port PORT]
+
+options:
+  -h, --help   show this help message and exit
+  --port PORT  HTTPS port: 443, 8443 or 10000 (default: the funnel_port
+               setting, 8443)
+```
+
 ## `hermes mockreview owner --help`
 
 ```text
@@ -410,6 +460,18 @@ options:
                         delivery, not a new request')
 ```
 
+## `hermes mockreview migrate --help`
+
+```text
+usage: hermes mockreview migrate [-h] [--mode {local,tailnet}] [--dry-run]
+
+options:
+  -h, --help            show this help message and exit
+  --mode {local,tailnet}
+                        target hosting (default: derived from default_host)
+  --dry-run             print what would change; write nothing
+```
+
 ## `hermes mockreview notify-test --help`
 
 ```text
@@ -429,43 +491,6 @@ options:
                         MOCKREVIEW_WEBHOOK_SECRET)
 ```
 
-## `hermes mockreview publish --help`
-
-```text
-usage: hermes mockreview publish [-h] review_id
-
-positional arguments:
-  review_id
-
-options:
-  -h, --help  show this help message and exit
-```
-
-## `hermes mockreview password --help`
-
-```text
-usage: hermes mockreview password [-h] review_id {on,off}
-
-positional arguments:
-  review_id
-  {on,off}
-
-options:
-  -h, --help  show this help message and exit
-```
-
-## `hermes mockreview poll --help`
-
-```text
-usage: hermes mockreview poll [-h] [review_id]
-
-positional arguments:
-  review_id
-
-options:
-  -h, --help  show this help message and exit
-```
-
 ## `hermes mockreview serve --help`
 
 ```text
@@ -475,14 +500,245 @@ options:
   -h, --help   show this help message and exit
   --host HOST  default: the host setting (127.0.0.1)
   --port PORT  default: the port setting (8790)
-  --no-worker  no retry/poll/housekeeping background thread
+  --no-worker  no retry/notice/housekeeping background thread
+```
+
+## `hermes mockreview login --help`
+
+```text
+usage: hermes mockreview login [-h]
+
+options:
+  -h, --help  show this help message and exit
+```
+
+## `hermes mockreview users --help`
+
+```text
+usage: hermes mockreview users [-h]
+                               {list,promote,demote,delete,grant,revoke} ...
+
+positional arguments:
+  {list,promote,demote,delete,grant,revoke}
+    list                every account, its role and how it signs in
+    promote             make an admin
+    demote              make a member (refused for the last admin)
+    delete              delete the account and end its sessions (refused for
+                        the only admin)
+    grant               give access to one review or to all reviews
+    revoke              remove that access
+
+options:
+  -h, --help            show this help message and exit
+```
+
+## `hermes mockreview users list --help`
+
+```text
+usage: hermes mockreview users list [-h]
+
+options:
+  -h, --help  show this help message and exit
+```
+
+## `hermes mockreview users promote --help`
+
+```text
+usage: hermes mockreview users promote [-h] user
+
+positional arguments:
+  user        id, email or exact name
+
+options:
+  -h, --help  show this help message and exit
+```
+
+## `hermes mockreview users demote --help`
+
+```text
+usage: hermes mockreview users demote [-h] user
+
+positional arguments:
+  user        id, email or exact name
+
+options:
+  -h, --help  show this help message and exit
+```
+
+## `hermes mockreview users delete --help`
+
+```text
+usage: hermes mockreview users delete [-h] user
+
+positional arguments:
+  user        id, email or exact name
+
+options:
+  -h, --help  show this help message and exit
+```
+
+## `hermes mockreview users grant --help`
+
+```text
+usage: hermes mockreview users grant [-h] (--review REVIEW | --all-reviews)
+                                     [--role {reviewer,commenter,viewer}]
+                                     [--expires EXPIRES]
+                                     user
+
+positional arguments:
+  user                  id, email or exact name
+
+options:
+  -h, --help            show this help message and exit
+  --review REVIEW       review id
+  --all-reviews         every review, including future ones
+  --role {reviewer,commenter,viewer}
+  --expires EXPIRES     end the access after this long, for example 30d or 12h
+```
+
+## `hermes mockreview users revoke --help`
+
+```text
+usage: hermes mockreview users revoke [-h] (--review REVIEW | --all-reviews)
+                                      user
+
+positional arguments:
+  user             id, email or exact name
+
+options:
+  -h, --help       show this help message and exit
+  --review REVIEW  review id
+  --all-reviews    every review, including future ones
+```
+
+## `hermes mockreview invite --help`
+
+```text
+usage: hermes mockreview invite [-h] [--review REVIEW] [--all-reviews]
+                                [--role {admin,member,reviewer,commenter,viewer}]
+                                [--expires EXPIRES]
+                                [--grant-expires GRANT_EXPIRES]
+                                [--label LABEL] [--list] [--revoke ID]
+
+options:
+  -h, --help            show this help message and exit
+  --review REVIEW       also give access to this review
+  --all-reviews         also give access to every review
+  --role {admin,member,reviewer,commenter,viewer}
+                        admin or member (the default), or the role on --review
+                        / --all-reviews (default commenter)
+  --expires EXPIRES     how long the link works (default 7d)
+  --grant-expires GRANT_EXPIRES
+                        end the review access after this long
+  --label LABEL         a note for the invite list, for example who it is for
+  --list                list invites instead
+  --revoke ID           revoke an unused invite instead
+```
+
+## `hermes mockreview admin --help`
+
+```text
+usage: hermes mockreview admin [-h] {login-link} ...
+
+positional arguments:
+  {login-link}
+    login-link  print a one-time sign-in link for an account (default: the
+                owner)
+
+options:
+  -h, --help    show this help message and exit
+```
+
+## `hermes mockreview admin login-link --help`
+
+```text
+usage: hermes mockreview admin login-link [-h] [--user USER]
+
+options:
+  -h, --help   show this help message and exit
+  --user USER  id, email or exact name
+```
+
+## `hermes mockreview share --help`
+
+```text
+usage: hermes mockreview share [-h] [--role {reviewer,commenter,viewer}]
+                               [--expires EXPIRES]
+                               [--audience {anyone,members}] [--round ROUND]
+                               review_id
+                               [{show,create,regenerate,update,stop}]
+
+positional arguments:
+  review_id
+  {show,create,regenerate,update,stop}
+                        regenerate replaces the link and signs out its guests;
+                        stop ends it
+
+options:
+  -h, --help            show this help message and exit
+  --role {reviewer,commenter,viewer}
+                        what guests may do (default commenter)
+  --expires EXPIRES     end the link after this long, for example 7d
+  --audience {anyone,members}
+                        anyone with the link (default) or signed-in people
+                        only
+  --round ROUND         what viewer guests see: latest (default) or a round
+                        number
+```
+
+## `hermes mockreview tokens --help`
+
+```text
+usage: hermes mockreview tokens [-h] {list,create,revoke} ...
+
+positional arguments:
+  {list,create,revoke}
+
+options:
+  -h, --help            show this help message and exit
+```
+
+## `hermes mockreview tokens list --help`
+
+```text
+usage: hermes mockreview tokens list [-h] [--user USER]
+
+options:
+  -h, --help   show this help message and exit
+  --user USER  id, email or exact name (default: the owner)
+```
+
+## `hermes mockreview tokens create --help`
+
+```text
+usage: hermes mockreview tokens create [-h] [--user USER] name
+
+positional arguments:
+  name         what the token is for
+
+options:
+  -h, --help   show this help message and exit
+  --user USER  id, email or exact name (default: the owner)
+```
+
+## `hermes mockreview tokens revoke --help`
+
+```text
+usage: hermes mockreview tokens revoke [-h] [--user USER] id
+
+positional arguments:
+  id
+
+options:
+  -h, --help   show this help message and exit
+  --user USER  id, email or exact name (default: the owner)
 ```
 
 ## `hermes mockreview mcp --help`
 
 ```text
 usage: hermes mockreview mcp [-h] [--platform PLATFORM] [--chat-id CHAT_ID]
-                             [--thread THREAD] [--wake]
+                             [--thread THREAD] [--wake] [--token TOKEN]
 
 options:
   -h, --help           show this help message and exit
@@ -492,4 +748,6 @@ options:
                        MOCKREVIEW_CHAT_ID)
   --thread THREAD      optional origin thread ID (default: MOCKREVIEW_THREAD)
   --wake               wake the origin chat on Send (default: off)
+  --token TOKEN        personal access token for list_comments/reply/resolve
+                       (default: MOCKREVIEW_TOKEN)
 ```

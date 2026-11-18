@@ -16,12 +16,12 @@ import time
 import urllib.request
 from typing import Any, Dict, List, Optional
 
-from . import brand, bundle, config, feedback, herenow, locks, owner, service, settings, store, wakeguard
+from . import brand, bundle, config, feedback, owner, service, settings, store, targets, wakeguard
 from .store import ReviewError
 
 log = logging.getLogger("mockreview.api")
 
-MODE_OF_HOST = {"tailnet": "tailscale", "local": "local", "herenow": "herenow"}
+MODE_OF_HOST = {"tailnet": "tailscale", "local": "local", "public": "public"}
 
 
 def _settings_error(e: settings.SettingsError) -> ReviewError:
@@ -42,7 +42,7 @@ def resolve_mode(mode: Optional[str]) -> str:
     try:
         host = settings.get("default_host", mode)
     except settings.SettingsError:
-        raise ReviewError(f"mode must be tailnet (tailscale), local or herenow, got {mode!r}")
+        raise ReviewError(f"mode must be tailnet (tailscale), local or public, got {mode!r}")
     return MODE_OF_HOST[host]
 
 
@@ -60,7 +60,7 @@ def check_live_demo(spec: Dict[str, Any], allow: Optional[bool]) -> None:
 def _spec(decisions: Optional[str], prototype: Optional[str], design: Optional[str], allow: Optional[bool]):
     spec = store.parse_round_spec(decisions=decisions, prototype=prototype, design=design)
     check_live_demo(spec, allow)
-    return spec
+    return bundle.bundle_artifacts(spec)   # an artifact's media goes inline, on every board: its page can load nothing else
 
 
 def _brand_round(spec: Dict[str, Any], project: Optional[str], no_design: bool, reason: Optional[str],
@@ -100,11 +100,11 @@ def _brand_args(design: Optional[str], project: Any, no_design: Any, off_brand: 
     return brand.clean_project(project), bool(no_design), reason
 
 
-def check_wake_toolsets(mode: str, wake: bool, password: bool = False) -> None:
+def check_wake_toolsets(mode: str, wake: bool) -> None:
     """Refuse a board that wakes Hermes while wake_toolsets grants the woken session tools and the way to its Send button
-    is not gated: a here.now board without its password, or any board while the server listens beyond loopback. Every
-    board of a platform wakes the same route, so its toolsets apply to that text too. See wakeguard."""
-    reason = wakeguard.exposure(mode, wake, password)
+    is not gated: any board while the server listens beyond loopback. Every board of a platform wakes the same route, so
+    its toolsets apply to that text too. See wakeguard."""
+    reason = wakeguard.exposure(mode, wake)
     if reason:
         raise ReviewError(wakeguard.message(reason), 409)
 
@@ -121,7 +121,7 @@ def _owned(fn):
 def create(title: str, origin: Optional[Dict[str, str]] = None, brief: str = "", mode: Optional[str] = None,
            decisions: Optional[str] = None,
            prototype: Optional[str] = None, design: Optional[str] = None, allow_live_demo: Optional[bool] = None,
-           wake: Optional[bool] = None, password: Optional[bool] = None, project: Optional[str] = None,
+           wake: Optional[bool] = None, project: Optional[str] = None,
            no_design: Optional[bool] = None, off_brand: Optional[str] = None, **look: Any) -> Dict[str, Any]:
     """Create a review; `look` = per-review overrides (devices, default_device, default_theme, ...).
 
@@ -141,22 +141,18 @@ def create(title: str, origin: Optional[Dict[str, str]] = None, brief: str = "",
     try:
         stored = settings.review_settings(look)
         want_wake = bool(settings.get("wake_required", wake))
-        want_password = settings.get("herenow_password", password)
     except settings.SettingsError as e:
         raise _settings_error(e)
-    check_wake_toolsets(mode, want_wake, mode == "herenow" and want_password is True)
+    check_wake_toolsets(mode, want_wake)
     origin = store.normalize_origin(origin, wake=want_wake)
     spec = _spec(decisions, prototype, design, allow_live_demo)
-    if mode == "herenow" and want_password is True:
-        spec = bundle.bundle_spec(spec)   # a gated prototype's assets would 401 in the sandboxed frame: inline them
     ctx = owner.resolve()
     if want_wake:
         ctx.require_wake()
-    if mode == "herenow" and ctx.state == "unreachable":
-        raise owner.OwnerError(f"refusing to publish a public board: {ctx.why}. Nothing would poll its feedback.", 503)
     with owner.bound(ctx):
+        check_wake_toolsets(mode, want_wake)   # again once bound: the descriptor is the server's, not this store's
         spec, extra = _brand_round(spec, project, no_design, reason)
-        data = store.create_review(title, brief, origin, mode, spec, look=stored, wake=want_wake, password=want_password)
+        data = store.create_review(title, brief, origin, mode, spec, look=stored, wake=want_wake)
         if not owner.confirm_visible(data["id"], ctx):
             owner.discard_created(data["id"])
             raise owner.OwnerError(
@@ -166,22 +162,17 @@ def create(title: str, origin: Optional[Dict[str, str]] = None, brief: str = "",
                                "settings": stored, "owner": ctx.as_dict(), **extra}
         if not want_wake:
             res["wake"] = False
-        if mode == "herenow":
-            try:
-                data = herenow.publish(data["id"])
-            except ReviewError as e:
-                raise ReviewError(f"review {data['id']} was created but publishing failed: {e.message} "
-                                  f"— retry with `mockreview publish {data['id']}`", e.status)
-        else:
-            res["server_up"] = server_up()
-            if not res["server_up"]:
-                res["warning"] = (f"mock-review server is not answering on {config.local_base()} — "
-                                  "the link won't load until it runs")
-            elif mode == "local" and not config.lan_shared():
-                res["note"] = ("local link opens on this computer only: the server listens on loopback. Set "
-                               "plugins.entries.mock-review.settings.host to 0.0.0.0 (and restart it) to open it from "
-                               "other devices on your network.")
-        res.update(herenow.password_result(data))
+        res["server_up"] = server_up()
+        if not res["server_up"]:
+            res["warning"] = (f"mock-review server is not answering on {config.local_base()} — "
+                              "the link won't load until it runs")
+        elif mode == "local" and not config.lan_shared():
+            res["note"] = ("local link opens on this computer only: the server listens on loopback. Set "
+                           "plugins.entries.mock-review.settings.host to 0.0.0.0 (and restart it) to open it from "
+                           "other devices on your network.")
+        elif mode == "public" and not config.public_url() and not config.funnel_url():
+            res["note"] = ("public mode has no public URL yet: run `hermes mockreview public on`, or set "
+                           "plugins.entries.mock-review.settings.public_url")
         res["url"] = store.review_url(data)
         res.update(_interactive_hint(spec, stored))
     return res
@@ -198,8 +189,11 @@ INTERACTIVE_HINT = ("interactive_elements is on, but no mock in this round has a
 
 
 def _interactive_hint(spec: Dict[str, Any], look: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """{"hint": ...} for a decisions round whose mocks are all static while the review asks for working controls."""
+    """{"hint": ...} for a decisions round whose mocks are all static while the review asks for working controls. An
+    artifact counts as interactive: it runs script."""
     if not (look or {}).get("interactive_elements") or not isinstance(spec.get("decisions"), dict):
+        return {}
+    if any(b.get("type") == "artifact" for b in spec["decisions"].get("blocks") or []):
         return {}
     html = [o.get("html") or "" for b in spec["decisions"].get("blocks") or [] for o in [b] + list(b.get("options") or [])]
     if not any(html) or any(_CONTROL.search(x) for x in html):
@@ -210,7 +204,10 @@ def _interactive_hint(spec: Dict[str, Any], look: Optional[Dict[str, Any]]) -> D
 def reasked(prev: Dict[str, Any], spec: Dict[str, Any]) -> List[str]:
     """Ids the reviewer settled in `prev` (approved, or a question answered) that `spec` asks again unchanged: the
     same id, markable, with no `revised`. A markable recap is exempt: every round may ask "is this record right?".
-    So is the round after a Build."""
+    So is the round after a Build. A share-link guest settles nothing for the agent: its marks are owner-only data,
+    so a guest's round never makes the next one refuse to ask again."""
+    if store.guest_submission(prev):
+        return []
     fb = prev.get("feedback") or {}
     marks = fb.get("marks") or {}
     # After Build the next round is the result, which may show the built pieces under their own ids.
@@ -228,8 +225,9 @@ def _reask_error(ids: List[str], n: int) -> ReviewError:
     shown = ", ".join(ids[:8]) + (f" and {len(ids) - 8} more" if len(ids) > 8 else "")
     return ReviewError(
         f"this round asks again what round {n} already settled: {shown}. Only blocks marked Change, skipped or left "
-        "open come back. Move the settled ones into a `settled` block (context, no controls), or set `revised` on a "
-        "block you really changed. To ask them again on purpose, pass allow_reask.", 409)
+        "open come back. Move the settled ones into a `settled` block (context, no controls), or give a block you "
+        "really changed a `revised` badge: a short string such as `Revised`, not `true`. To ask them again on "
+        "purpose, pass allow_reask.", 409)
 
 
 def add_round(review_id: str, decisions: Optional[str] = None, prototype: Optional[str] = None,
@@ -247,11 +245,9 @@ def add_round(review_id: str, decisions: Optional[str] = None, prototype: Option
     ctx = owner.resolve_soft()
     with owner.bound(ctx):
         existing = store.load(review_id)
-        check_wake_toolsets(existing["mode"], existing.get("wake", True) is not False, wakeguard.password_on(existing))
+        check_wake_toolsets(existing["mode"], existing.get("wake", True) is not False)
         if settings.get("wake_required") and existing.get("wake", True) is not False:
             ctx.require_wake()
-        if existing["mode"] == "herenow" and ctx.state == "unreachable":
-            raise owner.OwnerError(f"refusing to republish a public board: {ctx.why}.", 503)
         new_look = None
         if any(v is not None for v in look.values()):
             base = existing.get("settings")
@@ -259,19 +255,216 @@ def add_round(review_id: str, decisions: Optional[str] = None, prototype: Option
                 new_look = settings.review_settings(look, base=base or settings.review_settings())
             except settings.SettingsError as e:
                 raise _settings_error(e)
-        if existing["mode"] == "herenow" and wakeguard.password_on(existing):
-            spec = bundle.bundle_spec(spec)   # see create(): only gated here.now prototype rounds are bundled
         spec, extra = _brand_round(spec, project, no_design, reason, review=existing)
         if not allow_reask and existing.get("rounds"):
             again = reasked(existing["rounds"][-1], spec)
             if again:
                 raise _reask_error(again, existing["rounds"][-1]["n"])
         data = store.add_round(review_id, spec, look=new_look)
-        if data["mode"] == "herenow":
-            data = herenow.publish(review_id)
+        _supersede_pin_fixes(review_id, data["rounds"][-1]["n"])
+        data = store.load(review_id)
         return {"review_id": review_id, "round": data["rounds"][-1]["n"], "url": store.review_url(data),
-                "mode": data["mode"], "owner": ctx.as_dict(), **extra, **herenow.password_result(data),
+                "mode": data["mode"], "owner": ctx.as_dict(), **extra,
                 **_interactive_hint(spec, new_look or existing.get("settings"))}
+
+
+NO_HTML_REFUSAL = ("a pin fix edits a block that has HTML (a mock, a decision option, a piece or an artifact); "
+                   "this pin is on {ref}")
+
+
+def _supersede_pin_fixes(review_id: str, n: int) -> None:
+    """A new round supersedes every open pin fix on the previous one, and terminalises its wake."""
+    with store.locked(review_id):
+        data = store.load(review_id)
+        prev = None
+        for r in data["rounds"]:
+            if r["n"] == n - 1:
+                prev = r
+                break
+        if prev is None:
+            return
+        changed = False
+        now = store.now_iso()
+        for q in (prev.get("pin_requests") or {}).values():
+            if q.get("status") in service.PIN_TERMINAL:
+                continue
+            q.update(status="done", detail=f"superseded by round {n}", done_at=now)
+            changed = True
+        state = prev.get("pin_fix") or {}
+        wake = state.get("wake") or {}
+        if wake.get("status") == "pending_notify":
+            wake.update(status="failed", sending_until=0.0, next_attempt=0.0,
+                        last_error=f"superseded by round {n}")
+            state["wake"] = wake
+            prev["pin_fix"] = state
+            changed = True
+        if changed:
+            store.save(review_id, data)
+
+
+@_owned
+def request_pin_fix(review_id: str, round_n: Any, pin: Any, token: Any, idem: Any = None,
+                    do_notify: bool = True, requester: Optional[str] = None) -> Dict[str, Any]:
+    """Store a reviewer pin fix for the tool surfaces; bound to a CLI/tool it stores and sends nothing."""
+    return service.request_pin_fix(review_id, round_n, pin, token, idem=idem, do_notify=do_notify,
+                                   requester=requester)
+
+
+def _patch_int(value: Any, name: str) -> int:
+    """An int or a decimal string; a bool is never a number here."""
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise ReviewError(f"{name} must be an integer", 400)
+    if isinstance(value, str):
+        if not value.isdecimal():
+            raise ReviewError(f"{name} must be an integer", 400)
+        return int(value)
+    return value
+
+
+def _request_matches(request: Dict[str, Any], block: str, option: Optional[str]) -> bool:
+    """A request may be closed by a patch of its own block: a block-level request by any option patch of that block,
+    an option request only by its own option."""
+    return request.get("block") == block and (request.get("option") is None or request.get("option") == option)
+
+
+@_owned
+def patch_block(review_id: str, block: str, html: str, option: Optional[str] = None,
+                round_n: Optional[int] = None, if_rev: Optional[int] = None,
+                request_ids: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Replace one block's HTML in the newest round, in place.
+
+    Only HTML changes: a block's id, type, title and option ids stay. An artifact page goes to blocks/<id>.html;
+    every other block's html is re-stamped and decisions.json is rewritten. The replaced content is kept under
+    rounds/<n>/history/ (never overwritten). Cited pin fix requests become done; without request_ids, every open
+    request on that block (whose option matches) is closed.
+    """
+    with store.locked(review_id):
+        data = store.load(review_id)
+        if data["status"] != "open":
+            raise ReviewError("this review is closed — a block can no longer be patched", 409)
+        current = data["rounds"][-1]
+        n = current["n"]
+        if round_n is None:
+            raise ReviewError(
+                "patch_block needs the round you read: pass round=<n> (mock_review_feedback gives it)", 400)
+        want_round = _patch_int(round_n, "round")
+        if want_round != n:
+            raise ReviewError(
+                f"round {want_round} is not the current round ({n}): a newer round was published — "
+                f"read round {n} again and merge", 409)
+        if if_rev is None:
+            raise ReviewError("patch_block needs if_rev: the block revision from the round you read", 400)
+        want = _patch_int(if_rev, "if_rev")
+        path = store.safe_variant_file(review_id, str(n), "a", "decisions.json")
+        try:
+            dec = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            raise ReviewError(f"round {n} decisions.json cannot be read: {e}", 409)
+        blocks = dec.get("blocks") if isinstance(dec, dict) else None
+        if not isinstance(blocks, list):
+            raise ReviewError(f"round {n} has no decisions blocks", 409)
+        target = next((b for b in blocks if b.get("id") == block), None)
+        if target is None:
+            raise ReviewError(f"block {block!r} is not in round {n}", 404)
+        btype = target.get("type")
+        options = target.get("options") if btype == "decision" else None
+        option = option if isinstance(option, str) and option else None
+        if options:
+            oids = [o.get("id") for o in options]
+            if option is None:
+                raise ReviewError("name the option to patch (" + ", ".join(oids) + ")", 409)
+            if option not in oids:
+                raise ReviewError(f"block {block} has no option {option!r} (" + ", ".join(oids) + ")", 409)
+        elif option is not None:
+            raise ReviewError(f"block {block} has no options; patch it without an option", 409)
+        if not isinstance(html, str) or not html.strip():
+            raise ReviewError("html must be a non-empty string", 400)
+        if len(html.encode("utf-8")) > store.MAX_ARTIFACT_HTML:
+            raise ReviewError(f"html is larger than {store.MAX_ARTIFACT_HTML // (1024 * 1024)} MB", 400)
+        revs = current.get("blocks_rev")
+        if not isinstance(revs, dict):
+            revs = current["blocks_rev"] = {}
+        old_rev = int(revs.get(block, 0) or 0)
+        if want != old_rev:
+            raise ReviewError(
+                f"this block changed since you read it (revision {want}, now {old_rev}): "
+                "read the round again and merge", 409)
+        if btype == "artifact":
+            if not target.get("file"):
+                raise ReviewError(NO_HTML_REFUSAL.format(ref=block), 409)
+            old_file = store.safe_variant_file(review_id, str(n), "a", str(target["file"]))
+            old_html = old_file.read_text(encoding="utf-8")
+        elif btype in ("mock", "piece") and isinstance(target.get("html"), str):
+            old_file, old_html = None, target["html"]
+        elif btype == "decision":
+            old_file = None
+            old_html = next((o.get("html") or "" for o in options if o.get("id") == option), "")
+        else:
+            raise ReviewError(NO_HTML_REFUSAL.format(ref=block), 409)
+        requests = current.get("pin_requests") or {}
+        cited: Optional[List[str]] = None
+        if request_ids is not None:
+            if not isinstance(request_ids, list):
+                raise ReviewError("request_ids must be a list of pin fix ids", 400)
+            cited = [str(x) for x in request_ids]
+            unknown = [i for i in cited if i not in requests]
+            if unknown:
+                raise ReviewError("unknown pin fix request(s): " + ", ".join(unknown), 409)
+            mismatched = [i for i in cited if not _request_matches(requests[i], block, option)]
+            if mismatched:
+                raise ReviewError("pin fix request(s) " + ", ".join(mismatched)
+                                  + f" belong to another block or option: this patch changes {block}", 409)
+        new_rev = old_rev + 1
+        hist_dir = store.review_dir(review_id) / "rounds" / str(n) / "history"
+        hist_dir.mkdir(parents=True, exist_ok=True)
+        name = f"{old_rev}-{block}" + (f"-{option}" if option else "")
+        hist = hist_dir / f"{name}.html"
+        suffix = 2
+        while hist.exists():                      # history is append-only: never overwrite a page
+            hist = hist_dir / f"{name}-{suffix}.html"
+            suffix += 1
+        store.atomic_write(hist, old_html)
+        if btype == "artifact":
+            store.atomic_write(old_file, store.artifact_page(html))
+        else:
+            new_html = targets.stamp_html(html)
+            if btype == "decision":
+                for o in options:
+                    if o.get("id") == option:
+                        o["html"] = new_html
+            else:
+                target["html"] = new_html
+            store.atomic_write(path, json.dumps(dec, ensure_ascii=False), lock=True)
+        revs[block] = new_rev
+        now = store.now_iso()
+        detail = f"patched in round {n} (revision {new_rev})"
+        done: List[str] = []
+        skipped: List[str] = []
+        if cited is not None:
+            for i in cited:
+                q = requests[i]
+                if q.get("status") in service.PIN_TERMINAL:
+                    skipped.append(i)
+                    continue
+                q.update(status="done", done_at=now, detail=detail)
+                done.append(i)
+        else:
+            for q in requests.values():
+                if q.get("status") not in ("woken", "queued") or not _request_matches(q, block, option):
+                    continue
+                q.update(status="done", done_at=now, detail=detail)
+                done.append(q["id"])
+        history = current.get("history")
+        if not isinstance(history, list):
+            history = current["history"] = []
+        history.append({"at": now, "action": "patch_block", "block": block, "option": option, "rev": new_rev,
+                        "request_ids": done, "prev_file": hist.relative_to(store.review_dir(review_id)).as_posix()})
+        store.save(review_id, data)
+        result = {"ok": True, "review_id": review_id, "round": n, "block": block, "option": option,
+                  "rev": new_rev, "done": done, "url": store.review_url(data)}
+        if skipped:
+            result["skipped"] = skipped
+        return result
 
 
 def _record_read(review_id: str, round_n: int) -> None:
@@ -281,7 +474,8 @@ def _record_read(review_id: str, round_n: int) -> None:
         data = store.load(review_id)
         r = data["rounds"][-1]
         sub = r.get("submission")
-        if data["status"] != "open" or r["n"] != round_n or not sub or not r.get("feedback") or sub.get("read_at"):
+        if data["status"] != "open" or r["n"] != round_n or not sub or not r.get("feedback") \
+                or sub.get("read_at") or store.guest_submission(r):
             return
         sub["read_at"] = store.now_iso()
         store.save(review_id, data)
@@ -292,7 +486,8 @@ def get_feedback(review_id: str, round_n: Optional[int] = None) -> Dict[str, Any
     data = store.load(review_id)
     r = store.get_round(data, round_n)
     sub = r.get("submission")
-    if data["status"] == "open" and sub and r.get("feedback") and not sub.get("read_at") \
+    guest = store.guest_submission(r)
+    if not guest and data["status"] == "open" and sub and r.get("feedback") and not sub.get("read_at") \
             and r["n"] == data["rounds"][-1]["n"]:
         try:
             _record_read(review_id, r["n"])
@@ -300,22 +495,36 @@ def get_feedback(review_id: str, round_n: Optional[int] = None) -> Dict[str, Any
             r = store.get_round(data, r["n"])
         except (ReviewError, ValueError, OSError) as e:   # the read itself must never fail on this
             log.warning("could not record the feedback read for %s round %s: %s", review_id, r["n"], e)
+    pin_requests = sorted((r.get("pin_requests") or {}).values(),
+                          key=lambda q: q.get("requested_at") or "")
+    action = "send" if guest else (r.get("feedback") or {}).get("action", "send")
     res = {"review_id": data["id"], "title": data["title"], "round": r["n"], "status": data["status"],
            "kind": r.get("kind", "variants"), "decisions": store.round_index(r),
-           "submission": r.get("submission"), "feedback": r.get("feedback"),
-           "feedback_path": service.feedback_path(data["id"], r["n"]) if r.get("feedback") else None,
+           "submission": r.get("submission"), "feedback": None if guest else r.get("feedback"),
+           "feedback_path": (None if guest else
+                             service.feedback_path(data["id"], r["n"]) if r.get("feedback") else None),
            "markdown": feedback.render_markdown(data, r),
-           "action": (r.get("feedback") or {}).get("action", "send")}
-    # The build instruction only while it is still owed: an open review whose newest round is this one.
-    if res["action"] == "build" and data["status"] == "open" and r["n"] == data["rounds"][-1]["n"]:
+           "action": action,
+           "pin_requests": pin_requests}
+    # The build instruction only while it is still owed: an open review whose newest round is this one. A guest's
+    # stored record is owner-only data, so it never drives a next step for the agent.
+    if not guest and res["action"] == "build" and data["status"] == "open" and r["n"] == data["rounds"][-1]["n"]:
         label = (r.get("gate") or {}).get("label") or "Build"
         res["next_step"] = (f"The reviewer approved the whole round and pressed {label}. Build it now in this session. "
                             "When done, call mock_review_add_round with the result (what you built, with notes_answered "
                             "for every note) so the reviewer sees it on the same link. Do not ask for confirmation "
                             "again.")
-    elif (res["action"] == "send" and res["kind"] == "decisions" and r.get("feedback") and data["status"] == "open"
-          and r["n"] == data["rounds"][-1]["n"]):
+    elif (not guest and res["action"] == "send" and res["kind"] == "decisions" and r.get("feedback")
+          and data["status"] == "open" and r["n"] == data["rounds"][-1]["n"]):
         res["next_round"] = SEND_NEXT_ROUND
+    waiting = [q for q in pin_requests if q.get("status") in ("queued", "woken")]
+    if waiting:
+        ids = ", ".join(f"{q.get('id')} (block {q.get('block')}, rev {q.get('rev', 0)})" for q in waiting)
+        pin_step = (f"{len(waiting)} pin fix request(s) are waiting: patch the block in place with "
+                    f"mock_review_patch_block(review_id=..., block=..., option=..., round={r['n']}, "
+                    "if_rev=<rev you read>) — do not "
+                    f"add a round. Pass their ids as request_ids so each shows Done: {ids}.")
+        res["next_step"] = (res["next_step"] + " " + pin_step) if res.get("next_step") else pin_step
     return res
 
 
@@ -356,25 +565,8 @@ def list_reviews(include_closed: bool = False) -> List[Dict[str, Any]]:
                      "thread_id": (d.get("origin") or {}).get("thread_id"),
                      "current_round_feedback": (cur.get("submission") or {}).get("status", "waiting"),
                      "url": store.review_url(d),
-                     "password_status": (d.get("herenow") or {}).get("password_status", "legacy"),
                      "updated_at": d.get("updated_at")})
     return rows
-
-
-@_owned
-def open_herenow_wake_reviews() -> List[str]:
-    """Ids of open here.now reviews that wake Hermes with their password off: the here.now boards check_wake_toolsets
-    refuses. A password-gated waking board is allowed."""
-    ids = []
-    for rid in store.list_ids():
-        try:
-            d = store.load(rid)
-        except (ReviewError, ValueError, OSError):
-            continue
-        if (d["status"] == "open" and d["mode"] == "herenow" and d.get("wake") is not False
-                and not wakeguard.password_on(d)):
-            ids.append(rid)
-    return ids
 
 
 @_owned
@@ -385,21 +577,10 @@ def review_link(review_id: str) -> Dict[str, Any]:
 
 
 @_owned
-def password(review_id: str, enabled: bool) -> Dict[str, Any]:
-    if enabled is False:
-        d = store.load(review_id)
-        if d.get("mode") == "herenow" and d.get("status") == "open":
-            check_wake_toolsets("herenow", d.get("wake", True) is not False, False)
-    data = herenow.set_password(review_id, enabled)
-    return {"review_id": review_id, "url": store.review_url(data), **herenow.password_result(data)}
-
-
-@_owned
 def close(review_id: str) -> Dict[str, Any]:
-    """Close a review. here.now: final poll, archive the Site Data records, delete the public site."""
+    """Close a review: later rounds and submissions are refused, and any pending notice is dropped."""
     store.load(review_id)
-    with locks.exclusive(store.review_dir(review_id) / ".publish.lock"):
-        return _close(review_id)
+    return _close(review_id)
 
 
 def _drop_pending_notices(data: Dict[str, Any]) -> None:
@@ -425,28 +606,11 @@ def _drop_pending_notices(data: Dict[str, Any]) -> None:
 def _close(review_id: str) -> Dict[str, Any]:
     data = store.load(review_id)
     res: Dict[str, Any] = {"review_id": review_id, "mode": data["mode"]}
-    if data["mode"] == "herenow" and (data.get("herenow") or {}).get("slug") and data["status"] == "open":
-        slug = data["herenow"]["slug"]
-        try:
-            res["final_poll"] = herenow.poll_review(review_id, republish=False)
-            records = herenow.fetch_records(slug)
-            store.atomic_write(store.review_dir(review_id) / "archive" / "sitedata-records.json",
-                               json.dumps(records, indent=2, ensure_ascii=False))
-            res["archived_records"] = len(records)
-        except herenow.HereNowError as e:
-            # The site can be gone already when a DELETE deleted it but lost its response: a 404 from the final poll
-            # or the archive read means there is nothing left to poll. Keep the archive the earlier attempt wrote.
-            if e.status != 404:
-                raise
-            res["site_already_gone"] = True
-        res["site_deleted"] = herenow.delete_site(slug)
     with store.locked(review_id):
         data = store.load(review_id)
         data["status"] = "closed"
         data["closed_at"] = store.now_iso()
         _drop_pending_notices(data)
-        if data["mode"] == "herenow" and data.get("herenow"):
-            data["herenow"]["deleted_at"] = store.now_iso()
         store.save(review_id, data)
     res["status"] = "closed"
     return res
@@ -462,7 +626,7 @@ def _ts(iso: Any) -> float:
 
 
 def last_activity(data: Dict[str, Any]) -> float:
-    """Newest of: review created, a round added, feedback submitted. (updated_at moves on every here.now poll.)"""
+    """Newest of: review created, a round added, feedback submitted."""
     times = [_ts(data.get("created_at"))]
     for r in data.get("rounds") or []:
         times.append(_ts(r.get("created_at")))
@@ -471,8 +635,8 @@ def last_activity(data: Dict[str, Any]) -> float:
 
 
 def housekeeping(now: Optional[float] = None) -> Dict[str, Any]:
-    """auto_close_idle_days: close idle open reviews (here.now sites get deleted via close()).
-    keep_closed_days: delete closed reviews that closed longer ago than that. 0 = off for either."""
+    """auto_close_idle_days: close idle open reviews. keep_closed_days: delete closed reviews that closed longer ago
+    than that. 0 = off for either."""
     now = time.time() if now is None else now
     idle_days, keep_days = settings.get("auto_close_idle_days"), settings.get("keep_closed_days")
     out: Dict[str, Any] = {"closed": [], "pruned": [], "errors": []}

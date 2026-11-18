@@ -90,7 +90,19 @@ def test_foreground_serve_answers_and_stops_cleanly(spawn, tmp_path, sig):
         assert r.status == 200 and b"Mock reviews" in r.read()
     t0 = time.monotonic()
     p.send_signal(getattr(signal, sig))
-    _, err = p.communicate(timeout=5)
+    try:
+        _, err = p.communicate(timeout=5)
+    except subprocess.TimeoutExpired:
+        # The stop deadline is the assertion (a healthy serve stops in ~0.01 s); this only makes the failure
+        # diagnosable. Reap the child so the fixture cannot leave it behind, and show what it said on the way
+        # out: a shutdown that wedges is a real server bug, and its earlier traceback is the evidence.
+        p.kill()
+        try:
+            _, err = p.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            err = ""
+        raise AssertionError(
+            "serve did not stop within 5 s of %s; killed it. Its stderr was:\n%s" % (sig, err[-2000:]))
     assert p.returncode == 0, err[-2000:]
     assert time.monotonic() - t0 < 5
     assert "Traceback" not in err and "stopped" in err
@@ -109,7 +121,19 @@ def test_ctrl_c_works_even_when_started_with_sigint_ignored(spawn, tmp_path):
     p = spawn([sys.executable, "-c", code], child_env(tmp_path, port))
     wait_healthy(p, f"http://127.0.0.1:{port}")
     p.send_signal(signal.SIGINT)
-    _, err = p.communicate(timeout=5)
+    try:
+        _, err = p.communicate(timeout=5)
+    except subprocess.TimeoutExpired:
+        # Same reap-and-show treatment as the sibling above: the child is killed so the fixture cannot leave it
+        # behind, and its stderr is the evidence of where a shutdown that missed the deadline wedged.
+        p.kill()
+        try:
+            _, err = p.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            err = ""
+        raise AssertionError(
+            "serve did not stop within 5 s of SIGINT with SIGINT ignored at start; killed it. Its stderr was:\n%s"
+            % err[-2000:])
     assert p.returncode == 0 and "Traceback" not in err, err[-2000:]
 
 
@@ -160,6 +184,50 @@ def test_addr_in_use_covers_every_os():
 
 
 # ---------------------------------------------------------------- signal setup on platforms without some signals
+
+# ---------------------------------------------------------------- the connection slot and a thread that did start
+
+class _Idle:
+    """A request object the handler can open and read as an immediate EOF, so its thread exits at once."""
+
+    def makefile(self, mode, *args, **kwargs):
+        import io
+        return io.BytesIO(b"")
+
+    def shutdown(self, *args):
+        pass
+
+    def close(self):
+        pass
+
+
+def test_an_interrupt_after_the_thread_started_releases_the_slot_once(monkeypatch):
+    httpd = server.make_server("127.0.0.1", 0)
+    started, reported = [], []
+    real_start = threading.Thread.start
+
+    def start_then_interrupt(self):
+        real_start(self)          # the thread really begins ...
+        started.append(self)
+        raise KeyboardInterrupt   # ... and the interrupt lands before Thread.start() returns
+
+    monkeypatch.setattr(threading.Thread, "start", start_then_interrupt)
+    monkeypatch.setattr(threading, "excepthook", lambda args: reported.append(args.exc_value))
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            httpd.process_request(_Idle(), ("127.0.0.1", 1))
+        for t in started:
+            t.join(timeout=5)
+        assert all(not t.is_alive() for t in started)
+    finally:
+        httpd.server_close()
+    assert started and not any(isinstance(v, ValueError) for v in reported), reported
+    # every slot is free again: acquire all of them, then hand them back
+    got = [httpd._slots.acquire(timeout=5) for _ in range(httpd.max_connections)]
+    assert all(got)
+    for _ in got:
+        httpd._slots.release()
+
 
 @pytest.fixture
 def recorded_signals(monkeypatch):

@@ -15,7 +15,7 @@ import pytest
 import yaml
 
 from conftest import FEEDBACK, ROOT, SECRET, load_plugin
-from mockreview import api, cli, config, herenow, notify, owner, secrets, service, settings, store
+from mockreview import api, cli, config, notify, owner, secrets, service, settings, store
 from mockreview.store import ReviewError
 
 
@@ -93,11 +93,11 @@ def test_manifest_secrets_are_optional_and_capabilities_truthful():
     assert manifest["requires_hermes"] == ">=0.22.0"
     assert manifest["capabilities"] == []
     assert manifest["platforms"] == ["webhook"] and manifest["provides_hooks"] == []
-    assert {s["name"] for s in manifest["requires_env"]} == {"HERENOW_API_KEY", "MOCKREVIEW_WEBHOOK_SECRET"}
+    assert {s["name"] for s in manifest["requires_env"]} == {"MOCKREVIEW_WEBHOOK_SECRET"}
     assert all(s["optional"] and s["secret"] for s in manifest["requires_env"])
-    for key in ("herenow_api_key", "webhook_secret"):
-        assert manifest["config_schema"][key]["type"] == "secret"
-        assert manifest["config_schema"][key]["required"] is False
+    key = "webhook_secret"
+    assert manifest["config_schema"][key]["type"] == "secret"
+    assert manifest["config_schema"][key]["required"] is False
     assert list(ROOT.glob("*/plugin.yaml")) == []            # one manifest, at the root
 
 
@@ -127,7 +127,7 @@ class Context:
     def register_platform_handler(self, platform, factory): self.calls.append(("platform", platform))
 ctx = Context()
 plugin.register(ctx)
-assert len(ctx.calls) == len(set(ctx.calls)) == 9
+assert len(ctx.calls) == len(set(ctx.calls)) == 10
 assert pathlib.Path(plugin._mockreview()[0].__file__).is_relative_to(root)
 '''
     proc = subprocess.run([sys.executable, "-I", "-c", script, str(installed)], cwd=tmp_path,
@@ -135,39 +135,13 @@ assert pathlib.Path(plugin._mockreview()[0].__file__).is_relative_to(root)
     assert proc.returncode == 0, proc.stderr
 
 
-def install_fake_publish_script():
-    script = config.hermes_home() / "skills" / "productivity" / "here-now" / "scripts" / "publish.sh"
-    script.parent.mkdir(parents=True)
-    script.write_text("#!/bin/sh\nexit 9\n", encoding="utf-8")
-    return script
-
-
-def test_missing_skill_key_and_escaping_skill_never_spawn(review, monkeypatch, secret_values, tmp_path):
-    spawned = []
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: spawned.append(1))
-    with pytest.raises(herenow.HereNowError, match="install-here-now-skill.*official/productivity/here-now"):
-        herenow.publish(review["id"])
-    outside = tmp_path / "outside" / "publish.sh"
-    outside.parent.mkdir()
-    outside.write_text("exit 9", encoding="utf-8")
-    skill = config.hermes_home() / "skills" / "here-now" / "scripts"
-    skill.parent.mkdir(parents=True)
-    skill.symlink_to(outside.parent, target_is_directory=True)
-    with pytest.raises(herenow.HereNowError, match="install-here-now-skill"):
-        herenow.publish(review["id"])
-    install_fake_publish_script()
-    secret_values["HERENOW_API_KEY"] = " "
-    with pytest.raises(herenow.HereNowError, match="HERENOW_API_KEY is not set"):
-        herenow.publish(review["id"])
-    assert not spawned
-
-
 def test_no_credential_store_reads_across_public_operations(env, variants, tmp_path, monkeypatch,
                                                           secret_values, capsys):
     """A tripwire catches both built-in open and pathlib reads, including a positive control."""
     forbidden_names = {".env", "auth.json", "credentials", "credentials.json", "webhook_subscriptions.json"}
     forbidden_dirs = {".aws", ".azure", "gcloud", "vendor", "keychains"}
-    original_open, original_io_open, original_read = builtins.open, io.open, Path.read_text
+    original_open, original_io_open, original_path_open, original_read = (builtins.open, io.open, Path.open,
+                                                                          Path.read_text)
     blocked = []
     def check(path):
         if isinstance(path, (str, bytes, os.PathLike)):
@@ -181,11 +155,17 @@ def test_no_credential_store_reads_across_public_operations(env, variants, tmp_p
     def guarded_io_open(path, *a, **kw):
         check(path)
         return original_io_open(path, *a, **kw)
+    def guarded_path_open(self, *a, **kw):
+        check(self)
+        return original_path_open(self, *a, **kw)
     def guarded_read(path, *a, **kw):
         check(path)
         return original_read(path, *a, **kw)
     monkeypatch.setattr(builtins, "open", guarded_open)
     monkeypatch.setattr(io, "open", guarded_io_open)
+    # Path.open is the seam read_bytes() and read_text() go through: on 3.10 it calls the accessor directly instead of
+    # io.open, so guarding io.open alone misses read_bytes there.
+    monkeypatch.setattr(Path, "open", guarded_path_open)
     monkeypatch.setattr(Path, "read_text", guarded_read)
     controls = [tmp_path / name for name in forbidden_names]
     controls += [tmp_path / name / "secret.json" for name in forbidden_dirs]
@@ -196,28 +176,7 @@ def test_no_credential_store_reads_across_public_operations(env, variants, tmp_p
     assert len(blocked) == len(controls) * 3
     blocked.clear()
     origin = {"platform": "telegram", "chat_id": "test-group", "thread_id": "topic:a"}
-    data = store.create_review("Guard", "", origin, "herenow", [store.parse_variant_spec(v) for v in variants])
-    script = install_fake_publish_script()
-    monkeypatch.setenv("HERENOW_API_KEY", "wrong-process-key")
-    def publish(cmd, **kw):
-        assert cmd[1] == str(script)
-        assert kw["env"]["HERENOW_API_KEY"] == secret_values["HERENOW_API_KEY"]
-        return SimpleNamespace(returncode=0, stderr="publish_result.slug=guard-review-ab12\n"
-            "publish_result.site_url=https://guard-review-ab12.here.now/\npublish_result.auth_mode=authenticated\n")
-    monkeypatch.setattr(subprocess, "run", publish)
-    # Exercise account API reads and deletes without network providers.
-    class Reply:
-        def __enter__(self): return self
-        def __exit__(self, *a): pass
-        def read(self, *a): return b'{"records": []}'
-    original_urlopen = herenow.urllib.request.urlopen
-    def urlopen(request, **kw):
-        if not request.full_url.startswith(config.HERENOW_API):
-            return original_urlopen(request, **kw)
-        assert request.get_header("Authorization") == "Bearer " + secret_values["HERENOW_API_KEY"]
-        return Reply()
-    monkeypatch.setattr(herenow.urllib.request, "urlopen", urlopen)
-    herenow.publish(data["id"])
+    data = store.create_review("Guard", "", origin, "local", [store.parse_variant_spec(v) for v in variants])
     assert owner.describe()["wake"]["secret"] == "set"
     assert SECRET not in json.dumps(owner.describe())
     result = service.submit(data["id"], 1, FEEDBACK, data["token"])
@@ -233,13 +192,9 @@ def test_no_credential_store_reads_across_public_operations(env, variants, tmp_p
     assert created["review_id"]
     assert cli.main(["create", "--title", "CLI guard", "--platform", "telegram", "--chat-id", "test-group",
                      "--mode", "local", "--prototype", variants[0].split("|")[2], "--allow-live-demo"]) == 0
-    assert herenow.fetch_records("guard-review-ab12") == []
-    assert herenow.delete_site("guard-review-ab12") is True
     secret_values.clear()
     assert not owner.wake_status()["ready"]
     assert not notify.send(origin, "guard-delivery")[0]
-    with pytest.raises(herenow.HereNowError, match="not set"):
-        herenow.api_key()
     assert not blocked
 
 

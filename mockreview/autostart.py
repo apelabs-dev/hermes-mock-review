@@ -5,7 +5,7 @@ its webhook platform connects (that platform only ever connects inside the gatew
 CLI, `hermes plugins validate` and Kanban workers never start anything. register() itself starts nothing.
 
 What runs when it starts: one daemon thread "mockreview-board" (serve_forever on host:port) and the daemon
-"mockreview-worker" thread (retries, here.now polls, housekeeping), both from server.py, shared with the foreground
+"mockreview-worker" thread (retries, stalled notices, housekeeping), both from server.py, shared with the foreground
 `mockreview serve`. They stop when the process exits (one atexit handler shuts the server down cleanly). There is
 deliberately no stop on plugin unload: a forced plugin rescan unloads and re-registers every plugin, and the gateway
 never calls an already-wired factory again, so stopping there would leave no board until the gateway restarts.

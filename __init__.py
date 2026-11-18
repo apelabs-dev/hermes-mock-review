@@ -74,8 +74,9 @@ def _live_demo_prop(on: bool) -> Dict[str, Any]:
 
 
 def _mode_prop(ask: bool, host: str) -> Dict[str, Any]:
-    return {"type": "string", "enum": ["tailnet", "local", "herenow"], "description": (
-        "Hosting. Ask the user first: tailnet (private), local (this computer's address) or herenow (password protected by default)."
+    return {"type": "string", "enum": ["tailnet", "local", "public"], "description": (
+        "Hosting. Ask the user first: tailnet (private), local (this computer's address) or public (an internet URL "
+        "behind Tailscale Funnel or any TLS proxy)."
         if ask else
         f"Hosting; omit for the saved default ({host}).")}
 
@@ -97,7 +98,6 @@ def schemas(ask_host: bool, default_host: str, live_demo: bool) -> Dict[str, Dic
                     "description": "Copy the thread ID from your session context in the system prompt if present; otherwise omit."},
                 "brief": {"type": "string"},
                 "mode": _mode_prop(ask_host, default_host),
-                "password": {"type": "boolean", "description": "Password protect here.now (default true); return password next to URL."},
                 **ROUND_PROPS, "allow_live_demo": _live_demo_prop(live_demo), **LOOK_PROPS,
                 "wake": {"type": "boolean", "description": "False: demo board nobody is woken by (skips the wake-route check)."}},
                 "required": ["title"]},
@@ -129,6 +129,22 @@ def schemas(ask_host: bool, default_host: str, live_demo: bool) -> Dict[str, Dic
             "name": "mock_review_list",
             "description": "List mock reviews (open only unless include_closed).",
             "parameters": {"type": "object", "properties": {"include_closed": {"type": "boolean"}}},
+        },
+        "mock_review_patch_block": {
+            "name": "mock_review_patch_block",
+            "description": "Patch one block's HTML in the current round in place (a pin fix). Pass the round and "
+                           "rev you read.",
+            "parameters": {"type": "object", "properties": {
+                "review_id": {"type": "string"},
+                "block": {"type": "string"},
+                "html": {"type": "string"},
+                "option": {"type": "string", "description": "Required for a decision block with options."},
+                "round": {"type": "integer",
+                          "description": "The round you read; it must still be the newest round."},
+                "if_rev": {"type": "integer", "description": "The block's rev from the round you read."},
+                "request_ids": {"type": "array", "items": {"type": "string"},
+                                "description": "The pin fix request ids this patch closes."}},
+                "required": ["review_id", "block", "html", "round", "if_rev"]},
         },
     }
 
@@ -176,7 +192,7 @@ class MockReview:
                     out: Any = api.create(a["title"], origin or None, brief=a.get("brief") or "",
                                           mode=a.get("mode"), decisions=a.get("decisions"),
                                           prototype=a.get("prototype"), design=a.get("design"),
-                                          allow_live_demo=a.get("allow_live_demo"), wake=a.get("wake"), password=a.get("password"),
+                                          allow_live_demo=a.get("allow_live_demo"), wake=a.get("wake"),
                                           project=a.get("project"), no_design=a.get("no_design"),
                                           off_brand=a.get("off_brand"), **look)
                 elif name == "mock_review_add_round":
@@ -196,6 +212,19 @@ class MockReview:
                         return json.dumps({"error": "review_id is required"})
                     rnd = a.get("round")
                     out = api.ack(a["review_id"], int(rnd) if rnd is not None else None)
+                elif name == "mock_review_patch_block":
+                    for key in ("review_id", "block", "html"):
+                        if not a.get(key):
+                            return json.dumps({"error": f"{key} is required"})
+                    if a.get("round") is None:
+                        return json.dumps({"error": "patch_block needs the round you read: pass round=<n> "
+                                                    "(mock_review_feedback gives it)"})
+                    if a.get("if_rev") is None:
+                        return json.dumps({"error": "patch_block needs if_rev: the block revision from the round "
+                                                    "you read"})
+                    out = api.patch_block(a["review_id"], a["block"], a["html"], option=a.get("option"),
+                                          round_n=a.get("round"), if_rev=a.get("if_rev"),
+                                          request_ids=a.get("request_ids"))
                 else:
                     out = {"reviews": api.list_reviews(include_closed=bool(a.get("include_closed")))}
                 return json.dumps(out, ensure_ascii=False)
@@ -219,7 +248,7 @@ class MockReview:
         _, cli, _, _ = self._bind()
         return cli.run(args)
 
-    # `/mockreview list | open <id> | close <id> | password <id> on|off | settings`
+    # `/mockreview list | open <id> | close <id> | settings`
     def slash(self, raw: str = "") -> str:
         try:
             api, cli, settings, ReviewError = self._bind()
@@ -238,11 +267,8 @@ class MockReview:
                 link = api.review_link(parts[1])
                 return f"{link['title']} ({link['status']}): {link['url'] or 'no public URL yet'}"
             if cmd == "close" and len(parts) == 2:
-                res = api.close(parts[1])
-                extra = " Its here.now site was deleted." if res.get("site_deleted") else ""
-                return f"Closed {parts[1]}.{extra}"
-            if cmd == "password" and len(parts) == 3 and parts[2] in ("on", "off"):
-                return json.dumps(api.password(parts[1], parts[2] == "on"), ensure_ascii=False)
+                api.close(parts[1])
+                return f"Closed {parts[1]}."
             if cmd == "settings":
                 return cli.settings_text(settings.resolve_all(), settings.describe())
         except ReviewError as e:
@@ -250,7 +276,7 @@ class MockReview:
         except Exception as e:
             log.exception("/mockreview %s failed", raw)
             return f"Error: {type(e).__name__}: {e}"
-        return "Usage: /mockreview list | open <review_id> | close <review_id> | password <review_id> on|off | settings"
+        return "Usage: /mockreview list | open <review_id> | close <review_id> | settings"
 
 
     # ctx.register_platform_handler("webhook", ...): the gateway calls this when its webhook platform connects.
@@ -280,8 +306,8 @@ def register(ctx: Any) -> None:
                           description=schema["description"], emoji="🖼️")
     ctx.register_skill("usage", PLUGIN_DIR / "skills" / "usage" / "SKILL.md",
                        description="When and how to use the mock_review_* tools and settings")
-    ctx.register_command("mockreview", handler=mr.slash, description="Mock reviews: list, open, close, password, settings",
-                         args_hint="list | open <id> | close <id> | password <id> on|off | settings")
+    ctx.register_command("mockreview", handler=mr.slash, description="Mock reviews: list, open, close, settings",
+                         args_hint="list | open <id> | close <id> | settings")
     register_cli = getattr(ctx, "register_cli_command", None)
     if callable(register_cli):
         register_cli(name="mockreview", help="Mock review boards and settings",

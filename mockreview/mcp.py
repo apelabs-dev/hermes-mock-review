@@ -7,24 +7,42 @@ The server implements the legacy initialize handshake (the era every client here
 ``notifications/initialized``, ``ping``, ``tools/list`` and ``tools/call``. A modern-only client probes
 ``server/discover``, gets ``-32601`` and falls back to ``initialize``. Read until EOF, then exit 0.
 
-The five tools call ``mockreview.api`` directly, exactly like the CLI and the Hermes plugin tools: never a second
-code path, never a store read or write of its own. Wake is off by default because an external CLI has no Hermes
-session context; an explicit ``--platform``/``--chat-id`` pair (or the matching tool arguments) selects an origin.
+The six board tools call ``mockreview.api`` directly, exactly like the CLI and the Hermes plugin tools: never a
+second code path, never a store read or write of its own, and no subprocess. Wake is off by default because an
+external CLI has no Hermes session context; an explicit ``--platform``/``--chat-id`` pair (or the matching tool
+arguments) selects an origin.
+
+The three comment tools (``list_comments``, ``reply``, ``resolve``) work through ``mockreview.threads``, the same model
+the board and its REST API use, so a reply is the comment a person sees live. They are the only tools that need an
+identity: a personal access token named by ``--token`` or ``MOCKREVIEW_TOKEN``, stored hashed in the database.
+The token's user must hold a grant on the review — reviewer or commenter to reply, reviewer to resolve — and every
+reply and resolve writes an audit row under that account. ``@Hermes`` in an agent's reply never activates the thread
+(``can_activate`` is forced false and a hermes mention is dropped), so two agents cannot wake each other in a loop.
+
+A reply or resolve from this process would persist its event but never reach a board's open SSE stream: ``live``
+subscribes in the server process. So when a board server is running for the same store, ``mockreview.runtime`` finds it
+and the mutation is POSTed back over loopback with the caller's token; the server does the write and the live publish
+under its own publish lock, exactly like a board request. With no reachable server, the write goes through
+``mockreview.threads`` directly (nothing is subscribed anyway). A transport failure falls back to that direct write with
+the same idempotency key; an HTTP error answer is reported, never retried.
 """
 
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import logging
 import os
 import re
 import sys
+import urllib.error
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import api, settings
+from . import api, db, owner, runtime, settings, store, threads, users
 from .store import ReviewError
 
 log = logging.getLogger("mockreview.mcp")
@@ -32,23 +50,40 @@ log = logging.getLogger("mockreview.mcp")
 SUPPORTED = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
 DEFAULT_PROTOCOL = SUPPORTED[0]
 
-TOOL_NAMES: Tuple[str, ...] = (
+BOARD_TOOL_NAMES: Tuple[str, ...] = (
     "mock_review_create",
     "mock_review_add_round",
     "mock_review_feedback",
     "mock_review_ack",
     "mock_review_list",
+    "mock_review_patch_block",
 )
+COMMENT_TOOL_NAMES: Tuple[str, ...] = ("list_comments", "reply", "resolve")
+TOOL_NAMES: Tuple[str, ...] = BOARD_TOOL_NAMES + COMMENT_TOOL_NAMES
+
+REPLY_ROLES = ("owner", "reviewer", "commenter")
+RESOLVE_ROLES = ("owner", "reviewer")
 
 WAKE_REQUIRED = (
     "Wake is enabled: explicit origin_platform and origin_chat_id are required. Copy source/platform, chat ID and "
     "optional thread ID from your session context in the system prompt; never guess a destination. Use wake=false "
     "only for a demo board."
 )
+MISSING_TOKEN = (
+    "This MCP server has no access token, so the comment tools cannot act as anyone. Create a personal token with "
+    "`mockreview tokens create --user <id> <name>` and start the server with `--token` (or set MOCKREVIEW_TOKEN)."
+)
+BAD_TOKEN = ("This access token is not valid: it is unknown or revoked. Create a new one with "
+             "`mockreview tokens create`.")
+NO_THREAD = "thread not found, or this token's user has no access to its review"
 INSTRUCTIONS = (
     "Create a review board with mock_review_create and send its url to the reviewer. "
     "Read the marks back with mock_review_feedback. "
-    "Acknowledge a handled round with mock_review_ack so no stalled ping is sent."
+    "When a pin fix asks for it, patch that block in place with mock_review_patch_block, passing the round and "
+    "the block's rev you read. "
+    "Acknowledge a handled round with mock_review_ack so no stalled ping is sent. "
+    "Work through the board's comment threads with list_comments, reply and resolve; those three tools act as the "
+    "person whose access token the server was started with."
 )
 
 _JSON_TYPES = {"bool": "boolean", "int": "integer", "float": "number", "list": "array", "str": "string"}
@@ -60,6 +95,7 @@ class Options:
     chat_id: Optional[str] = None
     thread: Optional[str] = None
     wake: bool = False
+    token: Optional[str] = None        # a personal access token; the comment tools act as its user
 
 
 # ---------------------------------------------------------------- tool descriptors
@@ -129,18 +165,19 @@ def tools() -> List[Dict[str, Any]]:
                            "saved profiles, a create with no design, no binding and no no_design fails. Mocks must "
                            "use the profile's colours and fonts (var(--accent) ...), or the call fails. interactive_elements is "
                            "on by default: build every control a mock shows so it works without script (select, "
-                           "details, checkbox or radio inputs styled with :checked, text inputs).",
+                           "details, checkbox or radio inputs styled with :checked, text inputs). A decisions block of "
+                           "type artifact ({id, src|html, ...}) shows your own page with script (audio/video players, a "
+                           "timeline) in a sandbox: no network, media bundled in from src's folder; the page can keep "
+                           "bounded page state and, if markable, set its own mark.",
             "inputSchema": {"type": "object", "properties": {
                 "title": {"type": "string"},
                 "brief": {"type": "string"},
                 **round_props,
-                "mode": {"type": "string", "enum": ["tailnet", "tailscale", "local", "lan", "herenow"],
-                         "description": "Hosting: tailnet (private), local (this computer), lan or herenow "
-                                        "(password protected by default)."},
+                "mode": {"type": "string", "enum": ["tailnet", "local", "public"],
+                         "description": "Hosting: tailnet (private), local (this computer) or public (an internet URL "
+                                        "behind Tailscale Funnel or any TLS proxy)."},
                 "wake": {"type": "boolean",
                          "description": "Wake the origin chat on Send. Off by default; needs an explicit origin."},
-                "password": {"type": "boolean",
-                             "description": "Password protect here.now (default true); returned next to the URL."},
                 **look,
                 **_origin_properties(),
                 }, "required": ["title"]},
@@ -184,6 +221,61 @@ def tools() -> List[Dict[str, Any]]:
             "inputSchema": {"type": "object", "properties": {
                 "include_closed": {"type": "boolean"},
                 }, "required": []},
+        },
+        {
+            "name": "mock_review_patch_block",
+            "description": "Patch one block's HTML in the newest round, in place (a pin fix). Pass the round and the "
+                           "block's rev you read.",
+            "inputSchema": {"type": "object", "properties": {
+                "review_id": {"type": "string"},
+                "block": {"type": "string"},
+                "html": {"type": "string"},
+                "option": {"type": "string", "description": "Required for a decision block with options."},
+                "round": {"type": "integer",
+                          "description": "The round you read; it must still be the newest round."},
+                "if_rev": {"type": "integer", "description": "The block's rev from the round you read."},
+                "request_ids": {"type": "array", "items": {"type": "string"},
+                                "description": "The pin fix request ids this patch closes."},
+                }, "required": ["review_id", "block", "html", "round", "if_rev"]},
+        },
+        {
+            "name": "list_comments",
+            "description": "List a review's comment threads with their comments, as the token's user sees them "
+                           "(needs the server's access token). status defaults to open, because resolved threads are "
+                           "hidden on the board; pass resolved or all to read them too. Each thread carries its "
+                           "anchor, round, status, detached flag, comments, authors and mentions.",
+            "inputSchema": {"type": "object", "properties": {
+                "review_id": {"type": "string"},
+                "status": {"type": "string", "enum": ["open", "resolved", "all"],
+                           "description": "Which threads: open (default), resolved, or all."},
+                }, "required": ["review_id"]},
+        },
+        {
+            "name": "reply",
+            "description": "Reply to a comment thread as the token's user (reviewer or commenter; the owner may too). "
+                           "Plain text, 2000 characters, URLs auto-linked. The reply appears in the thread live, under "
+                           "that user's name, and is audited; the result's delivery is \"live\" when the running board "
+                           "took the write (an open page receives it at once) and \"stored\" when it was only saved for "
+                           "the next load. An @Hermes mention never wakes Hermes: agent replies cannot start a loop. "
+                           "Replying to a resolved thread is refused until resolve(reopen=true).",
+            "inputSchema": {"type": "object", "properties": {
+                "thread_id": {"type": "string"},
+                "text": {"type": "string", "description": "Plain text, up to 2000 characters."},
+                "mentions": {"type": "array", "items": {"type": "string"},
+                             "description": "Optional structured mentions (\"user:<id>\", \"guest:<id>\"). \"hermes\" is "
+                                            "dropped: an agent's reply never wakes Hermes."},
+                }, "required": ["thread_id", "text"]},
+        },
+        {
+            "name": "resolve",
+            "description": "Resolve a comment thread (reviewer or owner only), or reopen it with reopen=true. A "
+                           "resolved thread is hidden on the board and takes no replies until it is reopened. Fires "
+                           "the same live event as the button and is audited; the result's delivery is \"live\" when "
+                           "the running board took the write and \"stored\" when it was only saved for the next load.",
+            "inputSchema": {"type": "object", "properties": {
+                "thread_id": {"type": "string"},
+                "reopen": {"type": "boolean", "description": "Reopen a resolved thread instead of resolving it."},
+                }, "required": ["thread_id"]},
         },
     ]
 
@@ -262,7 +354,6 @@ def _create(args: Dict[str, Any], options: Options) -> Dict[str, Any]:
         design=args.get("design"),
         allow_live_demo=args.get("allow_live_demo"),
         wake=wake,
-        password=args.get("password"),
         **_brand(args),
         **_look(args),
     )
@@ -299,12 +390,207 @@ def _list(args: Dict[str, Any], options: Options) -> Dict[str, Any]:
     return {"reviews": api.list_reviews(include_closed=bool(args.get("include_closed")))}
 
 
+def _patch_block(args: Dict[str, Any], options: Options) -> Dict[str, Any]:
+    for key in ("review_id", "block", "html"):
+        if not args.get(key):
+            raise ReviewError(f"{key} is required")
+    return api.patch_block(str(args["review_id"]), str(args["block"]), str(args["html"]),
+                           option=args.get("option"), round_n=args.get("round"),
+                           if_rev=args.get("if_rev"), request_ids=args.get("request_ids"))
+# ---------------------------------------------------------------- comment tools (need the access token)
+
+def _actor(options: Options) -> Tuple[Dict[str, Any], str]:
+    """The account this server's access token belongs to, read fresh on every call (a revoked token stops working at
+    once). Missing and invalid are different answers: one is setup, the other is a dead token."""
+    raw = (options.token or "").strip()
+    if not raw:
+        raise ReviewError(MISSING_TOKEN, 401)
+    user = users.token_user(raw)
+    if user is None:
+        raise ReviewError(BAD_TOKEN, 401)
+    return user, f"user:{user['id']}"
+
+
+def _role(user: Dict[str, Any], review_id: str) -> str:
+    role = threads.role_of(int(user["id"]), review_id)
+    if role is None:
+        raise ReviewError("this token's user has no access to that review", 403)
+    return role
+
+
+def _as(user: Dict[str, Any], role: str) -> Dict[str, Any]:
+    return {"user_id": user["id"], "name": user["name"], "role": role}
+
+
+def _audit(actor: str, action: str, target: str, **detail: Any) -> None:
+    """One audit row for an agent's write, under the token's account (never a display name)."""
+    with db.tx() as conn:
+        users.audit(conn, actor, action, target, **detail)
+
+
+def _thread(args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The thread row this call names, or None for a missing or malformed id (never an existence signal)."""
+    thread_id = str(args.get("thread_id") or "").strip()
+    if not thread_id:
+        raise ReviewError("thread_id is required")
+    try:
+        return threads.by_id(thread_id)
+    except ReviewError:
+        return None
+
+
+def _live_base() -> Optional[str]:
+    """The running board server for this store, verified to be that server, or None."""
+    base = runtime.base()
+    if base and runtime.verify(base):
+        return base
+    return None
+
+
+def _agent_mentions(value: Any) -> List[str]:
+    """Mentions an agent may attach: structured ids only, and never Hermes.
+
+    `threads.clean_mentions` accepts a bare "hermes", and `threads.reply` would then mark the thread activated for a
+    role that carries submit. Two agents replying to each other would wake each other forever, so a hermes mention is
+    dropped here and `can_activate=False` makes the guard independent of the caller's role.
+    """
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple)):
+        raise ReviewError("mentions must be a list", 400)
+    out: List[str] = []
+    for raw in value:
+        target = str(raw or "").strip()
+        if not target or target.lower().lstrip("@") == "hermes":
+            continue
+        out.append(target)
+    return out
+
+
+def _status(value: Any) -> str:
+    status = str(value or "open").strip().lower()
+    if status not in ("open", "resolved", "all"):
+        raise ReviewError("status must be open, resolved or all", 400)
+    return status
+
+
+def _list_comments(args: Dict[str, Any], options: Options) -> Dict[str, Any]:
+    review_id = str(args.get("review_id") or "").strip()
+    if not review_id:
+        raise ReviewError("review_id is required")
+    status = _status(args.get("status"))
+    with owner.bound(owner.resolve_soft()):
+        user, actor = _actor(options)
+        role = _role(user, review_id)          # before existence: a stranger cannot probe review ids
+        if not store.exists(review_id):
+            raise ReviewError("review not found", 404)
+        scope = threads.view_scope(review_id, guest=False, role=role)
+        all_threads = threads.list_threads(review_id, principal=actor, include_resolved=True, scope=scope)
+        shown = [t for t in all_threads if status == "all" or t["status"] == status]
+        return {"review_id": review_id, "status": status, "as": _as(user, role),
+                "counts": {"open": sum(1 for t in all_threads if t["status"] == "open"),
+                           "resolved": sum(1 for t in all_threads if t["status"] == "resolved")},
+                "rev": threads.rev(review_id, scope), "threads": shown}
+
+
+def _reply(args: Dict[str, Any], options: Options) -> Dict[str, Any]:
+    text = args.get("text")
+    if text is None:
+        raise ReviewError("text is required")
+    idem = uuid.uuid4().hex       # both paths carry it, so a lost response and a fallback cannot insert twice
+    with owner.bound(owner.resolve_soft()):
+        user, actor = _actor(options)                 # authentication first: no thread lookup before this
+        row = _thread(args)
+        if row is None:
+            raise ReviewError(NO_THREAD, 404)
+        review_id = str(row["review_id"])
+        role = threads.role_of(int(user["id"]), review_id)
+        if role is None:
+            raise ReviewError(NO_THREAD, 404)         # no grant is indistinguishable from a missing thread
+        if role not in REPLY_ROLES:
+            raise ReviewError(f"your role on this review is {role}: replying needs reviewer or commenter", 403)
+        mentions = _agent_mentions(args.get("mentions"))
+        raw = (options.token or "").strip()
+        base = _live_base()
+        thread: Optional[Dict[str, Any]] = None
+        comment: Optional[Dict[str, Any]] = None
+        if base:
+            try:
+                answer = runtime.post(base, f"/r/{review_id}/api/threads/{row['id']}/reply",
+                                      {"text": text, "mentions": mentions, "idem": idem}, raw)
+            except (urllib.error.URLError, OSError, http.client.HTTPException):   # no HTTP response: direct write
+                answer = None
+            if answer is None:                        # no live write happened: store it, exactly like an absent board
+                base = None
+            else:
+                thread = answer.get("thread") if isinstance(answer.get("thread"), dict) else None
+                sent = answer.get("comment") if isinstance(answer.get("comment"), dict) else {}
+                comment = next((c for c in (thread or {}).get("comments") or []
+                                if c.get("id") == (sent or {}).get("id")), None)
+                if comment is None:
+                    raise ReviewError("the board server did not return the comment it wrote", 502)
+        if base is None:
+            thread, comment_id = threads.reply_comment(
+                review_id, row["id"], actor, user["name"], role, text,
+                mentions=mentions, idem=idem, can_activate=False, principal=actor)
+            comment = next((c for c in thread.get("comments") or [] if c["id"] == comment_id), None)
+        _audit(actor, "mcp.reply", f"review:{review_id}", thread_id=row["id"],
+               comment=(comment or {}).get("id"))
+        # A write that reached the running board (and so its open streams) and one that was only stored look the same
+        # in the thread, so the result says which happened: "stored" never claimed to be live delivery.
+        return {"review_id": review_id, "as": _as(user, role), "thread": thread, "comment": comment,
+                "delivery": "live" if base else "stored"}
+
+
+def _resolve(args: Dict[str, Any], options: Options) -> Dict[str, Any]:
+    reopen = args.get("reopen")
+    if reopen is not None and not isinstance(reopen, bool):
+        raise ReviewError("reopen must be true or false", 400)
+    status = "open" if reopen else "resolved"
+    with owner.bound(owner.resolve_soft()):
+        user, actor = _actor(options)                 # authentication first: no thread lookup before this
+        row = _thread(args)
+        if row is None:
+            raise ReviewError(NO_THREAD, 404)
+        review_id = str(row["review_id"])
+        role = threads.role_of(int(user["id"]), review_id)
+        if role is None:
+            raise ReviewError(NO_THREAD, 404)         # no grant is indistinguishable from a missing thread
+        if role not in RESOLVE_ROLES:
+            raise ReviewError(f"your role on this review is {role}: only a reviewer or the owner can resolve a "
+                              "thread", 403)
+        raw = (options.token or "").strip()
+        base = _live_base()
+        thread: Optional[Dict[str, Any]] = None
+        if base:
+            try:
+                answer = runtime.post(base, f"/r/{review_id}/api/threads/{row['id']}/status",
+                                      {"status": status}, raw)
+            except (urllib.error.URLError, OSError, http.client.HTTPException):   # no HTTP response: direct write
+                answer = None
+            if answer is None:                        # no live write happened: store it, exactly like an absent board
+                base = None
+            else:
+                thread = answer.get("thread") if isinstance(answer.get("thread"), dict) else None
+                if thread is None:
+                    raise ReviewError("the board server did not return the thread it wrote", 502)
+        if base is None:
+            thread = threads.set_status(review_id, row["id"], status, actor, principal=actor)
+        _audit(actor, "mcp.reopen" if reopen else "mcp.resolve", f"review:{review_id}", thread_id=row["id"])
+        return {"review_id": review_id, "as": _as(user, role), "status": status, "thread": thread,
+                "delivery": "live" if base else "stored"}
+
+
 _TOOL_FUNCS = {
     "mock_review_create": _create,
     "mock_review_add_round": _add_round,
     "mock_review_feedback": _feedback,
     "mock_review_ack": _ack,
     "mock_review_list": _list,
+    "mock_review_patch_block": _patch_block,
+    "list_comments": _list_comments,
+    "reply": _reply,
+    "resolve": _resolve,
 }
 
 
@@ -450,8 +736,10 @@ def options_from_argv(argv: Optional[List[str]] = None) -> Options:
     p.add_argument("--thread", default=os.environ.get("MOCKREVIEW_THREAD") or None,
                    help="optional origin thread ID (env: MOCKREVIEW_THREAD)")
     p.add_argument("--wake", action="store_true", help="wake the origin chat on Send (default: off)")
+    p.add_argument("--token", default=os.environ.get("MOCKREVIEW_TOKEN") or None,
+                   help="personal access token for list_comments/reply/resolve (env: MOCKREVIEW_TOKEN)")
     a = p.parse_args(argv)
-    return Options(platform=a.platform, chat_id=a.chat_id, thread=a.thread, wake=a.wake)
+    return Options(platform=a.platform, chat_id=a.chat_id, thread=a.thread, wake=a.wake, token=a.token)
 
 
 def main(argv: Optional[list] = None) -> int:

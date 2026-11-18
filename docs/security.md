@@ -1,51 +1,234 @@
 # Security
 
 This page states what the board protects, what it leaves open on purpose, and how each hosting mode changes that.
-Read it before you set `host` to `0.0.0.0` or host a review on here.now.
+Read it before you set `host` to `0.0.0.0`.
 
 ## Model in one paragraph
 
-A review link is a capability. The review id is random (at least 64 bits), and anyone who can open the board can read the
-review and send feedback for it. New here.now reviews additionally require a shared password by default. The board has no reviewer accounts. What protects a review is that the link is hard
-to guess and that the network path to the server is limited: loopback by default, your tailnet with Tailscale, a password gate on here.now (unless explicitly disabled, or a legacy review).
+The board server has accounts. Every request to a review is checked against who is asking: the owner on this computer,
+a signed-in member with a grant on that review, or a guest who opened the review's share link. Anyone else gets the
+sign-in page, and a signed-in person without access gets the same "not valid" page whether or not the review exists.
+There are no passwords: people join with a single-use invite link, a one-time sign-in link from the shell, or an
+identity that a trusted reverse proxy vouches for.
+
+## Accounts and sign-in
+
+- Who counts as the owner. With `loopback_owner` on (the default), a request from this computer that did not come
+  through a proxy is the install's owner account, an admin. Turn it off and the owner signs in like anyone else, with
+  `hermes mockreview login`.
+- Invite links (`hermes mockreview invite`, or Settings → Invites). A link works once and expires after 7 days unless
+  you pass `--expires`. Opening it shows a confirmation button. The GET never uses the link, so link previews and
+  mail scanners do not burn it. The token is signed (itsdangerous) with a random key kept in the database. Only a hash
+  of its nonce is stored, and using it, revoking it and expiry are all checked in the database.
+- Sign-in links (`hermes mockreview login`, `hermes mockreview admin login-link --user <who>`): single use, 15 minutes.
+- Proxy identities, read only from a peer in `trusted_proxies` (default: this computer). Only one identity source
+  answers per request. A request that carries the headers of two enabled sources (`Cf-Access-Jwt-Assertion`, any
+  `Tailscale-User-*` header in any spelling, `X-Forwarded-User` / `X-Forwarded-Email`), valid or not, gets no proxy
+  identity at all and is treated as if it had none (its session cookie, or nobody).
+  - Tailscale Serve's `Tailscale-User-Login` (`tailscale_identity`, on by default). At tag `v1.98.1` (commit
+    `2f4c02ee68c459aaea92d8b2dd81a38816823bef`), `ipn/ipnlocal/serve.go:1046-1052` deletes every incoming
+    `Tailscale-User-*`, `Tailscale-Funnel-Request` and `Tailscale-Headers-Info` header; `:1058-1060` marks public
+    Funnel ingress with `Tailscale-Funnel-Request: ?1` and returns before setting any identity header; only private
+    tailnet Serve sets them, from `WhoIs` (`:1062-1074`). A Tailscale identity is therefore refused for a request that
+    carries the marker and for any public host (the Funnel URL or `public_url`): a public URL never signs anyone in with
+    it. `forwarded_identity` is refused on a public host and with the Funnel marker too, because Funnel and Serve
+    connect from a trusted loopback proxy and strip only `Tailscale-*` headers; on a public host Cloudflare Access (a
+    signed JWT) remains the only header/token-based sign-in source, and everyone else uses an invite or a share link.
+  - A Tailscale identity also needs the `X-Forwarded-For` header that Serve itself sets: exactly one address, inside the
+    tailnet ranges `100.64.0.0/10` or `fd7a:115c:a1e0::/48`. `addProxyForwardedHeaders` in `ipn/ipnlocal/serve.go`
+    (`:1036-1044` at tag `v1.98.1`, commit `2f4c02ee68c459aaea92d8b2dd81a38816823bef`) sets it to the tailnet address
+    the request came from (`r.Out.Header.Set("X-Forwarded-For", c.SrcAddr.Addr().String())`). A public proxy in front
+    puts the real client address there, so its requests get no Tailscale identity.
+  - Every other reverse proxy whose address is in `trusted_proxies` (Caddy, cloudflared, oauth2-proxy and so on) must
+    strip `Tailscale-User-*` headers from incoming requests, or `tailscale_identity` must be turned off. Otherwise a
+    client of that proxy who sends `Tailscale-User-Login` and a tailnet `X-Forwarded-For` could name a tailnet
+    account.
+  - `X-Forwarded-User` / `X-Forwarded-Email` from oauth2-proxy, Authelia or similar (`forwarded_identity`, off by
+    default). Turn it on only when that proxy strips those headers from incoming requests. It is refused on a public
+    host and with the Funnel marker (see above); it is for a board on a private host.
+  - Cloudflare Access (`cloudflare_team` and `cloudflare_audience`): the `Cf-Access-Jwt-Assertion` JWT must be RS256,
+    signed by a key from your team's certs endpoint, for your application's audience and your team's issuer, and not
+    expired. This needs the plugin's optional `crypto` extra (PyJWT with cryptography). With the two settings set and
+    PyJWT missing, the server refuses to start and says why.
+
+  A proxy identity signs a person in only after it is linked to an account: the first time they open an invite through
+  the proxy, the identity is linked to the new account.
+- Sessions. The cookie `mr_session` is HttpOnly and SameSite=Lax. It is also Secure when a trusted proxy reports
+  HTTPS. Only a hash of the session id is stored. A session lasts 30 days from its last use: when a use pushes its end
+  out (at most once a minute), the server sends the cookie again with a fresh 30-day lifetime. A guest's session lasts
+  as long as the share link generation it joined through. Settings → Devices lists your sessions, and "Sign out other
+  devices" ends all but the current one, live streams included. Signing out ends the session in the browser's cookie
+  even when a proxy identity signed the request in.
+- Throttling. Ten failed link attempts from one address within a minute block that address for a minute (429). Behind a
+  trusted proxy the address is the last `X-Forwarded-For` hop.
+- Access tokens (`hermes mockreview tokens`) are stored as SHA-256 hashes and shown once, when created.
+- Audit. Every change to a role, a grant, an invite, a share link or a token writes a row to the `audit` table, in the
+  same transaction as the change.
+
+The accounts, sessions, grants and audit rows live in `access.sqlite3` under the data root, next to the review folders.
+
+## Roles
+
+- Instance roles: admin or member. Admins can open and manage every review, and see Members and Invites in Settings.
+  The last admin cannot be demoted, and the only admin cannot be deleted.
+- Review roles, granted per review or for all reviews, optionally with an end date: viewer (look), commenter (look and
+  comment), reviewer (look, comment and send feedback). Only an admin manages a review's share link.
+- Guests open a review through its share link with the link's guest role (commenter by default). The server gives each
+  guest its own id and a random adjective+animal name (for example "Calm Otter"), unique among that review's guests
+  that still hold a live session; the guest may rename it, and it stays a label. Regenerating the link signs out every
+  guest of the old link and leaves members alone. Stopping the link does the same, and the old URL then answers like
+  any invalid link. Switching the link to `members` also ends every guest session of that review and closes its live
+  streams; a stale guest cookie then reads as a dead link, and members' sessions are untouched.
+- Roles and grants are read again on every request, so a change applies to the next request.
+
+## Share links and viewer guests
+
+- One link per review. It is signed with itsdangerous and carries the review id and its generation. A missing, stopped,
+  regenerated, expired or forbidden link answers with the same dead page, byte for byte, as a review that does not
+  exist. The same is true of a `members` link opened by nobody or by a guest: only signed-in people who can already read
+  the review are let through.
+- A viewer guest may read the board and nothing else. `POST` to `api/submit`, `api/pin-fix`, `api/share`, `api/people`
+  and `api/guest-name` is refused with 403 before any work is done. A reviewer-role guest may Send and request a pin
+  fix: both are stored for the owner, and neither ever wakes Hermes — a guest link never pings it, so tell it in chat.
+  No guest of any link role ever sets `activated`: a viewer cannot reach the wake path at all, and a guest whose link
+  role carries `submit` still only stores a plain `@Hermes` mention. Only the owner and signed-in members whose role
+  carries `submit` can activate Hermes, and never on a board created with wake-up off.
+- A viewer's `state.json` carries no submit token, no feedback pins or notes, and only the round the link's version
+  picker names (or every round while it says `latest`). The board shows one banner line naming the round.
+- Seats are capped per review: 25 live seats, one of them the owner's. A full link refuses new guests with a 409 page
+  and sets no session cookie. Guests whose sessions have ended free their seat.
+- Regenerating or stopping a link ends its guest sessions and closes their live streams; members' sessions are not
+  touched. Switching it from `anyone` to `members` does the same, and every later guest request is refused because the
+  live link's audience is no longer `anyone`.
+
+## Exports
+
+A round can be exported as PNG, PDF, HTML or Markdown, with or without the review's comments. Every export route
+requires viewer access or higher on the review and writes an `export` audit row server-side. All four formats come from
+one static document: the server builds it with an allowlisted serializer (`mockreview/export.py`), so no script, event
+handler, external URL, `iframe`, form or SVG from a mock or prototype survives; images are inlined as
+`data:image/(png|jpeg|webp|gif);base64,` and the document's own CSP allows nothing but inline style and data images. The
+PDF is that document on a print page, the Markdown is that document converted in the browser, and the PNG captures
+that flattened document (never the live board, whose mocks live in same-origin iframes SnapDOM cannot see into).
+Comment bodies are plain text; the comments section is absent when the toggle is off and PNG captures are always built
+with it off.
 
 ## What is authenticated
 
 - Wake-up requests to Hermes. Send posts to the Hermes webhook with an HMAC-SHA256 signature over the timestamp and the
   body, using `MOCKREVIEW_WEBHOOK_SECRET`. Hermes rejects a request whose signature is wrong or whose timestamp is more
   than 300 seconds off, and it drops a delivery id it saw in the last hour.
-- Feedback submits. Each review has a random submit token, and a submit without the right token is refused with 403. The
-  token is part of the review's `state.json`, so whoever can open the board holds it. It stops a blind request to a known
-  review id. It does not separate one reviewer from another.
-- The index page (`/`) and the owner endpoint (`/api/owner`). They answer requests that come from this computer without
-  proxy headers, and return 404 to everyone else. A visitor over the LAN or tailnet needs a review's own link.
+- Every board request, as described above. A submit also needs the review's submit token (from its `state.json`) and a
+  role that may send feedback.
+- Every POST carries a CSRF token: the `X-CSRF-Token` header (or a form's `csrf` field) must equal the `mr_csrf` cookie
+  and, when signed in, that session's own token. A POST with a foreign `Origin` or `Sec-Fetch-Site: cross-site` is
+  refused before that.
+- The index page (`/`) lists only the reviews the person may open. The owner endpoint (`/api/owner`) answers requests
+  from this computer without proxy headers and returns 404 to everyone else. A request whose Host is a public name
+  (`public_url` or the Tailscale Funnel URL) is never treated as this computer's owner, even when it
+  arrives from 127.0.0.1 without a proxy header: a proxy that forwards without setting `X-Forwarded-For` must not hand
+  a stranger the owner account.
 
 ## What is not authenticated
 
-- Opening a local/tailnet review. Anyone with access and the link sees the title, the brief, the mocks, earlier marks and notes.
-- Submitting feedback, for anyone who opened the board. Reviewer identity is not recorded or checked.
-- Anything on a server bound to `0.0.0.0`: every device that reaches the port can send requests. The index stays
-  local-only, but a device that learns a review id can use it.
-- Reviewer identity on here.now. A shared password gates the site by default, but does not identify individual reviewers.
-  After unlock, Site Data accepts inserts from the page; only your API key can read them back.
+- Anyone holding a review's share link while it is live: the link is the guest's credential. Stop or regenerate it to
+  cut access.
+- A guest's display name: anyone can type any name. The server starts a guest with a random default, and access and
+  audit use the server-assigned guest id.
+- A request from this computer while `loopback_owner` is on. Any local process can act as the owner. Turn the setting
+  off on a shared machine.
 
 ## Protections in the server
 
-- Host allowlist. A request whose Host header is not loopback, the bind address, or the host of `public_base`,
-  `local_base` or `lan_address` gets 421. This blocks DNS rebinding. With a wildcard bind, any IP-literal Host is accepted
-  too. The list is read at server start.
+- Host allowlist. A request whose Host header is not loopback, the bind address, or the host of `public_url`, the
+  Tailscale Funnel URL, `public_base`, `local_base` or `lan_address` gets 421. This blocks DNS rebinding. With a
+  wildcard bind, any IP-literal Host is accepted too. The list is read at server start. The `public_url` and Funnel
+  hosts are also public names: a request on one is never the loopback owner, and `/healthz` answers only
+  `{"ok": true}` there. `public_base` is not a public name: it is the tailnet Serve address, and Serve keeps the
+  tailnet Host, so a tailnet identity still signs in there.
 - Origin check. A POST that carries an Origin header must come from an allowed origin, and `null` (a sandboxed frame) is
   refused with 403. The CLI and curl send no Origin and pass.
 - Response headers. The board is served with a Content-Security-Policy that allows only same-origin script, style, image
-  and frame sources, plus `nosniff` and `no-referrer`. Variant and prototype files are served with a `sandbox allow-scripts` policy, so they
-  run with an opaque origin and cannot reach the board.
+  and frame sources, plus `nosniff` and `no-referrer`. When a trusted proxy reports HTTPS (`X-Forwarded-Proto: https`)
+  the response also carries `Strict-Transport-Security: max-age=31536000`; a plain HTTP response never does. Variant and
+  prototype files are served with a `sandbox allow-scripts` policy, so they run with an opaque origin and cannot reach
+  the board. A round document gets the network-capable prototype policy only with a valid per-round frame token in its
+  path; without one it gets the artifact-grade policy described under "Artifact pages".
 - Untrusted content. User text is rendered as text. Mock HTML is parsed without running it, and the board removes
-  scripts, frames, forms and event-handler attributes. Anchor links retain only absolute HTTP(S) URLs with no whitespace
+  scripts, frames, forms and event-handler attributes, then runs the result through a second pass, the vendored
+  [DOMPurify](../mockreview/board/vendor/README.md) 3.4.17, under the same bans. Anchor links retain only absolute HTTP(S) URLs with no whitespace
   or controls; they open in a new tab with `noopener noreferrer`. Relative and other-protocol hrefs are removed.
   Table cells use text/DOM nodes to link bare absolute HTTP(S) URLs, including multiple URLs inside prose.
   Surrounding text, sentence punctuation and literal HTML are preserved; no cell content is parsed as HTML.
-- Size limits. Requests are capped at 2 MB, `decisions.json` at 3 MB, here.now records at 15 KB, and block counts, pins and
-  text lengths have fixed limits (see [decisions-format.md](decisions-format.md)).
+- Artifact pages. An `artifact` block is the one place agent-written script runs in front of a reviewer, so it is
+  contained twice. The frame is `sandbox="allow-scripts"` with no `allow-same-origin`: an opaque origin with no access to
+  the board's DOM, cookies, storage or `api/submit`, and no popups, forms or top navigation. The page's file carries a CSP
+  meta (`default-src 'none'`, inline script and style only, `data:` images, media and fonts, `connect-src 'none'`,
+  `form-action 'none'`, `frame-src 'none'`). The same policy, after `sandbox allow-scripts`, is the response header of
+  every file in a round that holds an artifact (the block file, `assets/`, `design/`, `decisions.json`), so a page that
+  navigates its own frame to another file of the round gets a document with no network either; the header holds even if
+  the meta is ignored. An artifact's own round keeps `ARTIFACT_ROUND_CSP` even when the request carries a valid frame
+  token. Every other round document is served with the same artifact-grade policy plus an allowance for its own
+  round's files
+  (`img-src`, `media-src`, `font-src`, `style-src`, `script-src`), and no network: a header on an image or video is
+  ignored by the browser, so mock media still loads, but a document with no token may not fetch, frame or post. A
+  round's normal prototype policy (network allowed) is granted by a **frame token**: the board mints one signed token
+  per round the viewer can see into `state.json` and puts it in the path of every frame document URL,
+  `/r/<id>/rounds/<n>/~<token>/<variant>/<path>`, so every relative URL a prototype derives (a sibling page, an
+  image under the round's own assets folder, a script one folder up) inherits it. The token names the review, the
+  round and the viewer, is signed with the install's key under its own salt, and is bound to the viewer's session
+  `id_hash`, to `local` for the loopback owner, or to `user:<id>` for a viewer signed in by a trusted proxy with no
+  cookie (re-resolved through `users.get_user` and the normal access decision); a request with a session must present
+  that session's token, and a sessionless request is re-resolved from the token's session and must still pass the
+  normal access decision. Signing out, regenerating the share link or revoking the grant therefore stops the token
+  loading anything. A session or account token lives as long as its binding; only a `local` token carries the
+  two-hour `max_age`. The `s` it carries is a viewer pseudonym the prototype can read from its own URL — a session
+  `id_hash` (already a digest, never the cookie), `user:<id>`, or `local` — so an artifact learns that its viewer is
+  the viewer of the round, and nothing more. A valid token authorises round files only, for exactly that review and
+  round, and never `state.json`, a board file, `/api/*` or another review; it is redacted from the request log
+  (`~…`), and round files keep
+  `Referrer-Policy: no-referrer` so it never appears in a third-party `Referer`. Known edge: a prototype that links
+  with a **root-absolute** path such as `/r/<id>/rounds/1/a/page2.html` drops the token and therefore loads with no
+  network; relative links, which Hermes generates, are unaffected. A navigation to a third-party URL is refused by the
+  board's own `frame-src 'self'` (no request is made), and a frame that loads anything but its block file (one that does
+  not answer the board's ping, which only the block file's probe does) is reset to the block file up to three times and
+  then removed. That reset is best effort: a page that forges the probe's reply keeps its frame, and what holds then is the
+  header. Media is bundled in as `data:` URIs under the 25 MB per asset and 50 MB per round caps (the round's copied
+  `assets/` folder counts against the same 50 MB), the page is capped at 2 MB, and a missing or oversized asset fails
+  the create call. The board accepts only a height report, a tap, a pin edit, `data` writes and a `mark` from the
+  frame. Page state is accepted only from a frame that is one of the board's artifact frames on the round it is showing
+  (a message tagged with an earlier round is ignored), only for that block's id, and only within 64 keys and 8 KB per
+  value and 256 KB per round; the server re-caps the same limits and drops unknown or foreign block ids. A frame that
+  floods the 40-messages-per-second bucket is ignored, not obeyed. Page state is untrusted reviewer-supplied data: it is
+  stored in the reviewer's draft, quoted in the feedback markdown under `## Page state`, and never executed or sanitised
+  into markup. It counts as content for enabling Send only: it never decides a mark, never resolves the review gate and
+  never submits on its own. `use('marks')` can set a mark only on a markable artifact, and the reviewer still presses
+  Send. The clipboard is delegated to the frame by `allow="clipboard-write"`, which enables the page's own Clipboard API
+  for every script in the frame while the frame has focus; the board is not in the clipboard path and the frame cannot
+  read the clipboard. The probe's `use('clipboard').writeText` adds a rule of its own — a real trusted tap in that frame
+  no older than 1 second, else the promise rejects — but a direct `navigator.clipboard.writeText` call from the page, or
+  from any third-party script it bundles, skips that rule and can overwrite the clipboard whenever its frame has focus
+  (pastejacking). The page's HTML is not sanitised (it must run script); its title, text and caption are plain text.
+  `tests/test_artifact_browser.py` attacks this from a real browser
+  (top navigation, fetch, XHR, WebSocket, EventSource, image, script, stylesheet, frame and media loads, beacon, form
+  post, `window.open`, links, the board's own submit endpoint, `parent.document`, cookies, storage, a message flood) and
+  asserts a local listener received no request. `tests/test_artifact_data.py` covers the data channel (the caps, a
+  flood, a wrong frame, a stale round, a burst that settles every promise) and the clipboard boundary (the tap rule,
+  the focus rule and the blocked read) with a real Chrome.
+- Size limits. Requests are capped at 2 MB, `decisions.json` at 3 MB, and block counts, pins and text lengths have fixed
+  limits (see [decisions-format.md](decisions-format.md)).
+- The comment surface. Comments and threads ([comments.md](comments.md)) are the board's second write path and pass the
+  same gate as Send: the Host allowlist, the Origin and `Sec-Fetch-Site` checks, the CSRF token and the 64 kB body cap.
+  A role without `comment` is refused before its body is read. The 2000-character text cap, the 200-open-thread and
+  40-comments-per-thread caps and the 20-writes-per-minute bucket live in `mockreview/threads.py`, which the board, the
+  REST API and the agent tools all call. Comment text is untrusted plain text: the board renders it with `textContent`
+  and linkifies bare `http(s)` URLs as DOM nodes, never as HTML, and mentions travel as structured ids rather than as
+  parsed text. Only an owner's or reviewer's `@Hermes` sets a thread's `activated` flag.
+- The live stream. `GET /r/<id>/events` is access-checked like every other read (a JSON 401 for nobody signed in, the
+  same 404 as a missing review for no access) and holds one of 25 seats per review: 24 for anyone, one kept for the
+  owner. A stream carries only the events of the review its reader may read; `Last-Event-ID` replays from the retained
+  window of that review alone, and an older cursor gets `reset` instead of a guess. Signing out other devices and
+  regenerating or stopping a share link close the matching sockets at once.
 - Feedback is treated as data. The bundled skill tells the model that quoted feedback is design input and not an
   instruction. A hostile reviewer could still write persuasive notes, so keep
   review links to people you trust.
@@ -71,43 +254,78 @@ The risk: with tools granted, the woken session acts on text a reviewer typed on
 skill tell the model that quoted feedback is design input, not instructions, but a model can still be persuaded. Grant
 only the toolsets the build needs, and only for boards whose reviewers you trust.
 
-A waking board is allowed only while the way to its Send button is gated (`mockreview/wakeguard.py`):
-
-- here.now: only with the password on. The password gates the whole site, Site Data writes included, and the submit
-  token sits only in the gated `state.json`, so nobody without the password can submit. A here.now board with the
-  password off is open to anyone holding the link, and every board of a platform wakes the same route.
-- tailnet and local: only while the board server listens on loopback. With `host` beyond loopback (`0.0.0.0`,
-  `--hosting lan`) anyone on the network can open every board and press Send, with no login.
+A waking board is allowed only while the way to its Send button is gated (`mockreview/wakeguard.py`): the board server
+must listen on loopback, no `public_url` may be configured, and the board must not be `public`. With `host` beyond
+loopback (`0.0.0.0`, `--hosting lan`) anyone on the network reaches the sign-in page, and any reviewer-role account
+there can press Send; a public board exposes the same button to anyone holding the link. While `public_url` is
+configured, a TLS proxy (Caddy, nginx, Cloudflare Tunnel, oauth2-proxy) serves the same loopback port on the internet,
+so it makes every board exposed too, whatever its mode. A Tailscale Funnel mapping (`hermes mockreview public on`)
+sets no `public_url`, so the guard does not see it: while one is on, set `public_url` to the Funnel URL or create
+boards with wake off.
 
 While `wake_toolsets` is set:
 
-- setup refuses to print the line (exit 1, summary row `wake toolsets failed`) when it was run with `--hosting lan`, while
-  `host` is beyond loopback, when here.now is the chosen or default host with `herenow_password` off, or while any open
-  here.now review wakes Hermes with its password off;
-- `create` refuses a waking here.now board with the password off, and any waking board while `host` is beyond loopback
-  (409, before anything is created or published); `add-round` refuses to add a round to one;
-- `mockreview password <id> off` is refused on a waking here.now board;
+- setup refuses to print the line (exit 1, summary row `wake toolsets failed`) when it was run with `--hosting lan` or
+  while `host` is beyond loopback;
+- `create` and `add-round` refuse a waking board while `host` is beyond loopback, `public_url` is configured, or the
+  board is `public` (409, before anything is created);
 - the server holds a wake (the submission stays `pending_notify` with `held, not woken: …` as its last error, and is
-  retried) until here.now has confirmed the board's password (`password_status: applied`), and for any board while
-  `host` is beyond loopback. The feedback is still saved; read it with `mockreview feedback`.
+  retried) while `host` is beyond loopback, `public_url` is configured, or the board is `public`. The feedback is still
+  saved; read it with `mockreview feedback`.
 
-A board with `wake` off is always allowed: it wakes nobody. The password is shared, so anyone you give it to can type
-feedback the woken session acts on: give it only to reviewers you would trust with those tools.
+A board with `wake` off is always allowed: it wakes nobody.
 
 The guard reads the setting, not the route file: keep `wake_toolsets` matching what you added by hand. After you empty
 it, re-run setup so the route loses its tools too.
 
 ## MCP server (stdio)
 
-`mockreview/mcp.py` serves the same five tools to a local coding agent over stdin/stdout. It opens no socket, listens on
-no port and holds no token: any local process the user starts can run it, so it is exactly as trusted as that process.
-It calls `mockreview.api` like the CLI, so review validation, storage and the origin/wake rules are the same code path.
-Wake stays off unless the agent supplies an explicit platform and chat ID, and no tool returns a secret.
+`mockreview/mcp.py` serves six board tools and three comment tools to a local coding agent over stdin/stdout. It
+opens no socket and listens on no port. The board tools need no identity and hold no token: any local process the user
+starts can run them, so they are exactly as trusted as that process. They call `mockreview.api` like the CLI, so review
+validation, storage and the origin/wake rules are the same code path. Wake stays off unless the agent supplies an
+explicit platform and chat ID, and no tool returns a secret.
+
+The comment tools (`list_comments`, `reply`, `resolve`) are scoped by a personal access token that the client
+passes as `--token` or `MOCKREVIEW_TOKEN`. Only a hash of it is stored. The token's user must hold a role on the review:
+reviewer or commenter to reply, reviewer (or the install's owner) to resolve; a viewer, a token with no grant and an
+unknown or revoked token are refused. The server enforces that reviewer-only rule on the status route too: a bearer
+whose role on the review is commenter (or below) gets a 403 instead of resolving or reopening a thread, so an agent
+holding a commenter token cannot settle a thread by calling the HTTP route behind the tool's back. A reply is a normal
+comment — it appears under that user's name, reaches open
+boards through the same SSE stream and is audited (`mcp.reply`, `mcp.resolve`, `mcp.reopen`) under the token's account.
+An `@Hermes` mention in an agent's reply is dropped and the thread is never activated, so two agents cannot wake each
+other in a loop.
+
+A personal access token is also an HTTP bearer credential (`Authorization: Bearer mrp_...`), accepted on loopback requests
+and only on the two routes an MCP write needs: `POST /r/<id>/api/threads/<tid>/reply` and `.../status`. On the reply
+route the token's role must allow commenting; on the status route it must be reviewer or owner, the same rule the
+`resolve` tool applies, rather than the board's broader comment capability. Every other
+route — account and admin routes included, and every GET — refuses a bearer with a 403 that never falls back to the
+session or the loopback owner, so a leaked agent token cannot mint or revoke tokens, manage users or read the API, and
+revoking it still evicts whoever holds it. Those two writes are exempt from CSRF because the header is explicit
+authority, not an ambient cookie: a page cannot set an `Authorization` header cross-origin without a preflight the
+server never grants (no CORS headers, 501), and the Origin, `Sec-Fetch-Site` and Host checks run before the token is
+read anyway. An invalid or revoked bearer, or one sent from any other address, is anonymous and never falls back to the
+loopback owner. A bearer request never activates `@Hermes` either: `can_activate` is false for a token even where the
+role could submit.
+
+The token is never logged and never written into the server descriptor (`.server.json`). That file holds the address,
+the pid, the data root and one per-start secret, is written 0600 by the account that runs the server, and is ignored if
+it is a symlink, readable by group or others, or owned by another account. Before it sends any token, the MCP process
+makes the server prove it knows that secret on the very connection that will carry the write: the client picks a nonce
+and the server answers `HMAC-SHA256(secret, nonce)` at `GET /api/owner/challenge`, which is answered to local requests
+only. A process that merely bound the port named in a stale descriptor — after a crash, say — cannot answer it, so a
+token never follows a false success, and a listener swapped in after the challenge never sees the token or gets a fresh
+connection to be fooled on. The token goes out on the same socket that answered the challenge; if that connection is
+gone before the write, the write is stored instead, never retried on a new one. The result says `delivery: "live"` when
+the running board took the write and `"stored"` when it was only persisted for the next load, so a write no board could
+receive is never presented as live delivery.
 
 ## Secrets
 
-API and signing keys are never stored in review files. `MOCKREVIEW_WEBHOOK_SECRET` and `HERENOW_API_KEY` are resolved by
-`mockreview/secrets.py` from exactly one of two sources:
+Signing keys are never stored in review files. `MOCKREVIEW_WEBHOOK_SECRET` is resolved by `mockreview/secrets.py` from
+exactly one of two sources:
 
 - Inside Hermes, the secret scope and only the secret scope. The scoped value of the caller's profile is read; the process
   environment is never consulted, and another profile's value is never used.
@@ -119,20 +337,25 @@ The fallback is never reached while `agent.secret_scope` imports, and the two ar
 server-side: the board server signs the POST, and no tool returns a secret.
 
 Setup writes the webhook secret with `hermes config set`, which stores it in the Hermes `.env`. Setup never prints the
-secret: command output is redacted before display, and an existing secret is reused instead of replaced. Per-review here.now passwords, reviews, tokens
+secret: command output is redacted before display, and an existing secret is reused instead of replaced. Reviews, tokens
 and feedback are plain files under `$HERMES_HOME/workspace/mock-reviews` with the permissions of your account. Treat that
 folder like the rest of your Hermes home.
 
 ## Hosting modes compared
 
 - `local` with the default `host`: reachable from this computer only.
-- `local` with `host` at `0.0.0.0`: reachable from your whole network, no login.
+- `local` with `host` at `0.0.0.0`: reachable from your whole network. Devices other than this computer get the sign-in
+  page.
 - `tailnet`: reachable from devices on your tailnet, through `tailscale serve`. Tailscale's access rules apply. The
-  board server itself stays on loopback, and requests through the proxy count as non-local for the index and owner
-  endpoint.
-- `herenow`: internet hosting with a password gate by default for new reviews. Explicit opt-outs and legacy reviews
-  are public. The initial publish precedes the metadata PATCH, so a short public interval exists; failed PATCHes leave
-  protection unconfirmed and must be retried or the site deleted. See [recovery details](hosting.md#password-controls-and-recovery).
+  board server itself stays on loopback. Requests through the proxy are never the loopback owner: tailnet people sign
+  in with an invite, and later by their linked Tailscale identity.
+- `public`: reachable from the internet through Tailscale Funnel or any TLS proxy. The board server still binds
+  loopback and carries the same accounts, Host allowlist, body and connection limits and response headers as any other
+  mode. A public Host is never the loopback owner, `/healthz` is minimal there, and a Tailscale identity is never
+  accepted on a public host, so tailnet people sign in by invite or share link like everyone else. `forwarded_identity`
+  is refused there too (Cloudflare Access identities still work). `wake_toolsets` is refused (or the wake is held) for
+  a public board because anyone holding the link could press Send into a session with tools. See
+  [public-hosting.md](public-hosting.md).
 
 ## Reporting a vulnerability
 

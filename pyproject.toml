@@ -1,0 +1,17 @@
+# Dependency declaration for Hermes's plugin installer (it reads [project] dependencies and requires-python).
+# Not a packaging setup: the plugin is installed as a directory, not built or published.
+[project]
+name = "mock-review"
+version = "1.2.0" # x-release-please-version
+description = "Review boards for UI mockups that wake Hermes when the reviewer presses Send."
+requires-python = ">=3.11,<3.15"
+license = "MIT"
+dependencies = [
+    "itsdangerous==2.2.0",
+]
+
+[project.optional-dependencies]
+# Cloudflare Access sign-in (cloudflare_team / cloudflare_audience) verifies RS256 JWTs.
+crypto = [
+    "PyJWT[crypto]==2.15.1",
+]

@@ -713,3 +713,15 @@ def test_refusal_lists_saved_names_not_display_names(env, tmp_path):
         create(tmp_path, project=str(project(tmp_path)))
     msg = e.value.message
     assert "(acme, acme2)" in msg and "Acme" not in msg
+
+
+# ---------------------------------------------------------------- artifact pages
+
+def test_an_artifacts_page_is_scanned_for_off_brand_colours_but_not_its_data_uris(tmp_path):
+    a = allow(tmp_path)
+    page = '<p style="color:#bada55">x</p><img src="data:image/png;base64,' + "ab" * 400 + '"><audio src="data:audio/wav;base64,' + "cd" * 400 + '">'
+    got = brand.violations({"blocks": [{"type": "artifact", "id": "film", "html": page}]}, a)
+    assert got and all(p == "blocks[0].html" for p, _ in got) and any("bada55" in w.lower() for _, w in got)
+    assert not any("ab" * 10 in w for _, w in got)
+    clean = brand.violations({"blocks": [{"type": "artifact", "id": "film", "html": page.replace("#bada55", "var(--accent)")}]}, a)
+    assert clean == []
