@@ -13,6 +13,8 @@ boards for UI mockups and wakes the agent when the reviewer presses Send. User d
 - `skills/usage/SKILL.md`: the skill bundled with the plugin (`mock-review:usage`). It is written for the agent that
   calls the tools and must stay generic.
 - `bin/mockreview`: runs the same CLI from a checkout, without Hermes.
+- `desktop/plugin.js`, `dashboard/plugin_api.py`, `dashboard/manifest.json`: the Mocks tab in Hermes Desktop. The
+  backend half is a thin adapter over `mockreview/api.py` that runs inside the gateway (`docs/desktop.md`).
 - `pyproject.toml`: the dependencies Hermes installs (itsdangerous) and the optional `crypto` extra (PyJWT).
 - `mockreview/`: the implementation: the standard library plus itsdangerous.
   - `settings.py`: the `SPEC` table (every setting, its type, range, default, env var) and the resolver
@@ -28,11 +30,19 @@ boards for UI mockups and wakes the agent when the reviewer presses Send. User d
     profiles. `feedback.py`: validation and markdown for submitted feedback. `service.py`: submit handling shared by the
     local server and the delivery passes. `migrate.py`: converts reviews from the removed 1.x hosting mode and owns the
     obsolete settings `setup.py` scrubs.
+  - `threads.py`: comment threads, the model behind the board, the REST API and the three comment tools; every mutation
+    publishes its event through `live.py`. `targets.py`: anchor metadata for pins and the stable IDs stamped into a
+    round's HTML at install. `brand.py`: binds a saved design profile to a project and refuses off-brand rounds.
+  - `export.py`: the one script-free export document that the HTML, PDF, Markdown and PNG downloads (and the Desktop
+    tab) derive from. `bundle.py`: inlines an artifact page's local assets into one self-contained HTML file.
+    `frames.py`: signed per-round frame tokens for the sandboxed round frame. `console.py`: CLI output on consoles with
+    a legacy encoding.
   - `server.py`: the HTTP board server and the background worker. `autostart.py`: runs that server on a thread inside the
     gateway. `owner.py`: decides which store a call writes to and checks the wake route. `public.py`: `mockreview
     public status|on|off`, one Funnel port to the loopback board, refusing a port that is not exclusively the board's
     (any foreign handler, including a TCP forward) before any mutation. `sse.py`: server-sent events plumbing (headers,
-    frames, heartbeats) that the live-update layer drives.
+    frames, heartbeats) that the live-update layer drives. `live.py`: that layer, the SSE subscription registry,
+    presence and typing leases and the event publisher.
   - `notify.py`: the signed wake-up POST. `secrets.py`: the only way to read a secret. `config.py`, `locks.py`: paths,
     URLs and a cross-platform file lock.
   - `db.py`: the SQLite store (`access.sqlite3`): one connection per thread, WAL, `user_version` migrations.
