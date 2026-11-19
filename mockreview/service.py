@@ -6,10 +6,11 @@ import calendar
 import hmac
 import json
 import logging
+import sqlite3
 import time
 from typing import Any, Dict, Optional
 
-from . import config, feedback, notify, owner, settings, store, targets, wakeguard
+from . import config, feedback, notify, owner, settings, store, targets, threads, wakeguard
 from .store import ReviewError
 
 log = logging.getLogger("mockreview.service")
@@ -229,6 +230,8 @@ def _build_payload(data: Dict[str, Any], round_: Dict[str, Any]) -> Dict[str, An
 SEND_LEASE_SECONDS = 30.0
 STALLED_SCAN_SECONDS = 30.0   # minimum interval between watchdog directory scans in the worker tick
 PIN_TERMINAL = ("done", "failed", "timeout")
+MENTION_EVENT = "review.thread_mention"
+MENTION_PERMANENT = ("HTTP 400", "HTTP 413", "HTTP 422")
 
 
 def _review_setting(data: Dict[str, Any], name: str) -> Any:
@@ -316,6 +319,8 @@ def request_pin_fix(review_id: str, round_n: Any, pin: Any, token: Any, idem: An
         recent = 0
         for round_ in data["rounds"]:
             for q in (round_.get("pin_requests") or {}).values():
+                if not _counts_toward_wake_budget(q):
+                    continue
                 ts = _parse_iso(q.get("requested_at"))
                 if ts is not None and now - ts < 3600.0:
                     recent += 1
@@ -390,7 +395,8 @@ def flush_pin_fixes(review_id: str, now: Optional[float] = None) -> "tuple[bool,
         if data.get("wake") is False:
             return False, "this board has wake off"
         requests = r.get("pin_requests") or {}
-        queued = sorted((q for q in requests.values() if q.get("status") == "queued" and not q.get("quiet")),
+        queued = sorted((q for q in requests.values()
+                         if q.get("status") == "queued" and _counts_toward_wake_budget(q)),
                         key=lambda q: q.get("requested_at") or "")
         state = r.get("pin_fix") or {}
         wake = state.get("wake") or {}
@@ -503,6 +509,480 @@ def pin_fix_status(data: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, A
     state = {"queued": "queued", "woken": "working", "done": "done",
              "failed": "failed", "timeout": "failed"}.get((request or {}).get("status"), "queued")
     return {"state": state, "detail": (request or {}).get("detail") or ""}
+
+
+def _mention_wakes(data: Dict[str, Any]) -> Dict[str, Any]:
+    wakes = data.get("thread_wakes")
+    if not isinstance(wakes, dict):
+        wakes = data["thread_wakes"] = {}
+    return wakes
+
+
+def _counts_toward_wake_budget(request: Dict[str, Any]) -> bool:
+    """One rule for both caps. A quiet request never wakes. A mention's wake is already counted by its `thread_wakes`
+    record, so the chip request that goes with it is bookkeeping and must not spend the budget a second time."""
+    return not request.get("quiet") and request.get("source") != "mention"
+
+
+def _wake_budget_used(data: Dict[str, Any], round_n: int, now: float) -> "tuple[int, int]":
+    """(last hour, this round) asks for a wake already taken: mentions and pin fixes share one budget.
+
+    A capped mention is recorded so the same comment never wakes later, but it asked for nothing: it does not spend
+    the budget it was refused by. A quiet pin fix (a guest's) and a mention's chip request spend nothing either.
+    """
+    hour = on_round = 0
+    for rec in (data.get("thread_wakes") or {}).values():
+        if not isinstance(rec, dict) or rec.get("status") == "capped":
+            continue
+        ts = _parse_iso(rec.get("at"))
+        if ts is not None and now - ts < 3600.0:
+            hour += 1
+        if int(rec.get("round") or 0) == round_n:
+            on_round += 1
+    for r in data.get("rounds") or []:
+        for q in (r.get("pin_requests") or {}).values():
+            if not _counts_toward_wake_budget(q):
+                continue
+            ts = _parse_iso(q.get("requested_at"))
+            if ts is not None and now - ts < 3600.0:
+                hour += 1
+            if int(r.get("n") or 0) == round_n:
+                on_round += 1
+    return hour, on_round
+
+
+MENTION_TERMINAL = ("notified", "failed", "capped")
+MENTION_WAKE_HOUR_SECONDS = 3600.0
+
+
+def _mark_wake_seen(data: Dict[str, Any], comment_id: str) -> None:
+    """Remember every comment that ever had a wake record, so pruning can never make an idem replay wake again.
+
+    `_bounded_thread_wakes` drops an id only once its comment row no longer exists, so the map stays bounded by the
+    review's surviving comment rows (deleting a thread removes them).
+    """
+    seen = data.get("thread_wake_seen")
+    if not isinstance(seen, dict):
+        seen = data["thread_wake_seen"] = {}
+    if comment_id not in seen:
+        seen[comment_id] = {"at": store.now_iso()}
+
+
+def _prune_wake_seen(data: Dict[str, Any]) -> bool:
+    """Drop `thread_wake_seen` ids whose comment row is gone. Returns True when the map changed.
+
+    Only a deleted comment can free an id: while its row exists, a dropped id would let an idem replay wake again. A
+    read that fails (a fake or incomplete data file, a missing database) prunes nothing and is retried next tick.
+    """
+    seen = data.get("thread_wake_seen")
+    if not isinstance(seen, dict) or not seen:
+        return False
+    try:
+        thread_ids = [r["id"] for r in threads._threads_rows(str(data["id"]))]
+        alive = {c["id"] for group in threads._comments_for(thread_ids).values() for c in group}
+    except (OSError, sqlite3.Error, ReviewError, KeyError, TypeError):
+        return False
+    gone = [comment_id for comment_id in seen if comment_id not in alive]
+    for comment_id in gone:
+        seen.pop(comment_id, None)
+    return bool(gone)
+
+
+def _wake_prunable(rec: Dict[str, Any], newest_round: int, now: float) -> bool:
+    """A terminal record may go only once it cannot count: over an hour old and not on the newest round.
+
+    Every record's `round` is the newest round at queue time (see `wake_thread_mention`), so a record over an hour old
+    that is off the newest round can never be counted again: the hour cap sees only records younger than an hour and
+    the round cap only records on the newest round. A record without a round (a capped one written before this rule)
+    cannot be proven off the newest round, so it stays.
+    """
+    if rec.get("status") not in MENTION_TERMINAL:
+        return False
+    ts = _parse_iso(rec.get("at"))
+    if ts is None or now - ts <= MENTION_WAKE_HOUR_SECONDS:
+        return False
+    rec_round = rec.get("round")
+    if rec_round is None:
+        return False
+    return int(rec_round or 0) != newest_round
+
+
+def _bounded_thread_wakes(data: Dict[str, Any], now: Optional[float] = None) -> bool:
+    """Keep the mention-wake state bounded: a terminal record loses its text and anchor (only a pending retry needs
+    them), a terminal record is pruned only when `_wake_prunable` says it cannot count, and a `thread_wake_seen` id is
+    dropped once its comment row is gone. Returns True when the stored file changed."""
+    wakes = data.get("thread_wakes")
+    rounds = data.get("rounds") or []
+    newest_round = int(rounds[-1].get("n") or 0) if rounds else 0
+    now = time.time() if now is None else now
+    changed = _prune_wake_seen(data)
+    if not isinstance(wakes, dict):
+        return changed
+    for comment_id, rec in list(wakes.items()):
+        if not isinstance(rec, dict) or rec.get("status") not in MENTION_TERMINAL:
+            continue
+        for key in ("text", "anchor"):
+            if key in rec:
+                rec.pop(key, None)
+                changed = True
+        if _wake_prunable(rec, newest_round, now):
+            wakes.pop(comment_id, None)
+            changed = True
+    return changed
+
+
+def _prune_thread_wakes(review_id: str, now: Optional[float] = None) -> bool:
+    """Run the bound on the worker tick even when nothing is due, so old terminal records do not pile up."""
+    with store.locked(review_id):
+        data = store.load(review_id)
+        if not _bounded_thread_wakes(data, now):
+            return False
+        store.save(review_id, data)
+        return True
+
+
+def _mention_request(data: Dict[str, Any], review_id: str, wake: Dict[str, Any]) -> Optional[str]:
+    """Open (or reuse) the pin request that renders the thread's working chip, keyed to the comment.
+
+    Only a mention on the newest round, on a block that is editable HTML by the same rule `request_pin_fix` uses,
+    gets one. On a retry the request already stored under `mention:<comment id>` is reused, never duplicated.
+    """
+    if not _review_setting(data, "pin_fix"):
+        return None
+    rounds = data.get("rounds") or []
+    if not rounds:
+        return None
+    current = rounds[-1]
+    if int(wake.get("round") or 0) != int(current.get("n") or 0):
+        return None
+    block = str(wake.get("block") or "")
+    if not block or block in store.RESERVED_REFS:
+        return None
+    try:
+        _dec, by_ref = _pin_html_refs(review_id, int(current["n"]))
+    except (ReviewError, OSError, ValueError, KeyError, TypeError):
+        return None
+    target = by_ref.get(block)
+    if not isinstance(target, dict) or not _pin_editable(target):
+        return None
+    requests = current.get("pin_requests")
+    if not isinstance(requests, dict):
+        requests = current["pin_requests"] = {}
+    idem = f"mention:{wake.get('comment_id')}"
+    for q in requests.values():
+        if q.get("idem") == idem and q.get("idem_owner") == "mention":
+            return q.get("id")
+    anchor = wake.get("anchor") if isinstance(wake.get("anchor"), dict) else {}
+    option = anchor.get("option") if target.get("type") == "decision" else None
+    if target.get("type") == "decision":
+        oids = [o.get("id") for o in (target.get("options") or [])]
+        option = option if option in oids else None
+    pid = store.new_pin_id()
+    while pid in requests:
+        pid = store.new_pin_id()
+    requests[pid] = {
+        "id": pid, "block": block, "option": option,
+        "rev": int((current.get("blocks_rev") or {}).get(block, 0) or 0),
+        "text": feedback.clean_line(wake.get("text"), 2000),
+        "status": "queued", "requested_at": store.now_iso(), "wake_seq": 0,
+        "done_at": None, "detail": "",
+        "source": "mention", "thread_id": wake.get("thread_id"), "comment_id": wake.get("comment_id"),
+        "idem": idem, "idem_owner": "mention",
+    }
+    return pid
+
+
+def _set_mention_request(data: Dict[str, Any], request_id: Optional[str], status: str, detail: str = "") -> None:
+    """Mirror one mention wake's outcome onto its chip request; a terminal request is left alone."""
+    if not request_id:
+        return
+    for r in data.get("rounds") or []:
+        q = (r.get("pin_requests") or {}).get(request_id)
+        if not isinstance(q, dict):
+            continue
+        if q.get("status") in PIN_TERMINAL:
+            return
+        q.update(status=status, detail=detail)
+        if status == "done":
+            q["done_at"] = store.now_iso()
+        return
+
+
+def close_mention_requests(review_id: str, thread_id: Optional[str],
+                           request_id: Optional[str] = None) -> int:
+    """Close the mention chip requests a reply or a resolve answered.
+
+    Every open mention request on that thread in the newest round closes, and so does the `request_id` the wake payload
+    named even when its thread differs. Returns how many closed.
+    """
+    with store.locked(review_id):
+        data = store.load(review_id)
+        if data.get("status") != "open":
+            return 0
+        current = data["rounds"][-1]
+        now = store.now_iso()
+        closed = 0
+        for q in (current.get("pin_requests") or {}).values():
+            if not isinstance(q, dict) or q.get("source") != "mention" or q.get("status") in PIN_TERMINAL:
+                continue
+            if q.get("id") == request_id or (thread_id and q.get("thread_id") == thread_id):
+                q.update(status="done", done_at=now, detail="answered in the thread")
+                closed += 1
+        if closed:
+            store.save(review_id, data)
+        return closed
+
+
+def _mention_payload(data: Dict[str, Any], wakes: "list[Dict[str, Any]]") -> Dict[str, Any]:
+    """One wake for every due mention: the first entry stays top-level for older receivers, `mentions` carries all."""
+    first = wakes[0]
+    block = first.get("block") or "the board"
+    summary = (f"{first.get('author_name') or 'Someone'} mentioned @Hermes in thread "
+               f"{first.get('thread_id')} on {block}: {feedback.clean_line(first.get('text'), 160)}")
+    return {
+        "event_type": MENTION_EVENT,
+        "review_id": data["id"],
+        "round": first["round"],
+        **store.normalize_origin(data.get("origin")),
+        "title": data["title"],
+        "review_url": store.review_url(data),
+        "mode": data["mode"],
+        "review_thread_id": first["thread_id"],
+        "comment_id": first["comment_id"],
+        "anchor": first.get("anchor") or {},
+        "block": first.get("block") or "",
+        "text": first.get("text") or "",
+        "request_id": first.get("request_id"),
+        "summary": summary,
+        "mentions": [{"thread_id": w.get("thread_id"), "comment_id": w.get("comment_id"),
+                      "text": w.get("text") or "", "block": w.get("block") or "",
+                      "request_id": w.get("request_id")} for w in wakes],
+    }
+
+
+def _capped_wake(review_id: str, data: Dict[str, Any], wakes: Dict[str, Any], comment_id: str,
+                 round_n: int, detail: str) -> Dict[str, Any]:
+    """Record a mention the cap refused: the comment stays, and no later retry of it can wake Hermes."""
+    wakes[comment_id] = {"status": "capped", "detail": detail, "round": round_n, "at": store.now_iso()}
+    _mark_wake_seen(data, comment_id)
+    _bounded_thread_wakes(data)
+    store.save(review_id, data)
+    return {"status": "capped", "notified": False, "detail": detail}
+
+
+def wake_thread_mention(review_id: str, thread: Dict[str, Any], comment_id: str) -> Dict[str, Any]:
+    """Queue one activating `@Hermes` comment for the worker tick.
+
+    Called by the board server right after it stored the comment; an idem replay names the same comment id and is a
+    duplicate, never a second wake. The POST answer is not blocked by the gateway call: the 5 s tick coalesces and
+    delivers what is due (`retry_thread_wakes`). The pin_fix_max_per_hour / pin_fix_max_per_round budget is shared
+    with pin fixes, because both wake the same agent, and it is counted against the newest round at queue time even
+    when the thread was opened in an older round: the record's `round` is always that newest round. Only the owning
+    board server delivers: a CLI or MCP call bound to its store stores the comment (a no-op here) and sends nothing. A
+    guest, a token reply and a wake-off board never reach here (`can_activate` is false for them); the checks below
+    are the second half of that guard.
+    """
+    if owner.is_bound():
+        return {"status": "deferred", "notified": False,
+                "detail": "not the owner service: only the board server delivers wake-ups"}
+    comment = next((c for c in thread.get("comments") or [] if c.get("id") == comment_id), None)
+    if comment is None or not comment.get("sent_to_hermes"):
+        return {"status": "ignored", "notified": False, "detail": "this comment does not mention Hermes"}
+    if not str(comment.get("author") or "").startswith("user:"):
+        return {"status": "ignored", "notified": False, "detail": "a guest never wakes Hermes"}
+    anchor = thread.get("anchor") if isinstance(thread.get("anchor"), dict) else {}
+    block = str(anchor.get("block") or anchor.get("option") or "")
+    now = time.time()
+    with store.locked(review_id):
+        data = store.load(review_id)
+        if data.get("status") != "open":
+            return {"status": "closed", "notified": False, "detail": "review is closed"}
+        if data.get("wake") is False:
+            return {"status": "off", "notified": False,
+                    "detail": "this board has wake off: the comment is stored, nobody is notified"}
+        wakes = _mention_wakes(data)
+        seen = wakes.get(comment_id)
+        if isinstance(seen, dict):
+            return {"status": seen.get("status"), "notified": seen.get("status") == "notified",
+                    "duplicate": True, "delivery_id": seen.get("delivery_id"),
+                    "detail": "duplicate request: this comment is already recorded"}
+        seen_map = data.get("thread_wake_seen")
+        if isinstance(seen_map, dict) and comment_id in seen_map:
+            # The wake record itself may have been pruned; the seen map keeps the id while its comment row exists, so
+            # an idem replay stays a duplicate and never wakes Hermes twice.
+            return {"status": "duplicate", "notified": False, "duplicate": True,
+                    "detail": "duplicate request: this comment is already recorded"}
+        round_n = int(data["rounds"][-1]["n"])
+        hour, on_round = _wake_budget_used(data, round_n, now)
+        per_round = int(_review_setting(data, "pin_fix_max_per_round"))
+        if on_round >= per_round:
+            return _capped_wake(review_id, data, wakes, comment_id, round_n,
+                                f"this round takes at most {per_round} wake requests (pin_fix_max_per_round)")
+        per_hour = int(_review_setting(data, "pin_fix_max_per_hour"))
+        if hour >= per_hour:
+            return _capped_wake(review_id, data, wakes, comment_id, round_n,
+                                f"this review takes at most {per_hour} wake requests an hour (pin_fix_max_per_hour)")
+        wake = {"thread_id": thread["id"], "comment_id": comment_id, "round": round_n,
+                "text": comment.get("text") or "", "anchor": anchor, "block": block,
+                "author_name": comment.get("author_name") or "", "at": store.now_iso(),
+                "status": "pending_notify", "attempts": 0, "next_attempt": 0.0, "sending_until": 0.0,
+                "last_error": None, "request_id": None,
+                "delivery_id": f"mockreview-{review_id}-m-{comment_id}"}
+        wakes[comment_id] = wake
+        _mark_wake_seen(data, comment_id)
+        store.save(review_id, data)
+    return {"status": "pending_notify", "notified": False,
+            "detail": "queued: the worker tick delivers it", "delivery_id": wake["delivery_id"]}
+
+
+def _deliver_thread_wakes(review_id: str, comment_ids: "list[str]",
+                          now: Optional[float] = None) -> "tuple[bool, str]":
+    """POST one mention wake covering every pending comment in `comment_ids` and record the outcome.
+
+    The chip's pin request is opened (or reused) here, before the send. One send means one delivery id and one stamp.
+    A permanent failure, a held board or a closed review fails the covered records and their requests; a transient
+    failure leaves them pending for the retry.
+    """
+    if owner.is_bound():
+        return False, "not the owner service: only the board server delivers wake-ups"
+    now = time.time() if now is None else now
+    with store.locked(review_id):
+        data = store.load(review_id)
+        wakes = data.get("thread_wakes") or {}
+        picked = [wakes.get(cid) for cid in comment_ids]
+        picked = [w for w in picked if isinstance(w, dict) and w.get("status") == "pending_notify"]
+        if not picked:
+            return False, "no such mention wake"
+        if data.get("status") != "open":
+            for w in picked:
+                w.update(status="failed", sending_until=0.0, last_error="review is closed", next_attempt=0.0)
+                _set_mention_request(data, w.get("request_id"), "failed", "review is closed")
+            _bounded_thread_wakes(data)
+            store.save(review_id, data)
+            return False, "review is closed"
+        if data.get("wake") is False:
+            for w in picked:
+                w.update(status="failed", sending_until=0.0, last_error="this board has wake off", next_attempt=0.0)
+                _set_mention_request(data, w.get("request_id"), "failed", "this board has wake off")
+            _bounded_thread_wakes(data)
+            store.save(review_id, data)
+            return False, "this board has wake off"
+        if any(float(w.get("sending_until") or 0) > now for w in picked):
+            return False, "a send for this mention wake is already in flight"
+        held = wakeguard.review_exposure(data)
+        if held:   # create/add-round refuse this; the setting or host may have changed since
+            detail = f"held, not woken: {held}"
+            for w in picked:
+                w.update(status="failed", sending_until=0.0, last_error=detail, next_attempt=0.0)
+                _set_mention_request(data, w.get("request_id"), "failed", detail)
+            _bounded_thread_wakes(data)
+            store.save(review_id, data)
+            log.warning("mock-review: mention wake for %s comments %s held: %s",
+                        review_id, ", ".join(comment_ids), held)
+            return False, detail
+        for w in picked:
+            if not w.get("request_id"):
+                w["request_id"] = _mention_request(data, review_id, w)
+        try:
+            payload = _mention_payload(data, picked)
+        except ReviewError as e:
+            for w in picked:
+                w.update(status="failed", sending_until=0.0, last_error=e.message, next_attempt=0.0)
+                _set_mention_request(data, w.get("request_id"), "failed", e.message)
+            _bounded_thread_wakes(data)
+            store.save(review_id, data)
+            return False, e.message
+        delivery_id = f"mockreview-{review_id}-m-{picked[0]['comment_id']}"
+        for w in picked:
+            w["sending_until"] = now + SEND_LEASE_SECONDS
+        state = data["rounds"][-1].get("pin_fix")
+        if not isinstance(state, dict):
+            state = data["rounds"][-1]["pin_fix"] = {}
+        _stamp_wake(data, state, now)
+        store.save(review_id, data)
+    try:
+        ok, msg = notify.send(payload, delivery_id)
+    except Exception as e:
+        log.exception("mention wake send raised for %s", review_id)
+        ok, msg = False, f"mention wake send raised: {e}"
+    with store.locked(review_id):
+        data = store.load(review_id)
+        wakes = data.get("thread_wakes") or {}
+        current = [wakes.get(cid) for cid in comment_ids]
+        current = [w for w in current if isinstance(w, dict) and w.get("status") == "pending_notify"]
+        if not current:
+            return ok, msg    # superseded while we were sending
+        for w in current:
+            w["sending_until"] = 0.0
+            w["attempts"] = int(w.get("attempts") or 0) + 1
+            w["delivery_id"] = delivery_id
+        if ok:
+            for w in current:
+                w.update(status="notified", notified_at=store.now_iso(), last_error=None, next_attempt=0.0)
+                _set_mention_request(data, w.get("request_id"), "woken")
+            log.info("mention wake delivered for %s comments %s (%s)",
+                     review_id, ", ".join(comment_ids), msg)
+        elif msg.startswith(MENTION_PERMANENT):
+            for w in current:
+                w.update(status="failed", last_error=msg, next_attempt=0.0)
+                _set_mention_request(data, w.get("request_id"), "failed", msg)
+        else:
+            for w in current:
+                w.update(status="pending_notify", last_error=msg, next_attempt=now + config.retry_seconds())
+            log.error("mention wake failed for %s comments %s, will retry: %s",
+                      review_id, ", ".join(comment_ids), msg)
+        _bounded_thread_wakes(data)
+        store.save(review_id, data)
+    return ok, msg
+
+
+def _due_mention_wakes(data: Dict[str, Any], now: float) -> "list[str]":
+    return [cid for cid, wake in (data.get("thread_wakes") or {}).items()
+            if isinstance(wake, dict) and wake.get("status") == "pending_notify"
+            and float(wake.get("next_attempt") or 0) <= now]
+
+
+def retry_thread_wakes(review_id: str, now: Optional[float] = None) -> int:
+    """Deliver the due mention wakes for one review, one coalesced wake per tick, spaced by `pin_fix_min_seconds`.
+
+    Inside the spacing window each due record is pushed to `last + min_seconds` and nothing is sent (the gate). A
+    burst of due mentions becomes ONE wake carrying every entry. Returns 1 when a wake was delivered.
+    """
+    if owner.is_bound():
+        return 0
+    now = time.time() if now is None else now
+    try:
+        data = store.load(review_id)
+    except (ReviewError, ValueError, OSError):
+        return 0
+    if data.get("status") != "open" or data.get("wake") is False:
+        return 0
+    try:
+        _prune_thread_wakes(review_id, now)
+    except (ReviewError, ValueError, OSError):
+        log.warning("mention wake prune failed for %s", review_id)
+    due = _due_mention_wakes(data, now)
+    if not due:
+        return 0
+    state = data["rounds"][-1].get("pin_fix")
+    state = state if isinstance(state, dict) else {}
+    last = _last_wake_at(data, state)
+    min_seconds = float(_review_setting(data, "pin_fix_min_seconds"))
+    if now - last < min_seconds:
+        with store.locked(review_id):
+            data = store.load(review_id)
+            wakes = data.get("thread_wakes") or {}
+            changed = False
+            for comment_id in due:
+                wake = wakes.get(comment_id)
+                if isinstance(wake, dict) and wake.get("status") == "pending_notify":
+                    wake["next_attempt"] = last + min_seconds
+                    changed = True
+            if changed:
+                store.save(review_id, data)
+        return 0
+    ok, _detail = _deliver_thread_wakes(review_id, due, now=now)
+    return 1 if ok else 0
 
 
 def _timeout_pin_requests(review_id: str, now: float, minutes: float) -> int:
@@ -823,4 +1303,8 @@ def retry_pending(now: Optional[float] = None) -> int:
             flush_pin_fixes(rid, now)   # a due pin fix wake retries on the worker tick (every 5 s)
         except Exception:
             log.exception("pin fix flush failed for %s", rid)
+        try:
+            retry_thread_wakes(rid, now)   # a due mention wake retries on the same tick
+        except Exception:
+            log.exception("mention wake retry failed for %s", rid)
     return done

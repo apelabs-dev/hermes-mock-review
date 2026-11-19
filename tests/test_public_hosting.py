@@ -10,6 +10,7 @@ import pytest
 
 import authkit
 from mockreview import api, cli, config, public, server as srv, settings, store, wakeguard
+from mockreview import users
 from mockreview.store import ReviewError
 from test_host_guard import raw
 from test_store import _decisions
@@ -76,6 +77,8 @@ def test_public_mode_is_accepted_and_uses_public_url(env, tmp_path, monkeypatch)
     assert api.resolve_mode("public") == "public"
     monkeypatch.setenv("MOCKREVIEW_PUBLIC_URL", OURS)
     monkeypatch.setattr(config, "funnel_url", lambda: "")
+    # The owner already signed in on another device, so the note is correctly absent.
+    users.redeem("login", users.create_login_link("cli")["path"].rsplit("/", 1)[1])
     res = api.create("Public", ORIGIN, mode="public", decisions=str(_decisions(tmp_path)))
     assert res["mode"] == "public" and res["url"].startswith(OURS + "/r/")
     assert "note" not in res
@@ -87,6 +90,8 @@ def test_public_link_falls_back_to_funnel_then_public_base(env, tmp_path, monkey
     monkeypatch.setattr(api, "server_up", lambda: True)
     monkeypatch.delenv("MOCKREVIEW_PUBLIC_URL", raising=False)
     monkeypatch.setattr(config, "funnel_url", lambda: "https://board.example.ts.net:8443")
+    # The owner already signed in on another device, so the note is correctly absent.
+    users.redeem("login", users.create_login_link("cli")["path"].rsplit("/", 1)[1])
     res = api.create("Funnel", ORIGIN, mode="public", decisions=decisions)
     assert res["url"].startswith("https://board.example.ts.net:8443/r/") and "note" not in res
     monkeypatch.setattr(config, "funnel_url", lambda: "")

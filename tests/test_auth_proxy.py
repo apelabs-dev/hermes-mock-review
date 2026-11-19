@@ -1,6 +1,7 @@
 """Who a request is: trusted proxies only, never a Tailscale identity through Funnel, Cloudflare Access JWTs, and
 loopback = owner. Peers are simulated: no test binds anything but 127.0.0.1."""
 
+import json
 import sys
 import time
 from types import SimpleNamespace
@@ -9,7 +10,9 @@ import pytest
 
 from authkit import account, loopback_owner_off, peer, raw  # noqa: F401 - fixtures
 from conftest import http
-from mockreview import auth, server as srv, users
+from mockreview import auth, config, public, server as srv, users
+
+REAL_SERVE_PROBE = public.serve_probe
 
 TAILNET_HOP = "100.101.102.103"     # what Tailscale Serve puts in X-Forwarded-For: the tailnet source address
 TS_HEADERS = {"Tailscale-User-Login": "dana@example.test", "Tailscale-User-Name": "Dana",
@@ -338,3 +341,131 @@ def test_the_sign_in_page_is_the_same_for_a_missing_and_an_existing_review(env, 
     a = raw("GET", server + "/r/{}/".format(review["id"]))
     b = raw("GET", server + "/r/no-such-review-0000/")
     assert a[0] == b[0] == 401 and a[2] == b[2]
+
+
+# ---------------------------------------------------------------- Serve in front
+
+def test_forwarded_identity_is_refused_when_tailscale_serve_fronts_the_board(env, monkeypatch):
+    """SECAUDIT cand_17b74121d35a6c78a8455dd8: Serve reaches the board over loopback and forwards the client's
+    X-Forwarded-* headers (it strips only Tailscale-*), so a tagged node with no Serve user login could claim any
+    account a forwarded identity is linked to."""
+    headers = {"X-Forwarded-User": "dana", "X-Forwarded-Email": "Dana@Example.test"}
+    monkeypatch.setenv("MOCKREVIEW_FORWARDED_IDENTITY", "true")
+    monkeypatch.setattr(auth, "serve_fronts_board", lambda: False)
+    assert auth.forwarded_identity(req("127.0.0.1", headers))["subject"] == "dana@example.test"
+
+    monkeypatch.setattr(auth, "serve_fronts_board", lambda: True)
+    assert auth.forwarded_identity(req("127.0.0.1", headers)) is None
+    assert auth.proxy_identity(req("127.0.0.1", headers)) is None
+
+
+def test_the_serve_detection_reads_the_tailscale_mapping_of_this_port(env, monkeypatch):
+    """The detection is the CLI's own status, never a guess: a Web mapping that proxies this board's loopback port
+    wins, and one for another port does not."""
+    monkeypatch.setattr(public, "serve_probe", REAL_SERVE_PROBE)   # this test exercises the probe itself
+    headers = {"X-Forwarded-User": "dana", "X-Forwarded-Email": "dana@example.test"}
+    monkeypatch.setenv("MOCKREVIEW_FORWARDED_IDENTITY", "true")
+    port = config.port()
+
+    def status_for(proxy_port):
+        body = {"Web": {"board.example.ts.net:443": {"Handlers": {"/": {"Proxy": f"http://127.0.0.1:{proxy_port}"}}}},
+                "AllowFunnel": {}}
+        monkeypatch.setattr(config, "run_tailscale", lambda args, timeout=5: SimpleNamespace(
+            returncode=0, stdout=json.dumps(body), stderr=""))
+
+    try:
+        status_for(port + 1)                       # someone else's Serve mapping
+        auth.reset_serve_front()
+        assert public.fronts_board() is False
+        assert auth.forwarded_identity(req("127.0.0.1", headers))["subject"] == "dana@example.test"
+
+        status_for(port)                           # this board is behind Serve
+        auth.reset_serve_front()
+        assert public.fronts_board() is True
+        assert auth.forwarded_identity(req("127.0.0.1", headers)) is None
+    finally:
+        auth.reset_serve_front()
+
+
+def test_a_failed_serve_probe_is_cached_for_a_few_seconds(env, monkeypatch):
+    """A stopped tailscaled answers non-zero, which is not "no mapping": it is never trusted, but it is not asked
+    again on every forwarded-identity request either."""
+    calls = []
+    answers = iter([None, True])
+
+    def probe(commands=None):
+        calls.append(commands)
+        return next(answers)
+
+    auth.reset_serve_front()
+    monkeypatch.setattr(public, "serve_probe", probe)
+    try:
+        assert auth.serve_fronts_board() is False
+        assert auth.serve_fronts_board() is False
+        assert len(calls) == 1
+
+        monkeypatch.setattr(auth, "SERVE_FRONT_NEGATIVE_TTL", 0.0)
+        assert auth.serve_fronts_board() is True
+        assert len(calls) == 2
+    finally:
+        auth.reset_serve_front()
+
+
+def test_a_failed_serve_probe_is_asked_again_after_the_negative_ttl(env, monkeypatch):
+    calls = []
+    answers = iter([None, None, True])
+
+    def probe(commands=None):
+        calls.append(commands)
+        return next(answers)
+
+    auth.reset_serve_front()
+    monkeypatch.setattr(public, "serve_probe", probe)
+    try:
+        assert auth.serve_fronts_board() is False
+        assert len(calls) == 1
+        assert auth.serve_fronts_board() is False    # still inside the window: not asked again
+        assert len(calls) == 1
+        auth._serve_front_failed_at = 0.0            # the negative window has passed
+        assert auth.serve_fronts_board() is False    # a second failure is cached again, never trusted
+        assert len(calls) == 2
+        auth._serve_front_failed_at = 0.0
+        assert auth.serve_fronts_board() is True     # a later successful probe is seen once the window passes
+        assert len(calls) == 3
+    finally:
+        auth.reset_serve_front()
+
+
+def test_a_failed_serve_probe_is_negative_cached_after_an_earlier_success(env, monkeypatch):
+    """Once a good answer goes stale, a failing probe is negative-cached like any other: a board that Serve fronted
+    and whose tailscaled then stopped must not spawn a subprocess per forwarded-identity request."""
+    calls = []
+    answers = iter([True] + [None] * 5)
+
+    def probe(commands=None):
+        calls.append(commands)
+        return next(answers)
+
+    auth.reset_serve_front()
+    monkeypatch.setattr(auth, "SERVE_FRONT_TTL", 0.0)
+    monkeypatch.setattr(public, "serve_probe", probe)
+    try:
+        assert auth.serve_fronts_board() is True
+        assert len(calls) == 1
+        for _ in range(5):
+            assert auth.serve_fronts_board() is False
+        assert len(calls) == 2
+    finally:
+        auth.reset_serve_front()
+
+
+def test_the_serve_detection_expires_after_a_short_ttl(env, monkeypatch):
+    answers = iter([True, False])
+    auth.reset_serve_front()
+    monkeypatch.setattr(auth, "SERVE_FRONT_TTL", 0.0)
+    monkeypatch.setattr(public, "serve_probe", lambda commands=None: next(answers))
+    try:
+        assert auth.serve_fronts_board() is True
+        assert auth.serve_fronts_board() is False
+    finally:
+        auth.reset_serve_front()

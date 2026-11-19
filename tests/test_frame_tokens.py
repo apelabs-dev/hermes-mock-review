@@ -667,13 +667,17 @@ def frames_browser(tmp_path_factory):
                 got_tok = re.search(r"/rounds/1/~([^/]+)/a/", out.get("a_src", ""))
                 tok1 = got_tok.group(1) if got_tok else ""
                 if tok1:
-                    _in_frame_containing(cdp, rec, f"/r/{data_a['id']}/rounds/1/",
-                                         "location.href = %s; true"
-                                         % json.dumps(f"/r/{data_a['id']}/rounds/2/~{tok1}/a/round2.html"))
+                    out["e_navigated"] = bool(cdp.wait(
+                        lambda: _in_frame_containing(
+                            cdp, rec, f"/r/{data_a['id']}/rounds/1/",
+                            "location.href = %s; true"
+                            % json.dumps(f"/r/{data_a['id']}/rounds/2/~{tok1}/a/round2.html")),
+                        time.monotonic() + 15, 0.25))
                     wrong = f"/r/{data_a['id']}/rounds/2/~{tok1}/a/round2.html"
                     cdp.wait(lambda: rec.response(wrong) is not None, time.monotonic() + 15, 0.25)
                     out["e_status"] = (rec.response(wrong) or {}).get("status")
                 else:
+                    out["e_navigated"] = False
                     out["e_status"] = None
                 cdp.wait(lambda: False, time.monotonic() + 1.5)
                 out["e_sink"] = list(round2.requests)
@@ -857,6 +861,7 @@ def test_d_a_plain_review_prototype_keeps_network_and_the_token_never_reaches_th
 
 @pytest.mark.browser
 def test_e_a_round_one_token_does_not_open_round_two(frames_browser):
+    assert frames_browser["e_navigated"], "the round-1 frame never navigated to round 2"
     assert frames_browser["e_status"] == 401, frames_browser["e_status"]
     assert frames_browser["e_sink"] == [], frames_browser["e_sink"]
 

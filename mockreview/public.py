@@ -168,6 +168,38 @@ def _find_mapping(status: Dict[str, Any], board_port: int, prefer_port: int) -> 
     return candidates[0] if candidates else None
 
 
+def serve_probe(commands: Optional[List[Dict[str, Any]]] = None) -> Optional[bool]:
+    """`tailscale serve status --json`'s answer for this board's port: True/False when the CLI answered, None when
+    the probe itself failed (no CLI, a non-zero exit such as a stopped tailscaled, unreadable JSON)."""
+    commands = [] if commands is None else commands
+    board_port = config.port()
+    try:
+        proc = _run(["serve", "status", "--json"], commands)
+    except (OSError, ReviewError):
+        return None
+    if getattr(proc, "returncode", 1) != 0:
+        return None
+    try:
+        raw = json.loads(getattr(proc, "stdout", "") or "{}")
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    return any(_serves_board(m[2], board_port) for m in _mappings(raw))
+
+
+def fronts_board(commands: Optional[List[Dict[str, Any]]] = None) -> bool:
+    """True when `tailscale serve` maps this board's port to loopback, Funnel or not.
+
+    Serve forwards whatever `X-Forwarded-*` headers the client sent over a loopback connection and strips only
+    `Tailscale-*` ones, so a tailnet device with no Serve user identity - a tagged node sends no `Tailscale-User-Login`
+    - would be believed by `forwarded_identity`. Asked of the CLI, never guessed: unavailable Tailscale fronts
+    nothing. `_mappings` reads the same `Web` entries `serve status --json` and `funnel status --json` both use.
+    """
+    answer = serve_probe(commands)
+    return bool(answer)
+
+
 def status(commands: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """The Funnel mapping for this board, never raising: unavailable Tailscale is `ok: true, available: false`."""
     commands = [] if commands is None else commands

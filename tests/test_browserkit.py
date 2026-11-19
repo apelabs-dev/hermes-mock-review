@@ -512,6 +512,38 @@ def test_a_bring_up_timeout_is_replaced_and_warns_once(capsys):
     assert len(warned) == 1 and "(1/2)" in warned[0] and "did not answer Page.enable in time" in warned[0], err
 
 
+
+@posix_only
+def test_a_failed_alive_probe_replaces_without_running_bring_up_or_the_body(capsys, monkeypatch):
+    try:
+        bk.find_browser()
+    except bk.BrowserUnavailable:
+        pytest.skip("no Chrome, Chromium or Edge installed")
+    probes, bring_ups, bodies = [], [], []
+    real_alive = bk.LiveBrowser.alive
+
+    def alive(live):
+        probes.append(live)
+        return False if len(probes) == 1 else real_alive(live)
+
+    monkeypatch.setattr(bk.LiveBrowser, "alive", alive)
+
+    def bring_up(live):
+        bring_ups.append(live)
+        return "session-1"
+
+    def body(live, ctx):
+        bodies.append((live, ctx))
+        return live.cdp.call("Browser.getVersion")["product"]
+
+    assert bk.with_live_browser(bring_up, body, startup=60)
+    assert len(probes) == 2, "the probe must run once on every launch"
+    assert bring_ups == [probes[1]], "a launch whose probe failed must not run bring_up"
+    assert len(bodies) == 1 and bodies[0][0] is probes[1] and bodies[0][1] == "session-1"
+    warned = [line for line in capsys.readouterr().err.splitlines() if line.startswith("browserkit: replacing")]
+    assert len(warned) == 1 and "(1/2)" in warned[0] and "did not answer before setup" in warned[0], warned
+
+
 @posix_only
 def test_a_body_timeout_is_never_replaced_and_does_not_warn(capsys):
     try:
@@ -531,6 +563,30 @@ def test_a_body_timeout_is_never_replaced_and_does_not_warn(capsys):
     with pytest.raises(bk.BrowserCheckError, match="did not answer Runtime.evaluate in time"):
         bk.with_live_browser(bring_up, body, startup=60)
     assert len(launches) == 1 and len(bodies) == 1, "a body failure must never rerun the scenario"
+    assert "browserkit: replacing" not in capsys.readouterr().err
+
+
+@posix_only
+def test_a_transport_failure_in_the_body_is_raised_and_never_replaced(capsys):
+    """The body runs outside the bring-up guard. Moving it inside would catch this transport-class error and launch
+    a second browser, rerunning a scenario that already ran."""
+    try:
+        bk.find_browser()
+    except bk.BrowserUnavailable:
+        pytest.skip("no Chrome, Chromium or Edge installed")
+    launches, bodies = [], []
+
+    def bring_up(live):
+        launches.append(live)
+        return "session-1"
+
+    def body(live, ctx):
+        bodies.append(live)
+        raise bk.BrowserCheckError("the browser did not answer Page.navigate in time")
+
+    with pytest.raises(bk.BrowserCheckError, match="did not answer Page.navigate in time"):
+        bk.with_live_browser(bring_up, body, startup=60)
+    assert len(launches) == 1 and len(bodies) == 1, "a body failure must never launch a replacement"
     assert "browserkit: replacing" not in capsys.readouterr().err
 
 
@@ -588,6 +644,71 @@ def test_a_bring_up_refusal_is_not_replaced_and_two_wedged_launches_raise(capsys
     with pytest.raises(bk.BrowserCheckError, match="did not answer Page.enable"):
         bk.with_live_browser(always_timeout, lambda live, ctx: ctx, startup=60)
     assert len(wedged) == 2, "a second wedged launch must still raise; never a third launch"
+
+
+class _ReplaceableBrowser:
+    def __init__(self):
+        self.replacements = 0
+
+    def replace(self):
+        self.replacements += 1
+
+
+def test_page_bring_up_replaces_a_transport_failure_and_returns_its_context(capsys):
+    browser, calls = _ReplaceableBrowser(), []
+
+    def bring_up():
+        calls.append(1)
+        if len(calls) == 1:
+            raise bk.BrowserCheckError("the browser did not answer Page.navigate in time")
+        return "session-1"
+
+    assert bk.with_page_bring_up(browser, bring_up) == "session-1"
+    assert browser.replacements == 1 and len(calls) == 2
+    warned = [line for line in capsys.readouterr().err.splitlines() if line.startswith("browserkit: replacing")]
+    assert len(warned) == 1 and "(1/2)" in warned[0] and "did not answer Page.navigate in time" in warned[0]
+
+
+@pytest.mark.parametrize("message", [
+    "the browser refused Page.navigate: 'x'",
+    "a page script check failed in the browser: TypeError: x",
+    "no free Chrome slot: this run may hold 2 and the machine at most 4; waited 900s",
+])
+def test_page_bring_up_does_not_replace_a_refusal_or_a_page_failure(message):
+    browser = _ReplaceableBrowser()
+    error = bk.PageScriptError(message) if message.startswith("a page script") else bk.BrowserCheckError(message)
+
+    def bring_up():
+        raise error
+
+    with pytest.raises(bk.BrowserCheckError) as caught:
+        bk.with_page_bring_up(browser, bring_up)
+    assert caught.value is error
+    assert browser.replacements == 0
+
+
+def test_page_bring_up_replaces_at_most_once_and_a_second_failure_raises(capsys):
+    browser = _ReplaceableBrowser()
+
+    def bring_up():
+        raise bk.BrowserCheckError("the browser did not answer Page.navigate in time")
+
+    with pytest.raises(bk.BrowserCheckError, match="did not answer Page.navigate"):
+        bk.with_page_bring_up(browser, bring_up)
+    assert browser.replacements == 1
+    warned = [line for line in capsys.readouterr().err.splitlines() if line.startswith("browserkit: replacing")]
+    assert len(warned) == 1 and "(1/2)" in warned[0]
+
+
+def test_page_bring_up_without_replace_raises_the_transport_error_as_is():
+    class Plain:
+        pass
+
+    def bring_up():
+        raise bk.BrowserCheckError("the browser did not answer Page.navigate in time")
+
+    with pytest.raises(bk.BrowserCheckError, match="did not answer Page.navigate"):
+        bk.with_page_bring_up(Plain(), bring_up)
 
 
 def test_browser_unavailable_costs_one_attempt_and_never_one_more(monkeypatch):

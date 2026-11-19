@@ -221,6 +221,15 @@ export function surface(scope, overlay, options) {
       const mark = doc.createElement('mark'); mark.dataset.mrHighlight = ''; r.surroundContents(mark); marks.push(mark);
     });
   }
+  let settleKey = '', settleCalm = 2, settleLeft = 0;
+  function measureKey() {
+    // The box the pins are a fraction of and the pins it produced. A late layout can move the scope or an element
+    // without resizing anything the observers watch; a key that repeats across frames is how a plain move settles.
+    const base = options.box();
+    const pins = (options.pins() || []).map(p => [p.x, p.y, !!p.detached,
+      p.target && p.target.doc ? [p.target.doc.x, p.target.doc.y] : null]);
+    return JSON.stringify([base ? [base.left, base.top, base.width, base.height] : null, pins]);
+  }
   function refresh() {
     pending = 0; if (disposed || !scope.isConnected) return;
     observer.disconnect(); clearHighlights(); stamp(scope);
@@ -248,6 +257,10 @@ export function surface(scope, overlay, options) {
     observer.observe(scope, {subtree: true, childList: true, characterData: true, attributes: true});
     observed.forEach(el => { if (!watched.has(el)) { resize.unobserve(el); observed.delete(el); } });
     watched.forEach(el => { if (!observed.has(el)) { resize.observe(el); observed.add(el); } });
+    const key = measureKey();
+    if (key !== settleKey) { settleKey = key; settleCalm = 0; settleLeft = 6; }
+    else if (settleCalm < 2) settleCalm++;
+    if (settleLeft > 0 && settleCalm < 2) { settleLeft--; schedule(); }
   }
   function schedule() { if (!pending && !disposed) pending = requestAnimationFrame(refresh); }
   const observer = new MutationObserver(schedule);

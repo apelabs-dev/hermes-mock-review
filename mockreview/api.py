@@ -6,6 +6,7 @@ override, else env > config.yaml > default (settings.py).
 
 from __future__ import annotations
 
+import base64
 import calendar
 import functools
 import json
@@ -16,7 +17,7 @@ import time
 import urllib.request
 from typing import Any, Dict, List, Optional
 
-from . import brand, bundle, config, feedback, owner, service, settings, store, targets, wakeguard
+from . import brand, bundle, config, export, feedback, owner, service, settings, store, targets, users, wakeguard
 from .store import ReviewError
 
 log = logging.getLogger("mockreview.api")
@@ -132,6 +133,10 @@ def create(title: str, origin: Optional[Dict[str, str]] = None, brief: str = "",
     Preflight, all before anything is published: the owning board server is found (or this process's store is the
     one it watches), its wake route works (unless wake is off), and after the board is written the server can load
     it. Any failure raises and leaves nothing behind.
+
+    The result carries a `note` while the owner has never signed in from another device and this review is reachable
+    off this computer (see sign_in_note): the agent hands that link over, because a tailnet or public board answers a
+    device that has not signed in with the sign-in page, not the board.
     """
     unknown = set(look) - set(settings.REVIEW_KEYS)
     if unknown:
@@ -141,8 +146,14 @@ def create(title: str, origin: Optional[Dict[str, str]] = None, brief: str = "",
     try:
         stored = settings.review_settings(look)
         want_wake = bool(settings.get("wake_required", wake))
+        _pin_fix, pin_fix_source, _notes = settings.resolve_one("pin_fix", look.get("pin_fix"))
     except settings.SettingsError as e:
         raise _settings_error(e)
+    if pin_fix_source == "default":
+        # A board that wakes Hermes can be patched in place from a comment; a wake-off board cannot ask anyone to,
+        # so the patch path stays off there. An explicit pin_fix — as a call argument, an env var or a config value —
+        # wins either way, including a config-level true that survives wake=false.
+        stored["pin_fix"] = want_wake
     check_wake_toolsets(mode, want_wake)
     origin = store.normalize_origin(origin, wake=want_wake)
     spec = _spec(decisions, prototype, design, allow_live_demo)
@@ -175,7 +186,52 @@ def create(title: str, origin: Optional[Dict[str, str]] = None, brief: str = "",
                            "plugins.entries.mock-review.settings.public_url")
         res["url"] = store.review_url(data)
         res.update(_interactive_hint(spec, stored))
+        _add_note(res, sign_in_note(data["mode"]))
     return res
+
+
+SIGN_IN_NOTE = "Sign in once per device (works once, for 15 minutes): {url}"
+
+
+def login_link(public: bool = False) -> Dict[str, Any]:
+    """Mint a one-time owner sign-in link: the same call `hermes mockreview login` makes, in one dict.
+
+    `url` is this computer's address unless `public`, which prefers the public URL when the board has one
+    (`public_url`, else the Tailscale Funnel URL, else the tailnet base). `public_url` is always included when it
+    exists, so a caller can choose.
+    """
+    link = users.create_login_link("cli")
+    out: Dict[str, Any] = {"path": link["path"], "user_id": link["user_id"], "expires_at": link["expires_at"],
+                           "url": config.local_base() + link["path"]}
+    base = config.public_link_base()
+    if base:
+        out["public_url"] = base + link["path"]
+        if public:
+            out["url"] = out["public_url"]
+    return out
+
+
+def sign_in_note(mode: str) -> Optional[str]:
+    """The first-run sign-in note for a review `mode`, or None.
+
+    Two things must both hold. The review is reachable from another device: `mode` is tailnet or public (a local
+    review only opens on this computer, where loopback is already the owner). And the owner has not signed in from
+    another device yet; the stored signal for that is `users.owner_signed_in_elsewhere` (a `login_link.use` audit
+    row). The note is only produced when a public base exists, because a loopback link is useless off this computer.
+    The link is freshly minted, so the agent can hand it over as-is.
+    """
+    if mode not in ("tailscale", "public") or users.owner_signed_in_elsewhere():
+        return None
+    url = login_link(public=True).get("public_url")
+    if not url:
+        return None
+    return SIGN_IN_NOTE.format(url=url)
+
+
+def _add_note(res: Dict[str, Any], note: Optional[str]) -> None:
+    """Append to a result's `note`, keeping whatever a caller already put there (create's local and public hints)."""
+    if note:
+        res["note"] = f"{res['note']} {note}" if res.get("note") else note
 
 
 SEND_NEXT_ROUND = ("The next round asks only what is still open: blocks marked Change (with `revised`), skipped or "
@@ -263,9 +319,11 @@ def add_round(review_id: str, decisions: Optional[str] = None, prototype: Option
         data = store.add_round(review_id, spec, look=new_look)
         _supersede_pin_fixes(review_id, data["rounds"][-1]["n"])
         data = store.load(review_id)
-        return {"review_id": review_id, "round": data["rounds"][-1]["n"], "url": store.review_url(data),
-                "mode": data["mode"], "owner": ctx.as_dict(), **extra,
-                **_interactive_hint(spec, new_look or existing.get("settings"))}
+        res = {"review_id": review_id, "round": data["rounds"][-1]["n"], "url": store.review_url(data),
+               "mode": data["mode"], "owner": ctx.as_dict(), **extra,
+               **_interactive_hint(spec, new_look or existing.get("settings"))}
+        _add_note(res, sign_in_note(data["mode"]))
+        return res
 
 
 NO_HTML_REFUSAL = ("a pin fix edits a block that has HTML (a mock, a decision option, a piece or an artifact); "
@@ -549,6 +607,16 @@ def ack(review_id: str, round_n: Optional[int] = None) -> Dict[str, Any]:
             "stalled_notice": state["status"]}
 
 
+def _row(rid: str, d: Dict[str, Any], url: str) -> Dict[str, Any]:
+    cur = d["rounds"][-1]
+    return {"review_id": rid, "title": d["title"], "mode": d["mode"], "status": d["status"],
+            "rounds": len(d["rounds"]), "origin": d.get("origin", {}),
+            "thread_id": (d.get("origin") or {}).get("thread_id"),
+            "current_round_feedback": (cur.get("submission") or {}).get("status", "waiting"),
+            "url": url,
+            "updated_at": d.get("updated_at")}
+
+
 @_owned
 def list_reviews(include_closed: bool = False) -> List[Dict[str, Any]]:
     rows = []
@@ -559,14 +627,68 @@ def list_reviews(include_closed: bool = False) -> List[Dict[str, Any]]:
             continue
         if not include_closed and d["status"] != "open":
             continue
-        cur = d["rounds"][-1]
-        rows.append({"review_id": rid, "title": d["title"], "mode": d["mode"], "status": d["status"],
-                     "rounds": len(d["rounds"]), "origin": d.get("origin", {}),
-                     "thread_id": (d.get("origin") or {}).get("thread_id"),
-                     "current_round_feedback": (cur.get("submission") or {}).get("status", "waiting"),
-                     "url": store.review_url(d),
-                     "updated_at": d.get("updated_at")})
+        rows.append(_row(rid, d, store.review_url(d)))
     return rows
+
+
+def _iso(ts: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+
+
+@_owned
+def desk_list() -> List[Dict[str, Any]]:
+    """Every review the store holds, closed and older ones included, newest activity first: the rows of the Desktop Mocks
+    tab. The rows of list_reviews(include_closed=True), with `url` named `board_url` (desk_url), plus `round` (the current
+    round's number) and `last_activity` (newest of the review's creation, a round, a submission or its last save)."""
+    rows, public = [], None
+    for rid in store.list_ids():
+        try:
+            d = store.load(rid)
+            if public is None and d["mode"] != "local":
+                public = config.public_link_base()    # once, not per review: it may ask the tailscale CLI
+            row = _row(rid, d, desk_url(d, public))
+        except (ReviewError, ValueError, OSError, KeyError, IndexError, TypeError):
+            continue
+        row["board_url"] = row.pop("url")
+        row["round"] = d["rounds"][-1].get("n", row["rounds"])
+        row["last_activity"] = max(last_activity(d), _ts(d.get("updated_at")))
+        rows.append(row)
+    rows.sort(key=lambda r: (-r["last_activity"], r["review_id"]))
+    for r in rows:
+        r["last_activity"] = _iso(r["last_activity"]) if r["last_activity"] else None
+    return rows
+
+
+def desk_url(data: Dict[str, Any], public_base: Optional[str] = None) -> str:
+    """The address the review's board answers on, for the Desktop's Open in browser: the review's own link (store.review_url:
+    this computer's address for a local review, the tailnet or public base otherwise), and the loopback board when the
+    install has no such base configured. The Desktop may run on another computer than this one; there the loopback
+    address reaches nothing, which is why a configured tailnet or public host is preferred."""
+    return store.review_url(data, public_base) or f"{config.local_base()}/r/{data['id']}"
+
+
+# The longest data: URL (in characters) the viewer hands to the Desktop's frame. Measured in the packaged Desktop (a
+# sandboxed iframe, `src` = data:text/html;base64,...): 2,096,500 characters render, and 2,097,100 kills the renderer
+# process, so this sits below both. A longer snapshot is not truncated: desk_view says `too_large` and the tab offers
+# Open in browser. The frame cannot load a plugin_api route instead (every /api/plugins/ route needs the app's session
+# token, which a frame cannot send). See docs/desktop.md.
+DESK_DATA_URL_LIMIT = 2_000_000
+
+
+@_owned
+def desk_view(review_id: str, round_n: Optional[int] = None) -> Dict[str, Any]:
+    """One review's round (default: the current one) as the Desktop's read-only viewer shows it: the header facts and
+    the export document (export.build_export_html, comments off) as a `data:` URL. The document is rebuilt through the
+    export allowlist, so it holds no script, handler or external URL, and carries its own CSP meta. Nothing is written.
+    Above DESK_DATA_URL_LIMIT `data_url` is None and `too_large` is true."""
+    data = store.load(review_id)
+    rnd = store.get_round(data, round_n)
+    doc = export.build_export_html(data, rnd["n"], False).encode("utf-8")
+    url = "data:text/html;charset=utf-8;base64," + base64.b64encode(doc).decode("ascii")
+    too_large = len(url) > DESK_DATA_URL_LIMIT
+    return {"review_id": review_id, "title": data.get("title"), "status": data.get("status"), "round": rnd["n"],
+            "rounds": len(data["rounds"]), "board_url": desk_url(data), "bytes": len(doc),
+            "too_large": too_large, "data_url": None if too_large else url}
 
 
 @_owned
@@ -616,6 +738,25 @@ def _close(review_id: str) -> Dict[str, Any]:
     return res
 
 
+@_owned
+def delete_review(review_id: str) -> Dict[str, Any]:
+    """Delete a review for good: close it first when it is open (so no stalled ping or wake-up outlives it), clear its
+    rows from the access database (users.purge_review), then remove its directory. Housekeeping's prune and the
+    desktop and CLI delete all come through here. An unknown id is a 404 ReviewError."""
+    data = store.load(review_id)
+    was_open = data.get("status") == "open"
+    if was_open:
+        _close(review_id)
+    d = store.review_dir(review_id)
+    with store.locked(review_id):
+        rows = users.purge_review(review_id)
+        shutil.rmtree(d, ignore_errors=True)
+    # Windows keeps the open .lock file (and its directory) until the lock closes.
+    if d.exists():
+        shutil.rmtree(d)
+    return {"review_id": review_id, "title": data.get("title"), "deleted": True, "was_open": was_open, "rows": rows}
+
+
 # ---------------------------------------------------------------- housekeeping (the server's worker runs this)
 
 def _ts(iso: Any) -> float:
@@ -654,12 +795,7 @@ def housekeeping(now: Optional[float] = None) -> Dict[str, Any]:
                 log.info("auto-closed %s (idle more than %s days)", rid, idle_days)
             elif keep_days and data.get("status") == "closed" and data.get("closed_at") \
                     and now - _ts(data["closed_at"]) > keep_days * 86400:
-                d = store.review_dir(rid)
-                with store.locked(rid):
-                    shutil.rmtree(d, ignore_errors=True)
-                # Windows keeps the open .lock file (and its directory) until the lock closes.
-                if d.exists():
-                    shutil.rmtree(d)
+                delete_review(rid)
                 out["pruned"].append(rid)
                 log.info("pruned %s (closed more than %s days ago)", rid, keep_days)
         except Exception as e:  # one bad review must not stop the pass

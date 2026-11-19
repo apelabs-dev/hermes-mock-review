@@ -109,8 +109,22 @@ def sees_round(scope: Scope, round_n: Any) -> bool:
     return n in scope.rounds if scope.rounds is not None else n <= scope.viewed
 
 
+_UPDATED_STEP = 1e-3
+
+
 def now() -> float:
     return time.time()
+
+
+def _stamp(conn: Any, thread_id: str, t: float) -> float:
+    """The `updated_at` to write for a thread inside the open transaction.
+
+    `t` is the wall clock read before the write lock was taken, so a concurrent writer that committed first (or a clock
+    that stepped back) can leave the stored value ahead of it. The board drops a snapshot older than the one on screen,
+    so a later commit must always carry a larger value: never less than the stored one plus a millisecond.
+    """
+    row = conn.execute("SELECT updated_at FROM threads WHERE id = ?", (thread_id,)).fetchone()
+    return t if row is None else max(t, float(row["updated_at"]) + _UPDATED_STEP)
 
 
 def reset_limits() -> None:
@@ -928,14 +942,15 @@ def reply_comment(review_id: str, thread_id: str, actor: str, name: str, role: O
             if int(n) >= MAX_COMMENTS:
                 raise ReviewError(f"this thread is full ({MAX_COMMENTS} comments)", 400)
             cid = uuid.uuid4().hex
+            stamp = _stamp(conn, row["id"], t)
             conn.execute("INSERT INTO comments (id, thread_id, author, author_name, text, idem, created_at) "
-                         "VALUES (?, ?, ?, ?, ?, ?, ?)", (cid, row["id"], actor, author_name, clean, token, t))
+                         "VALUES (?, ?, ?, ?, ?, ?, ?)", (cid, row["id"], actor, author_name, clean, token, stamp))
             _insert_mentions(conn, cid, mention_rows)
             conn.execute("UPDATE threads SET updated_at = ?, activated = MAX(activated, ?) WHERE id = ?",
-                         (t, 1 if activated else 0, row["id"]))
+                         (stamp, 1 if activated else 0, row["id"]))
             conn.execute("INSERT INTO reads (principal, review_id, thread_id, seen_at) VALUES (?, ?, ?, ?) "
                          "ON CONFLICT(principal, review_id, thread_id) DO UPDATE SET seen_at = excluded.seen_at",
-                         (principal or actor, review_id, row["id"], t))
+                         (principal or actor, review_id, row["id"], stamp))
             changed = True
     thread = _thread_dict(review_id, thread_id, principal or actor)
     if changed:
@@ -966,8 +981,9 @@ def edit_comment(review_id: str, comment_id: str, actor: str, text: Any, princip
         if row["text"] == clean:
             pass
         else:
-            conn.execute("UPDATE comments SET text = ?, edited_at = ? WHERE id = ?", (clean, t, row["id"]))
-            conn.execute("UPDATE threads SET updated_at = ? WHERE id = ?", (t, row["thread_id"]))
+            stamp = _stamp(conn, row["thread_id"], t)
+            conn.execute("UPDATE comments SET text = ?, edited_at = ? WHERE id = ?", (clean, stamp, row["id"]))
+            conn.execute("UPDATE threads SET updated_at = ? WHERE id = ?", (stamp, row["thread_id"]))
     thread = _thread_dict(review_id, row["thread_id"], principal or actor)
     if row["text"] != clean:
         live.publish(review_id, "comment.edited", row["thread_id"], actor,
@@ -990,7 +1006,8 @@ def delete_comment(review_id: str, comment_id: str, actor: str, principal: Optio
             raise ReviewError("you can only delete your own comment", 403)
         thread_id = row["thread_id"]
         thread_round = int(_thread_row(review_id, thread_id, conn)["round"])
-        conn.execute("UPDATE comments SET deleted_at = ? WHERE id = ?", (t, row["id"]))
+        stamp = _stamp(conn, thread_id, t)
+        conn.execute("UPDATE comments SET deleted_at = ? WHERE id = ?", (stamp, row["id"]))
         live_count = conn.execute("SELECT COUNT(*) AS n FROM comments WHERE thread_id = ? AND deleted_at IS NULL",
                                   (thread_id,)).fetchone()["n"]
         if int(live_count) == 0:
@@ -998,7 +1015,7 @@ def delete_comment(review_id: str, comment_id: str, actor: str, principal: Optio
             conn.execute("DELETE FROM threads WHERE id = ?", (thread_id,))
             thread_gone = True
         else:
-            conn.execute("UPDATE threads SET updated_at = ? WHERE id = ?", (t, thread_id))
+            conn.execute("UPDATE threads SET updated_at = ? WHERE id = ?", (stamp, thread_id))
     name = _name_for(actor)
     if thread_gone:
         live.publish(review_id, "comment.deleted", thread_id, actor,
@@ -1023,7 +1040,8 @@ def set_status(review_id: str, thread_id: str, status: str, actor: str, principa
     with db.tx() as conn:
         row = _thread_row(review_id, thread_id, conn)
         if row["status"] != status:
-            conn.execute("UPDATE threads SET status = ?, updated_at = ? WHERE id = ?", (status, t, row["id"]))
+            conn.execute("UPDATE threads SET status = ?, updated_at = ? WHERE id = ?",
+                         (status, _stamp(conn, row["id"], t), row["id"]))
     thread = _thread_dict(review_id, thread_id, principal or actor)
     if row["status"] != status:
         live.publish(review_id, "thread.status", thread_id, actor,

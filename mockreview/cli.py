@@ -63,6 +63,14 @@ def cmd_feedback(a) -> int:
     return 0
 
 
+def cmd_delete(a) -> int:
+    if not a.yes:
+        raise ReviewError("delete removes the review, its comments and its files and cannot be undone: "
+                          f"run `delete {a.review_id} --yes` to confirm", 400)
+    out(api.delete_review(a.review_id))
+    return 0
+
+
 def cmd_list(a) -> int:
     out(api.list_reviews(include_closed=a.all))
     return 0
@@ -420,6 +428,11 @@ def add_commands(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
     c = sub.add_parser("close", help="close a review: no more rounds or feedback")
     c.add_argument("review_id")
     c.set_defaults(**{FN: cmd_close})
+
+    c = sub.add_parser("delete", help="delete a review for good (closes it first): its files, comments and share link")
+    c.add_argument("review_id")
+    c.add_argument("--yes", action="store_true", help="confirm: a deleted review cannot be recovered")
+    c.set_defaults(**{FN: cmd_delete})
 
     c = sub.add_parser("settings", help="print the resolved settings and where each value came from")
     c.add_argument("--json", action="store_true")

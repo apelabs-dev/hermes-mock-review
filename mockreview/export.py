@@ -899,6 +899,10 @@ color:var(--a);font-size:12px;font-weight:600;vertical-align:middle}
 .mr-options{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin:12px 0}
 .mr-option{border:1px solid var(--l);border-radius:var(--rc);padding:12px 16px;background:var(--s);min-width:0}
 .mr-mock{border:1px solid var(--l);border-radius:var(--r);padding:12px;margin:12px 0;background:var(--s);overflow:hidden}
+/* A mock is a light design the board shows as authored: keep it light in a dark export, or its own light panels
+   would carry the dark theme's light text. */
+.mr-mock{color-scheme:light;background:#fff;color:#17171c}
+.mr-mock a{color:#4f46e5}
 .mr-mock img{display:block}
 .mr-artifact{border:1px solid var(--l);border-radius:var(--r);margin:12px 0;background:var(--s2);overflow:hidden}
 .mr-artifact-page{padding:12px;background:var(--s);overflow:hidden}

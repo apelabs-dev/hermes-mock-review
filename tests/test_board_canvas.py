@@ -413,7 +413,11 @@ def test_targetless_pin_keeps_document_spot_when_the_header_grows(canvas):
     b = canvas
     xy = json.loads(b.js(
         "JSON.stringify((()=>{let e=document.querySelector('[data-mr-ref=defaults]');e.scrollIntoView({block:'center'});"
-        "let r=e.getBoundingClientRect();return [r.right-24,r.top+24]})())"))
+        "let r=e.getBoundingClientRect();"
+        "for(let y=r.top+2;y<r.bottom-2;y+=2)"
+        "for(let x=r.left+2;x<r.right-2;x+=2)"
+        "if(document.elementFromPoint(x,y)===e)return [x,y];return null})())"))
+    assert xy, 'the probe must find genuine empty canvas in the defaults block'
     b.click(*xy)
     save(b)
     spot = document_centre(b, '[data-mr-ref=defaults] .mpin')

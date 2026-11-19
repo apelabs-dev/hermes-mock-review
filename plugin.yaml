@@ -7,7 +7,7 @@ requires_env:
     optional: true
     secret: true
     description: "Leave empty: hermes mockreview setup generates and stores it."
-description: "Review boards for UI mockups: six mock_review tools, the mockreview CLI and slash command, the usage skill, a webhook platform connect handler for optional in-gateway autostart, and a stdio MCP server for other coding agents."
+description: "Review boards for UI mockups: nine mock_review tools, the mockreview CLI and slash command, the usage skill, a webhook platform connect handler for optional in-gateway autostart, and a stdio MCP server for other coding agents."
 platforms: [webhook]
 provides_hooks: []
 kind: standalone
@@ -22,6 +22,9 @@ provides_tools:
   - mock_review_ack
   - mock_review_list
   - mock_review_patch_block
+  - mock_review_list_comments
+  - mock_review_reply
+  - mock_review_resolve
 config_schema:
   devices:
     type: list
@@ -41,6 +44,11 @@ config_schema:
     type: bool
     default: true
     description: "Show the light/dark toggle in the header. Env: MOCKREVIEW_SHOW_THEME_TOGGLE."
+  layout:
+    type: str
+    default: "inline"
+    enum: ["inline", "cards"]
+    description: "Board layout: inline (flowing document with thin rules, no card backgrounds) or cards (2.0.0 look with bordered/rounded sections). Env: MOCKREVIEW_LAYOUT."
   mobile_width:
     type: int
     default: 390
@@ -77,7 +85,7 @@ config_schema:
   pin_fix:
     type: bool
     default: false
-    description: "Let a reviewer ask Hermes to patch one block of the current round in place, from a pin or an @Hermes comment, instead of sending a new round. Off: pins and comments are notes only. Env: MOCKREVIEW_PIN_FIX."
+    description: "Let a reviewer ask Hermes to patch one block of the current round in place, from a pin or an @Hermes comment, instead of sending a new round. A review created through the tools turns this on when it wakes Hermes and off when it does not; an explicit value from the call, the environment or config wins, so a config-level true survives wake=false. Off: pins and comments are notes only. Env: MOCKREVIEW_PIN_FIX."
   pin_fix_window_seconds:
     type: float
     default: 20.0

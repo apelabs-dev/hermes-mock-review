@@ -394,17 +394,18 @@ import {paintAvatar} from './avatar.js';
     });
     return out;
   }
-  function answerText(b, m) {
-    m = m || {};
-    return m.choice === 'recommended' ? b.recommendation.answer : m.choice === 'custom' ? String(m.custom || '').trim() : '';
-  }
-
   // ---------- boot ----------
   function applyTheme() {
     var t = R() ? boardTheme() : 'auto';
     if (t === 'auto') document.documentElement.removeAttribute('data-theme');
     else document.documentElement.setAttribute('data-theme', t);
   }
+  
+  function applyLayout() {
+    document.body.classList.remove('layout-inline', 'layout-cards');
+    document.body.classList.add('layout-' + (CFG.layout === 'cards' ? 'cards' : 'inline'));
+  }
+
   applyTheme();
 
   function fetchState() {
@@ -1016,6 +1017,22 @@ import {paintAvatar} from './avatar.js';
     for (var i = 0; i < S.frames.length; i++) if (S.frames[i].iframe.contentWindow === win) return S.frames[i];
     return null;
   }
+  // A frame is untrusted HTML even when the board is showing its own mock: a message from it may ask for the thread
+  // under the marker it drew, and only for a thread the board already lays out for that frame (the list that frame was
+  // sent: same block, and the same device where the frame has one). That open never marks the thread read - read is a
+  // trusted tap on the board itself (a pin row, a marker the board drew, a thread badge) - because a frame can post
+  // any message it likes at any moment.
+  function frameThreadEntries(f, block) {
+    if (f.ctx === 'proto') return T.protoEntries();
+    if (f.ctx === 'artifact') return T.mockEntries(block, null);
+    return T.frameEntries(block, f.device);
+  }
+  function openFrameThread(f, block, id, detached) {
+    if (typeof id !== 'string' || !id || id.indexOf('tmp:') === 0) return;
+    var own = frameThreadEntries(f, block).filter(function (t) { return t.id === id; })[0];
+    if (!own) return;
+    T.open(id, {detached: !!detached, read: false});
+  }
   function anchorOf(f, cx, cy) {
     var r = f.iframe.getBoundingClientRect();
     return { x: r.left + num(cx, 0, f.W) * f.scale, y: r.top + num(cy, 0, 4000) * f.scale };
@@ -1046,12 +1063,12 @@ import {paintAvatar} from './avatar.js';
       var i = num(d.i, -1, 99) | 0;
       if (i >= 60) {
         var t = T.frameEntries(f.vid, f.device)[i - 60];
-        if (t) T.open(t);
+        if (t) openFrameThread(f, f.vid, t.id, t.detached);
         return;
       }
       var p = S.draft.variants[f.vid].pins[i];
       if (!p || p.frame !== f.device) return;
-      if (p.thread) { T.open(p.thread, {detached: p.detached}); return; }
+      if (p.thread) { openFrameThread(f, f.vid, p.thread, p.detached); return; }
       openPinEditor({ vid: f.vid, frame: p.frame, x: p.x, y: p.y, page_h: p.page_h, index: i, anchor: anchorOf(f, d.cx, d.cy), f: f });
     } else if (d.type === 'positions') {
       var tp = T.frameEntries(f.vid, f.device);
@@ -1303,7 +1320,7 @@ import {paintAvatar} from './avatar.js';
   }
 
   // ---- per-review settings (state.json → settings) ----
-  var CFG_DEFAULT = { devices: ['desktop', 'mobile'], default_device: 'auto', default_theme: 'project', show_theme_toggle: true,
+  var CFG_DEFAULT = { devices: ['desktop', 'mobile'], default_device: 'auto', default_theme: 'project', show_theme_toggle: true, layout: 'inline',
     mobile_width: 390, tablet_width: 820, pins_enabled: true, require_note_on_change: false, max_pins: 40, footer_button: 'build', interactive_elements: false };   // defaults for reviews stored before a setting existed
   var CFG = Object.assign({}, CFG_DEFAULT);
   var WKEY = { desktop: 'desktop', tablet: 'tablet', mobile: 'phone' };   // setting name → width key (pins keep 'phone')
@@ -1316,6 +1333,7 @@ import {paintAvatar} from './avatar.js';
     CFG.devices = ok.length ? ok : CFG_DEFAULT.devices.slice();
     LIMIT.pins = Math.max(1, +CFG.max_pins || CFG_DEFAULT.max_pins);
     document.body.classList.toggle('no-pins', !CFG.pins_enabled);
+    applyLayout();
   }
   function widths() { return CFG.devices.map(function (d) { return WKEY[d]; }); }
   function viewerWidth() {
@@ -1973,15 +1991,18 @@ import {paintAvatar} from './avatar.js';
       h('div', { class: 'qrec' }, h('span', { class: 'qrec-l', text: 'Recommendation' }), h('p', { class: 'qrec-a', text: rec.answer || '' }),
         rec.why ? h('p', { class: 'qrec-why', text: rec.why }) : null),
       h('div', { class: 'decide qdecide', 'data-id': id },
-        h('div', { class: 'grp', role: 'group', 'aria-label': 'Answer' }, qbtn('recommended', 'Go with recommendation'), qbtn('custom', 'Different answer')),
-        h('div', { class: 'qresult' }, h('span', { class: 'qresult-text' }),
-          h('button', { class: 'link-btn q-undo', text: 'undo', 'aria-label': 'Undo the answer', disabled: ed ? null : true, onclick: function () { setMark(id, { choice: null, custom: '' }); } }))),
+        h('div', { class: 'grp', role: 'group', 'aria-label': 'Answer' }, qbtn('recommended', 'Go with recommendation'), qbtn('custom', 'Different answer'))),
       custom, note];
   }
   function pickAnswer(id, c) {
     var m = mark(id);
-    if (c === 'recommended') { setMark(id, m.choice === 'recommended' ? { choice: null, custom: '' } : { choice: 'recommended', custom: '' }); return; }
-    if (m.choice !== 'custom') setMark(id, { choice: 'custom', custom: m.custom || '' });
+    if (c === 'recommended') { 
+      setMark(id, m.choice === 'recommended' ? { choice: null, custom: '' } : { choice: 'recommended', custom: '' }); 
+      return; 
+    }
+    if (c === 'custom') {
+      setMark(id, m.choice === 'custom' ? { choice: null, custom: '' } : { choice: 'custom', custom: m.custom || '' });
+    }
     var el = document.getElementById('dz-' + id), inp = el && el.querySelector('.qinput');
     if (inp) setTimeout(function () { inp.focus({ preventScroll: true }); }, 0);
   }
@@ -1992,7 +2013,7 @@ import {paintAvatar} from './avatar.js';
     var el = document.getElementById('dz-' + id); if (el) refreshQuestion(el, id);
   }
   function refreshQuestion(el, id) {
-    var m = mark(id), b = DOC && DOC.dec.blocks.filter(function (x) { return x.id === id; })[0];
+    var m = mark(id);
     var done = m.choice === 'recommended' || (m.choice === 'custom' && !!String(m.custom || '').trim());
     el.querySelectorAll('.qbtn').forEach(function (x) { x.setAttribute('aria-pressed', String(x.dataset.c === m.choice)); });
     var cu = el.querySelector('.qcustom'); if (cu) cu.hidden = m.choice !== 'custom';
@@ -2000,9 +2021,6 @@ import {paintAvatar} from './avatar.js';
     st.dataset.s = done ? 'approve' : '';
     st.textContent = done ? 'Answered' : 'Open';
     el.classList.toggle('marked', done);
-    var rt = el.querySelector('.qresult-text');
-    if (rt) rt.textContent = done ? 'Answer: ' + (b ? answerText(b, m) : '') : m.choice === 'custom' ? 'Type your answer below' : 'Not answered yet';
-    var un = el.querySelector('.q-undo'); if (un) un.hidden = !m.choice;
   }
   // ---- context sections: nothing to vote on, never in the tally / nav / marks ----
   function renderCards(b) {   // "what's changing": a grid of short cards, 1 column on a phone, 2-3 on desktop
@@ -2224,7 +2242,7 @@ import {paintAvatar} from './avatar.js';
     } else if (d.type === 'mark') {
       pageMark(f, d);
     } else if (d.type === 'click') {
-      if (typeof d.thread === 'string' && d.thread) { T.open(d.thread, {detached: !!d.detached}); return; }
+      if (typeof d.thread === 'string' && d.thread) { openFrameThread(f, b.id, d.thread, d.detached); return; }
       if (!canComment() || !S.commentMode) return;
       if (S.draft.pins.length >= LIMIT.pins) { toast('That’s ' + LIMIT.pins + ' pins — use the notes for the rest.', 'warn'); return; }
       var x = num(d.x, 0, 1), y = num(d.y, 0, 1);
@@ -2238,11 +2256,11 @@ import {paintAvatar} from './avatar.js';
           redrawPins(b.id);
         } });
     } else if (d.type === 'pin') {
-      if (typeof d.thread === 'string' && d.thread) { T.open(d.thread, {detached: !!d.detached}); return; }
+      if (typeof d.thread === 'string' && d.thread) { openFrameThread(f, b.id, d.thread, d.detached); return; }
       var i = num(d.i, -1, 99) | 0;
       if (i >= 60) {
         var st = T.mockEntries(b.id, null)[i - 60];
-        if (st) T.open(st, {detached: !!st.detached});
+        if (st) openFrameThread(f, b.id, st.id, st.detached);
         return;
       }
       var p = S.draft.pins[i];
@@ -2472,6 +2490,22 @@ import {paintAvatar} from './avatar.js';
     var observer = new MutationObserver(schedule);
     var resize = new ResizeObserver(schedule);
     var observed = new Set();
+    var settleKey = '', settleCalm = 2, settleLeft = 0;
+    function measureKey() {
+      // The measured boxes and the pins they produced. A late layout (a font, a mock frame settling, keepPlace)
+      // can move a section or an element without changing any box the observers watch; re-measuring this key
+      // until it repeats is what notices a plain move.
+      var out = [];
+      CANVAS.forEach(function (c, sec) {
+        var b = canvasBox(sec);
+        out.push(b ? [b.left, b.top, b.width, b.height] : null);
+      });
+      if (S.draft && S.draft.pins) S.draft.pins.forEach(function (p) {
+        out.push([num(p.x, 0, 1), num(p.y, 0, 1), !!p.detached,
+          p.target && p.target.doc ? [p.target.doc.x, p.target.doc.y] : null]);
+      });
+      return JSON.stringify(out);
+    }
     function settle() {
       pending = 0;
       if (disposed) return;
@@ -2482,6 +2516,10 @@ import {paintAvatar} from './avatar.js';
         if (disposed) return;
         observer.observe(doc, { subtree: true, childList: true, characterData: true, attributes: true });
         observeAll();
+        var key = measureKey();
+        if (key !== settleKey) { settleKey = key; settleCalm = 0; settleLeft = 6; }
+        else if (settleCalm < 2) settleCalm++;
+        if (settleLeft > 0 && settleCalm < 2) { settleLeft--; schedule(); }
       }
     }
     function observeAll() {
@@ -3052,7 +3090,7 @@ import {paintAvatar} from './avatar.js';
       return;
     }
     if (d.type === 'click') {
-      if (typeof d.thread === 'string' && d.thread) { T.open(d.thread, {detached: !!d.detached}); return; }
+      if (typeof d.thread === 'string' && d.thread) { openFrameThread(f, 'proto', d.thread, d.detached); return; }
       if (!canComment() || !S.commentMode) return;
       if (S.draft.pins.length >= LIMIT.pins) { toast('That’s ' + LIMIT.pins + ' pins — use the notes for the rest.', 'warn'); return; }
       var x = num(d.x, 0, 1), y = num(d.y, 0, 1);
@@ -3066,11 +3104,11 @@ import {paintAvatar} from './avatar.js';
           f.ghost = null; pushProto(f); redrawPins('proto');
         } });
     } else if (d.type === 'pin') {
-      if (typeof d.thread === 'string' && d.thread) { T.open(d.thread, {detached: !!d.detached}); return; }
+      if (typeof d.thread === 'string' && d.thread) { openFrameThread(f, 'proto', d.thread, d.detached); return; }
       var i = num(d.i, -1, 99) | 0;
       if (i >= 60) {
         var st = T.protoEntries()[i - 60];
-        if (st) T.open(st, {detached: !!st.detached});
+        if (st) openFrameThread(f, 'proto', st.id, st.detached);
         return;
       }
       var p = S.draft.pins[i]; if (!p) return;

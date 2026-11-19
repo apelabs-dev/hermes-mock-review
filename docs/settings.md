@@ -17,6 +17,7 @@ Look settings and the first three feedback settings are copied into each review 
 - `default_device` (str, default `auto`, one of `auto`, `desktop`, `tablet`, `mobile`). Env: `MOCKREVIEW_DEFAULT_DEVICE`. Width the board opens at: auto (the viewer's device, clamped to devices), desktop, tablet or mobile.
 - `default_theme` (str, default `project`, one of `project`, `dark`, `light`). Env: `MOCKREVIEW_DEFAULT_THEME`. Theme the board opens in: project (the design profile's default), dark or light.
 - `show_theme_toggle` (bool, default `true`). Env: `MOCKREVIEW_SHOW_THEME_TOGGLE`. Show the light/dark toggle in the header.
+- `layout` (str, default `inline`, one of `inline`, `cards`). Env: `MOCKREVIEW_LAYOUT`. Board layout: inline (flowing document with thin rules, no card backgrounds) or cards (2.0.0 look with bordered/rounded sections).
 - `mobile_width` (int, default `390`, 280 to 640). Env: `MOCKREVIEW_MOBILE_WIDTH`. Mock width in px for Mobile.
 - `tablet_width` (int, default `820`, 600 to 1280). Env: `MOCKREVIEW_TABLET_WIDTH`. Mock width in px for Tablet (capped at a decision's desktop_width).
 - `desktop_width` (int, default `1280`, 320 to 1920). Env: `MOCKREVIEW_DESKTOP_WIDTH`. Desktop mock width in px for a decision that sets no desktop_width.
@@ -28,7 +29,7 @@ Look settings and the first three feedback settings are copied into each review 
 - `max_pins` (int, default `40`, 1 to 80). Env: `MOCKREVIEW_MAX_PINS`. Most pins per round.
 - `footer_button` (str, default `build`, one of `send`, `build`). Env: `MOCKREVIEW_FOOTER_BUTTON`. The one button in the footer of a round that has a gate (every plan board): build or send. build: Build, locked until nothing is open or on Change, with the reason in its tooltip; a block on Change turns it into Send for that round's notes. send: Send only, and the board never offers Build. A round with no gate always has Send.
 - `interactive_elements` (bool, default `true`). Env: `MOCKREVIEW_INTERACTIVE_ELEMENTS`. Mocks carry working controls. On: build every control in a mock so it responds (a dropdown opens, a switch flips, a tab changes, a field takes text); the comment toggle is always one press away (C). Off: mocks are static pictures.
-- `pin_fix` (bool, default `false`). Env: `MOCKREVIEW_PIN_FIX`. Let a reviewer ask Hermes to patch one block of the current round in place, from a pin or an @Hermes comment, instead of sending a new round. Off: pins and comments are notes only.
+- `pin_fix` (bool, default `false`). Env: `MOCKREVIEW_PIN_FIX`. Let a reviewer ask Hermes to patch one block of the current round in place, from a pin or an @Hermes comment, instead of sending a new round. A review created through the tools turns this on when it wakes Hermes and off when it does not; an explicit value from the call, the environment or config wins, so a config-level true survives wake=false. Off: pins and comments are notes only.
 - `pin_fix_window_seconds` (float, default `20.0`, 0 to 600). Env: `MOCKREVIEW_PIN_FIX_WINDOW_SECONDS`. Requests that arrive within this many seconds of each other share one wake-up.
 - `pin_fix_min_seconds` (float, default `60.0`, 0 to 3600). Env: `MOCKREVIEW_PIN_FIX_MIN_SECONDS`. Minimum seconds between two pin-fix wake-ups for one review.
 - `pin_fix_max_per_hour` (int, default `60`, 1 to 600). Env: `MOCKREVIEW_PIN_FIX_MAX_PER_HOUR`. Most pin-fix requests one review accepts in a rolling hour.
@@ -97,6 +98,7 @@ mock-review settings (config: Hermes ctx.get_config, read with Hermes)
   default_device = auto  (default)
   default_theme = project  (default)
   show_theme_toggle = true  (default)
+  layout = inline  (default)
   mobile_width = 390  (default)
   tablet_width = 820  (default)
   desktop_width = 1280  (default)

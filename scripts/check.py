@@ -315,7 +315,7 @@ class Runner:
             workers: int = 1) -> Result:
         log, xml = self._paths(name)
         temp = self.logs / ("tmp-" + log.stem)
-        cmd = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-rfE",
+        cmd = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-rfEP",
                "--junitxml=%s" % xml, "--basetemp=%s" % temp]
         if marker:
             cmd += ["-m", marker]
@@ -353,6 +353,7 @@ class Runner:
         print("[%s] %d tests, %d failed, %d skipped in %.1fs%s"
               % (name, res.tests, res.failed, res.skipped, res.wall, (" (" + res.note + ")") if res.note else ""),
               flush=True)
+        _replacements(res)
         if not res.ok:
             _failure_tail(res)
         return res
@@ -554,6 +555,21 @@ def _duration(seconds: float) -> str:
         return "%.1fs" % seconds
     minutes, rest = divmod(int(round(seconds)), 60)
     return "%dm%02ds" % (minutes, rest)
+
+
+REPLACING = "browserkit: replacing"
+
+
+def _replacements(res: Result) -> None:
+    """Print the browser replacements a job's log recorded, whatever the job's outcome. pytest hides a passing test's
+    stderr unless -rP lists it, and a green run that had to replace a browser is the one nobody opens the log of."""
+    try:
+        lines = res.log.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return
+    for line in lines:
+        if REPLACING in line:
+            print("[%s] %s" % (res.name, line[line.index(REPLACING):].rstrip()), flush=True)
 
 
 def _failure_tail(res: Result) -> None:

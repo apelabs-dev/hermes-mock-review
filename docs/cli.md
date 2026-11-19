@@ -8,12 +8,12 @@ Every command is available as `hermes mockreview <command>`. Without the Hermes 
 
 ```text
 usage: hermes mockreview [-h]
-                         {setup,create,add-round,design,feedback,ack,list,close,settings,housekeeping,public,owner,adopt,migrate,notify-test,serve,login,users,invite,admin,share,tokens,mcp} ...
+                         {setup,create,add-round,design,feedback,ack,list,close,delete,settings,housekeeping,public,owner,adopt,migrate,notify-test,serve,login,users,invite,admin,share,tokens,mcp} ...
 
 mock-review CLI. First time? Run: hermes mockreview setup. `hermes mockreview settings` prints each setting and its source.
 
 positional arguments:
-  {setup,create,add-round,design,feedback,ack,list,close,settings,housekeeping,public,owner,adopt,migrate,notify-test,serve,login,users,invite,admin,share,tokens,mcp}
+  {setup,create,add-round,design,feedback,ack,list,close,delete,settings,housekeeping,public,owner,adopt,migrate,notify-test,serve,login,users,invite,admin,share,tokens,mcp}
     setup               onboard mock-review: secret, wake and notice routes,
                         hosting, autostart, a test review
     create              create a review (round 1 = --decisions or --prototype)
@@ -25,6 +25,8 @@ positional arguments:
                         for it
     list                list open reviews
     close               close a review: no more rounds or feedback
+    delete              delete a review for good (closes it first): its files,
+                        comments and share link
     settings            print the resolved settings and where each value came
                         from
     housekeeping        run the auto-close / prune pass once (the server runs
@@ -360,6 +362,19 @@ positional arguments:
 
 options:
   -h, --help  show this help message and exit
+```
+
+## `hermes mockreview delete --help`
+
+```text
+usage: hermes mockreview delete [-h] [--yes] review_id
+
+positional arguments:
+  review_id
+
+options:
+  -h, --help  show this help message and exit
+  --yes       confirm: a deleted review cannot be recovered
 ```
 
 ## `hermes mockreview settings --help`

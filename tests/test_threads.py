@@ -279,3 +279,33 @@ def test_shared_events_drop_mine_and_unread_but_the_read_model_keeps_them(rid, o
     assert [c["mine"] for c in mine] == [False, False]
     own = threads.listing(rid, principal=actor(owner))["threads"][0]["comments"]
     assert [c["mine"] for c in own] == [True, True]
+
+
+def test_updated_at_is_strictly_monotonic_when_the_clock_repeats_or_steps_back(rid, owner, monkeypatch):
+    me = actor(owner)
+    clock = iter([5000.0, 5000.0, 4990.0, 4990.0, 100.0, 5000.0, 1.0])
+    monkeypatch.setattr(threads, "now", lambda: next(clock))
+
+    def stored(tid):
+        return db.connect().execute("SELECT updated_at FROM threads WHERE id = ?", (tid,)).fetchone()["updated_at"]
+
+    t = create(rid, owner)
+    seen = [t["updated_at"]]
+    assert stored(t["id"]) == seen[-1]
+
+    t = threads.reply(rid, t["id"], me, owner["name"], "owner", "Same instant")
+    cid = t["comments"][1]["id"]
+    seen.append(t["updated_at"])
+    t = threads.set_status(rid, t["id"], "resolved", me)
+    seen.append(t["updated_at"])
+    t = threads.set_status(rid, t["id"], "open", me)
+    seen.append(t["updated_at"])
+    t = threads.edit_comment(rid, cid, me, "Edited after a clock step back")
+    seen.append(t["updated_at"])
+    t = threads.delete_comment(rid, cid, me)
+    seen.append(t["updated_at"])
+
+    assert all(b > a for a, b in zip(seen, seen[1:])), seen
+    assert stored(t["id"]) == seen[-1]
+    stamps = [c["created_at"] for c in t["comments"]]
+    assert stamps == sorted(stamps) and stamps[-1] <= t["updated_at"]

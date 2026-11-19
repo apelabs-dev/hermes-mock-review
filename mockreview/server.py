@@ -33,13 +33,13 @@ from __future__ import annotations
 import datetime
 import errno
 from contextvars import copy_context
+import hmac
 import html
 import ipaddress
 import json
 import logging
 import mimetypes
 import os
-import secrets as pysecrets
 import signal
 import socket
 import sys
@@ -56,6 +56,21 @@ from . import (access, api, auth, config, export, frames, live, owner, pages, ru
 from .store import ReviewError
 
 log = logging.getLogger("mockreview.server")
+
+
+def _link_csrf(server: Any, purpose: str, token: str) -> str:
+    """The confirmation form's token: HMAC(purpose:token) under the server's per-start runtime secret.
+
+    Bound to the link itself, not to the shared `mr_csrf` cookie. Cookies are host-scoped and ports don't count, so
+    one browser reaching the board on two routes shares one `mr_csrf`: a share link (or a board tab) opened in the
+    same browser used to overwrite the value this form posts, and pressing Sign in failed with a raw JSON 403. The
+    token is unguessable without the link (the secret never leaves the host) and changes when the server restarts,
+    which re-renders the form instead of failing the click.
+    """
+    secret = getattr(server, "runtime_secret", "")
+    if not secret:
+        raise RuntimeError("the board server has no runtime secret: build it with make_server()")
+    return runtime.mac(secret, f"{purpose}:{token}")
 
 
 def _age(iso: object) -> str:
@@ -109,6 +124,11 @@ def token_route(parts: List[str]) -> bool:
             and parts[3] == "threads" and parts[5] in TOKEN_ROUTES)
 
 
+def _mentions_hermes(comment: Dict[str, Any]) -> bool:
+    """True when this comment itself carries the hermes mention; a thread's activated flag may predate it."""
+    return any(m.get("kind") == "hermes" for m in comment.get("mentions") or [])
+
+
 def thread_post_cap(rest: List[str]) -> Optional[str]:
     """The capability a thread route needs, or None when the path is not one of them."""
     if rest == ["threads"]:
@@ -125,6 +145,7 @@ def thread_post_cap(rest: List[str]) -> Optional[str]:
         return "read"
     return None
 API_MAX_BODY = 64 * 1024
+BODY_DRAIN_MAX = 1024 * 1024   # unread request bytes consumed before a refused response closes the socket
 DEAD_JSON = {"ok": False, "error": "not found"}
 # Variant pages are untrusted mock HTML: always an opaque origin, even when opened directly.
 VARIANT_CSP = "sandbox allow-scripts"
@@ -399,6 +420,8 @@ class Handler(BaseHTTPRequestHandler):
     # ---- helpers -----------------------------------------------------
     def _send(self, code: int, body: bytes, ctype: str, headers: Optional[Dict[str, str]] = None,
               cookies: Optional[List[str]] = None) -> None:
+        if self.close_connection:
+            self._discard_body()
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
@@ -601,12 +624,14 @@ class Handler(BaseHTTPRequestHandler):
         exists = store.exists(rid)
         decision = auth.decide(who, rid, exists)
         frame_round: Optional[int] = None
+        frame_token: Optional[str] = None
         scope_who = who                      # the request's own identity, unless a token stands in for it
         if len(parts) > 4 and parts[2] == "rounds" and parts[4].startswith("~"):
             # One signed token per (viewer, review, round), in the path so every relative URL a round page derives
             # inherits it. Only a valid token authorises the request; an invalid one leaves the request's own
             # identity in charge, with the path normalised so the file routes exactly as it does today.
-            grant = frames.validate(parts[4][1:], rid, parts[3], who, self._local(), exists)
+            frame_token = parts[4][1:]
+            grant = frames.validate(frame_token, rid, parts[3], who, self._local(), exists)
             if grant is not None:
                 frame_round = _ascii_id(parts[3])
                 if decision.result == access.SIGNIN:
@@ -680,6 +705,26 @@ class Handler(BaseHTTPRequestHandler):
             # asset, media Range or token the request carries.
             if not threads.sees_round(self._view_scope(rid, scope_who, decision), rest[1]):
                 return self._dead()
+            # A round file with no token for exactly this review and round is only for a document of the board's own
+            # origin. A sandboxed frame - the only thing that renders a prototype or an artifact - has an opaque
+            # origin, so every request it makes is cross-site, and every URL it derives relatively carries its own
+            # round's token. So a prototype in review A cannot read review B's scripts or styles, and an outside site
+            # cannot embed a round file at all. A navigation is not restricted this way: a tokenless page still opens
+            # (sandboxed, with no network) because that is the existing no-token view; what it must not do is pull in
+            # another review's files. An expired-but-signed token still counts as same-review for this decision only,
+            # so the page's own derived scripts and styles keep loading, while it grants no read and no network.
+            # `Sec-Fetch-Site` and `Sec-Fetch-Dest` are forbidden header names, so page script cannot forge either one.
+            tokened = (frame_round is not None and _is_ascii_digits(rest[1]) and frame_round == int(rest[1]))
+            same_review = tokened or (frame_token is not None and frames.signed_for(frame_token, rid, rest[1]))
+            dest = (self.headers.get("Sec-Fetch-Dest") or "").strip().lower()
+            navigation = dest in ("document", "iframe", "frame", "embed", "object")
+            # A page served with the `sandbox` CSP has an opaque origin even as a top-level document, so its own
+            # images, audio and video arrive cross-site too: those stay loadable (they render, they cannot be read),
+            # while anything that could execute, style or fetch another review's content is a dead end.
+            render = dest in ("image", "audio", "video", "track", "manifest")
+            if (not same_review and not navigation and not render
+                    and (self.headers.get("Sec-Fetch-Site") or "").strip().lower() == "cross-site"):
+                return self._dead()
             try:
                 f = store.safe_variant_file(rid, rest[1], rest[2], "/".join(rest[3:]))
             except ReviewError:
@@ -690,8 +735,7 @@ class Handler(BaseHTTPRequestHandler):
             if store.variant_has_artifact(rid, rest[1], rest[2]):
                 # An artifact's own round keeps the artifact policy, token or not.
                 csp = ARTIFACT_ROUND_CSP
-            elif (frame_round is not None and _is_ascii_digits(rest[1])
-                  and frame_round == int(rest[1])):
+            elif tokened:
                 # A valid token for exactly this review and round is today's normal prototype policy: its page is
                 # the reviewer's own, sandboxed mock and may load its own files and network.
                 csp = VARIANT_CSP
@@ -703,7 +747,13 @@ class Handler(BaseHTTPRequestHandler):
                 csp = ARTIFACT_ROUND_CSP
                 for directive in ("img-src", "media-src", "font-src", "style-src", "script-src"):
                     csp = csp.replace(directive + " ", directive + " " + src + " ", 1)
-            return self._send_file(f, ctype, {"Content-Security-Policy": csp, "Cache-Control": "no-cache"})
+            # A file that is same-review must stay loadable from the frame's opaque origin (media, fonts,
+            # `rounds/<n>/a/assets/`); an untokened one is a same-origin resource only, which is what keeps one
+            # review's files out of another review's prototype without breaking the board's own document. An expired
+            # token still counts here, but it stays on the no-network branch above.
+            corp = "cross-origin" if (same_review or render) else "same-origin"
+            return self._send_file(f, ctype, {"Content-Security-Policy": csp, "Cache-Control": "no-cache",
+                                              "Cross-Origin-Resource-Policy": corp})
         raise ReviewError("not found", 404)
 
     def _query_int(self, name: str, default: Optional[int] = None) -> Optional[int]:
@@ -856,6 +906,13 @@ class Handler(BaseHTTPRequestHandler):
         line = f"Signed in as {name}" + (" (this computer)" if who.source == "loopback" else "")
         self._page(200, pages.index(groups, line, who.user is not None, query=q), self._csrf_cookie(who))
 
+    def _confirm_page(self, purpose: str, token: str, code: int = 200) -> None:
+        """The link's confirmation form, with its link-bound token and no cookies at all: the GET must never replace
+        the shared `mr_csrf` a signed-in board tab is using."""
+        csrf = _link_csrf(self.server, purpose, token)
+        return self._page(code, pages.confirm(purpose, f"/{purpose}/{token}", csrf, purpose == "invite"), [],
+                          referrer=pages.CONFIRM_REFERRER)
+
     def _link_page(self, purpose: str, token: str) -> None:
         """GET of an invite or sign-in link: the confirmation form (a GET never uses the link)."""
         req = self._req()
@@ -866,10 +923,7 @@ class Handler(BaseHTTPRequestHandler):
         except users.AuthError:
             users.record_failure(auth.client_ip(req))
             return self._page(404, pages.DEAD)
-        csrf = req.cookies.get(auth.CSRF_COOKIE) or pysecrets.token_urlsafe(24)
-        cookie = auth.cookie(auth.CSRF_COOKIE, csrf, req, http_only=False, max_age=3600)
-        return self._page(200, pages.confirm(purpose, f"/{purpose}/{token}", csrf, purpose == "invite"), [cookie],
-                          referrer=pages.CONFIRM_REFERRER)
+        return self._confirm_page(purpose, token)
 
     def _share_join(self, token: str) -> None:
         """A share link: a guest session bound to the link's generation, then the board. A signed-in person who can
@@ -997,6 +1051,24 @@ class Handler(BaseHTTPRequestHandler):
         raise ReviewError("not found", 404)
 
     # ---- POST --------------------------------------------------------
+    def _discard_body(self) -> None:
+        """Consume the rest of the declared request body before writing a response that closes the connection.
+
+        Closing a socket while receive data is still queued makes the kernel send RST instead of FIN; on Windows the
+        client then reports WinError 10053 and loses the 4xx we just wrote. Reading exactly the declared bytes keeps
+        the close clean. The cap bounds the work for a refused request, and a client that lies about Content-Length
+        can hold the handler only until its own socket timeout."""
+        left = min(max(getattr(self, "_unread_body", 0), 0), BODY_DRAIN_MAX)
+        try:
+            while left > 0:
+                chunk = self.rfile.read(min(left, 65536))
+                if not chunk:
+                    break
+                left -= len(chunk)
+        except OSError:
+            pass
+        self._unread_body = 0
+
     def _drain(self, cap: int = 1024 * 1024) -> None:
         """Read and drop what the client has already sent, without waiting for more. Closing a socket that still has
         unread bytes queued makes the kernel send RST instead of FIN, and the client then loses the 4xx we just wrote;
@@ -1031,10 +1103,12 @@ class Handler(BaseHTTPRequestHandler):
             raise ReviewError("Content-Length required", 411)
         if length > limit:
             self.close_connection = True
+            self._unread_body = 0
             self._drain()
             raise ReviewError("Feedback is too large (2 MB max)." if limit == config.MAX_BODY
                               else "Request body is too large.", 413)
         raw = self.rfile.read(length)
+        self._unread_body = 0
         try:
             text = raw.decode("utf-8")
             body = (json.loads(text) if ctype == "application/json"
@@ -1067,6 +1141,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         self._who_cache = None
+        self._unread_body = _ascii_id(self.headers.get("Content-Length")) or 0
         if not self._host_ok():
             return
         try:
@@ -1191,7 +1266,13 @@ class Handler(BaseHTTPRequestHandler):
                 rid, who.actor, ((who.user or {}).get("name") or (who.guest or {}).get("display_name") or "Guest"),
                 decision.role, body.get("text"), anchor=body.get("anchor"), mentions=body.get("mentions"),
                 round_n=round_n, idem=body.get("idem"), can_activate=can_activate, principal=who.actor)
-            return self._json(201, {"ok": True, "thread": thread})
+            res = {"ok": True, "thread": thread}
+            comment = (thread.get("comments") or [None])[0]
+            if can_activate and comment and _mentions_hermes(comment):
+                # One wake per activating comment: the comment id is the idempotency key, so an idem replay is a
+                # duplicate and a plain reply on an already-activated thread wakes nobody.
+                res["wake"] = service.wake_thread_mention(rid, thread, comment["id"])
+            return self._json(201, res)
         if len(rest) == 3 and rest[0] == "threads" and rest[2] == "reply":
             can_activate = (access.can(decision, "submit") and who.source != "token" and who.guest is None
                             and store.load(rid).get("wake") is not False)
@@ -1201,7 +1282,10 @@ class Handler(BaseHTTPRequestHandler):
                 decision.role, body.get("text"), mentions=body.get("mentions"), idem=body.get("idem"),
                 can_activate=can_activate, principal=who.actor)
             comment = next((c for c in thread.get("comments") or [] if c["id"] == comment_id), None)
-            return self._json(200, {"ok": True, "thread": thread, "comment": comment})
+            res = {"ok": True, "thread": thread, "comment": comment}
+            if can_activate and comment and _mentions_hermes(comment):
+                res["wake"] = service.wake_thread_mention(rid, thread, comment_id)
+            return self._json(200, res)
         if len(rest) == 3 and rest[0] == "threads" and rest[2] == "status":
             # The board offers Resolve to anyone who may comment, but an agent's token is narrower: the card and the MCP
             # tool require the reviewer role, so this route enforces the same rule instead of trusting the client.
@@ -1231,18 +1315,41 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, {"ok": True})
         raise ReviewError("not found", 404)
 
+    def _link_token_ok(self, purpose: str, token: str, form_token: str) -> bool:
+        """The form's token is the link's own, or the older double-submit pair (form value == `mr_csrf` cookie).
+
+        The link token is what the form always renders, so a real browser never needs the fallback: the confirmation
+        page sets no `mr_csrf`, and a board tab's cookie stays whatever its session issued. The fallback exists only
+        for a client that already carries the pair (the base tests post `csrf=form-csrf` with `mr_csrf=form-csrf`);
+        it is never required, and a cross-site POST can produce neither.
+        """
+        if not form_token:
+            return False
+        expected = _link_csrf(self.server, purpose, token)
+        if hmac.compare_digest(form_token.encode(), expected.encode()):
+            return True
+        return auth.csrf_ok(self._req(), auth.Who(access.ANONYMOUS), form_token)
+
     def _use_link(self, purpose: str, token: str) -> None:
-        """POST of an invite or sign-in link: use it once, open a session, go to the board. Failures count towards
-        the per-IP throttle and all read the same."""
+        """POST of an invite or sign-in link: use it once, open a session, go to the board.
+
+        Every failure past the throttle answers with HTML. A wrong or missing token re-renders this link's own
+        confirmation form (403) and uses nothing: the link stays open and no throttle failure is counted, so a
+        browser whose `mr_csrf` cookie moved on can simply press the button again.
+        """
         req = self._req()
         ip = auth.client_ip(req)
         if users.throttled(ip):
             self.close_connection = True
             return self._page(429, pages.THROTTLED)
         body = self._read_body(API_MAX_BODY)
-        who = auth.Who(access.ANONYMOUS)      # the form's token pairs with the cookie its GET set, no session yet
-        if not auth.csrf_ok(req, who, str(body.get("csrf") or "")):
-            raise ReviewError("missing or wrong CSRF token: open the link again", 403)
+        if not self._link_token_ok(purpose, token, str(body.get("csrf") or "")):
+            try:
+                users.check_link(purpose, token)
+            except users.AuthError:
+                users.record_failure(ip)        # a POST at a dead link is a failed use, as it always was
+                return self._page(404, pages.DEAD)
+            return self._confirm_page(purpose, token, 403)
         try:
             res = users.redeem(purpose, token, name=str(body.get("name") or ""), identity=auth.proxy_identity(req),
                                user_agent=self.headers.get("User-Agent") or "")

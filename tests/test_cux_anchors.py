@@ -79,6 +79,20 @@ def reload(b, server, rid):
     time.sleep(0.4)
 
 
+def fresh_reload(b, server, rid):
+    """Navigate to an empty draft, even when the old document still has a debounced draft write queued.
+
+    saveDraft writes 250 ms after a change. Clearing localStorage from the old document and reloading leaves a
+    window where that write lands after the clear, so the next board resurrects the previous pin. Clearing from a
+    document-start script runs after the old document (and its timers) is gone, so the new board always starts empty.
+    """
+    added = b.cdp.call("Page.addScriptToEvaluateOnNewDocument", {"source": "localStorage.clear()"}, session=b.sid)
+    try:
+        reload(b, server, rid)
+    finally:
+        b.cdp.call("Page.removeScriptToEvaluateOnNewDocument", {"identifier": added["identifier"]}, session=b.sid)
+
+
 def point(b, expr):
     got = b.js("JSON.stringify((function(){var e=%s;if(!e)return 'null';Element.prototype.scrollIntoView.call(e,{block:'center'});"
                "var r=Element.prototype.getBoundingClientRect.call(e);return [r.left+r.width/2,r.top+r.height/2]})())"
@@ -245,8 +259,7 @@ def test_every_element_on_every_surface_anchors_and_survives_a_reload(cux_review
     b = open_board(chrome, server, rid)
     try:
         for label, expr in SURFACES:
-            b.js("localStorage.clear()")
-            reload(b, server, rid)
+            fresh_reload(b, server, rid)
             on(b)
             click(b, expr)
             assert b.until("!!document.querySelector('.popover')"), f"{label}: a click opened no composer"
@@ -283,8 +296,7 @@ def test_every_element_on_every_surface_anchors_and_survives_a_reload(cux_review
                     f"{label}: the pin is not on its element after the width switch ({(after, surface)})"
             b.js("localStorage.clear()")
         # The artifact is its own frame: the pin is saved from the probe's own target, and the probe resolves it there.
-        b.js("localStorage.clear()")
-        reload(b, server, rid)
+        fresh_reload(b, server, rid)
         on(b)
         assert b.until("!!document.querySelector('.art-frame')", timeout=30)
         frame_target = next(t for t in b.cdp.call("Target.getTargets")["targetInfos"]
@@ -314,6 +326,75 @@ def test_every_element_on_every_surface_anchors_and_survives_a_reload(cux_review
         local = frame_point(b, fsid, "#acopy")
         got = frame_pin_host(b, rid, [local[0] + 12, local[1] - 12])
         assert got and got.get("host"), "artifact: no pin sits on the element after the reload: %r" % (got,)
+    finally:
+        b.js("localStorage.clear()")
+
+
+# Wraps requestAnimationFrame from the first instant of the document. Once armed, it counts the board's own refresh
+# callbacks (canvasLifecycle's `settle`) and, right after the second one has run, moves the paragraph 165 px with a
+# stylesheet outside the doc. The first refresh measures the re-rendered doc; the second is the one the new doc's
+# ResizeObserver start-up notification queues, which is the last measure a board without the settle loop ever makes.
+# The shift lands inside that frame, after the measure and before the next layout, so on every run, whatever the
+# machine's frame timing, the pin is measured before the shift and nothing resizes: only the settle loop's further
+# frames can see it.
+LATE_SHIFT_AFTER_REFRESH = """(function(){var raf=window.requestAnimationFrame.bind(window);window.__refreshes=0;
+window.requestAnimationFrame=function(cb){
+  if(window.__armLateShift&&cb&&cb.name==='settle'){
+    var inner=cb;
+    cb=function(t){
+      try{inner(t)}finally{
+        if(++window.__refreshes===2){window.__armLateShift=false;
+          var s=document.createElement('style');s.id='mr-late-shift';
+          s.textContent='.doc-head > p { margin-left: 165px !important }';
+          (document.head||document.documentElement).appendChild(s);window.__lateShifted=true}}
+    }
+  }
+  return raf(cb)};
+})()"""
+
+
+def test_a_late_relayout_after_the_width_switch_reanchors_the_pin(cux_review, server, chrome):
+    """A width switch that settles over frames must not freeze the pin at its first measured position.
+
+    The switch redraws the doc, and the pin is measured in the next frame. A layout that lands after that frame
+    moves the surface without resizing any box the observers watch, so only a re-measure notices it. This is the
+    race the Windows CI run hit: the pin kept the position from before the final layout.
+    """
+    rid = cux_review
+    b = open_board(chrome, server, rid)
+    try:
+        fresh_reload(b, server, rid)
+        on(b)
+        expr = "document.querySelector('.doc-head > p')"
+        click(b, expr)
+        assert b.until("!!document.querySelector('.popover')")
+        save_pin(b)
+        added = b.cdp.call("Page.addScriptToEvaluateOnNewDocument", {"source": LATE_SHIFT_AFTER_REFRESH},
+                           session=b.sid)
+        try:
+            reload(b, server, rid)
+        finally:
+            b.cdp.call("Page.removeScriptToEvaluateOnNewDocument", {"identifier": added["identifier"]}, session=b.sid)
+        on(b)
+        assert b.until("!!document.querySelector('.mpin')", timeout=30)
+        assert not surface_pin(b, expr)["det"]
+        before = surface_centre(b, expr)
+        # Armed now, the wrapper lands the 165 px shift right after the board's second refresh of the press.
+        b.js("window.__armLateShift = true")
+        b.press('.dzbar .wseg .seg-btn[data-value="phone"]')
+        assert b.until("window.__lateShifted === true", timeout=10)
+        moved = surface_centre(b, expr)
+        assert moved and abs(moved[0] - before[0] - 165) < 2, (before, moved)
+        pin = surface = None
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            pin = surface_pin(b, expr)
+            surface = surface_centre(b, expr) or surface
+            if pin and abs(pin["x"] - surface[0]) < 30 and abs(pin["y"] - surface[1]) < 30:
+                break
+            b.cdp.pump(0.1)
+        assert pin and abs(pin["x"] - surface[0]) < 30 and abs(pin["y"] - surface[1]) < 30, \
+            f"the pin did not follow the late relayout ({(pin, surface)})"
     finally:
         b.js("localStorage.clear()")
 

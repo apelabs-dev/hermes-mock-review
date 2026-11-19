@@ -55,7 +55,14 @@ def on(b, width=1440):
                    ".getAttribute('aria-pressed') === 'true'")
 
 
+FITTED_JS = ("(function(){var h=document.querySelector('.mock-host'),m=h&&h.closest('.mock');if(!m)return false;"
+             "return Math.round(h.getBoundingClientRect().width)<=Math.round(m.getBoundingClientRect().width)})()")
+
+
 def mock_point(b, sel="#copy"):
+    # The mock host first lays out at the full desktop width and is then fitted to its column; measuring before that
+    # aims at where the element was, not where it ends up (the inline layout fits it fast enough to land in between).
+    assert b.until(FITTED_JS, timeout=10), "the mock never fitted its column"
     return json.loads(b.js(
         "JSON.stringify((function(){var e=document.querySelector('.mock-host').shadowRoot.querySelector(%s);"
         "Element.prototype.scrollIntoView.call(e,{block:'center'});"
