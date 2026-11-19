@@ -225,9 +225,10 @@ OpenCode, in `opencode.json`:
 
 ## Commands and reference
 
-`hermes mockreview <command>` and the `/mockreview` slash command (list, open, close, settings). The agent uses six
-tools: `mock_review_create`, `mock_review_add_round`, `mock_review_feedback`, `mock_review_ack`, `mock_review_list` and
-`mock_review_patch_block`.
+`hermes mockreview <command>` and the `/mockreview` slash command (list, open, close, settings). The agent uses nine
+tools. Six work on boards: `mock_review_create`, `mock_review_add_round`, `mock_review_feedback`, `mock_review_ack`,
+`mock_review_list` and `mock_review_patch_block`. Three work on comment threads: `mock_review_list_comments`,
+`mock_review_reply` and `mock_review_resolve`.
 
 - [docs/cli.md](docs/cli.md): every command with its flags
 - [docs/settings.md](docs/settings.md): every setting, its default and its environment variable

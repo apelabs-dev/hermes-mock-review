@@ -7,8 +7,9 @@ boards for UI mockups and wakes the agent when the reviewer presses Send. User d
 ## Layout
 
 - `plugin.yaml`: the Hermes manifest. `config_schema:` is generated from `mockreview/settings.py`.
-- `__init__.py`: the plugin entry point, `register(ctx)`. It registers six tools, the `hermes mockreview` command, the
-  `/mockreview` slash command, the `usage` skill and the webhook platform handler. It starts nothing itself.
+- `__init__.py`: the plugin entry point, `register(ctx)`. It registers nine tools (six for boards, three for comment
+  threads), the `hermes mockreview` command, the `/mockreview` slash command, the `usage` skill and the webhook platform
+  handler. It starts nothing itself.
 - `skills/usage/SKILL.md`: the skill bundled with the plugin (`mock-review:usage`). It is written for the agent that
   calls the tools and must stay generic.
 - `bin/mockreview`: runs the same CLI from a checkout, without Hermes.
