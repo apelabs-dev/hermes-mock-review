@@ -196,6 +196,19 @@ def point_in(b, selector, fx, fy, shadow=True):
     return json.loads(got)
 
 
+GHOST_AND_COMPOSER = ("JSON.stringify({ghost: document.querySelectorAll('.mpin.ghost').length, "
+                      "composer: !!document.querySelector('.popover')})")
+
+
+def after_a_scroll(b):
+    """Scroll a few pixels with a new pin's composer open and report the ghost and the composer. A scroll redraws the
+    pin layers on the next frame (and re-measures for up to six more); that redraw used to drop the ghost while the
+    composer stayed open, and the scroll in point_in could land it after a slow runner's click."""
+    b.js("window.scrollBy(0, 5)")
+    time.sleep(.4)
+    return json.loads(b.js(GHOST_AND_COMPOSER))
+
+
 def probe(b, point, surface='.mock-host'):
     js = PROBE.replace('__POINT__', json.dumps(point)).replace('__SURFACE__', json.dumps(surface))
     return json.loads(b.js(js))
@@ -294,6 +307,8 @@ def test_ghost_marker_paints_above_z_indexed_mock_content(board):
     report(b, "mock", "C2 ghost", g)
     assert g.get("surfaceIndex", -1) >= 0, g
     assert g["aboveSurface"], g
+    after = after_a_scroll(b)
+    assert after == {"ghost": 1, "composer": True}, "a redraw dropped the ghost of the pin being written: %s" % after
 
 
 def test_mock_link_and_controls_take_clicks_in_tap_mode(board):
@@ -339,6 +354,9 @@ def test_pins_paint_above_z_indexed_canvas_content(board):
     b = board
     th = centre(b, ".blk-table thead th")
     b.click(*th)
+    assert b.until("!!document.querySelector('.popover textarea')", timeout=5), "the pin popover did not open"
+    after = after_a_scroll(b)
+    assert after == {"ghost": 1, "composer": True}, "a redraw dropped the canvas ghost: %s" % after
     save(b, "Rates note", 1)
     marker = b.js("!!document.querySelector('.blk-table > .pin-layer .mpin')")
     assert marker, "the canvas pin was not drawn on the table section"
