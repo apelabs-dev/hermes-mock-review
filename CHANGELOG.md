@@ -3,6 +3,13 @@
 All notable changes to this project are listed here. The format follows Keep a Changelog, and the project follows
 semantic versioning.
 
+## [2.1.0](https://github.com/apelabs-dev/hermes-mock-review/compare/v2.0.0...v2.1.0) (2026-11-19)
+
+
+### Features
+
+* Desktop Mocks tab, @Hermes thread wake, sign-in fixes and polish ([#40](https://github.com/apelabs-dev/hermes-mock-review/issues/40)) ([9398a8d](https://github.com/apelabs-dev/hermes-mock-review/commit/9398a8d365827724c51868acc2e1b9ce07ef6c51))
+
 ## [2.0.0](https://github.com/apelabs-dev/hermes-mock-review/compare/v1.2.0...v2.0.0) (2026-11-18)
 
 
