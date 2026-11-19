@@ -34,6 +34,12 @@ identity that a trusted reverse proxy vouches for.
     it. `forwarded_identity` is refused on a public host and with the Funnel marker too, because Funnel and Serve
     connect from a trusted loopback proxy and strip only `Tailscale-*` headers; on a public host Cloudflare Access (a
     signed JWT) remains the only header/token-based sign-in source, and everyone else uses an invite or a share link.
+    Serve alone is a third case, and the header cannot show it: `tailscale serve` on the tailnet reaches the board over
+    loopback and forwards whatever `X-Forwarded-*` the client sent, while a tagged node has no Serve user login to set
+    `Tailscale-User-Login`. So the board asks the CLI (`tailscale serve status --json`, once, cached) whether a Web
+    mapping proxies its own loopback port, and when one does, `forwarded_identity` signs nobody in and logs why. Turn
+    the setting off and use the Tailscale identity, an invite or a share link; a reverse proxy you run yourself, not
+    Serve, is what `forwarded_identity` is for.
   - A Tailscale identity also needs the `X-Forwarded-For` header that Serve itself sets: exactly one address, inside the
     tailnet ranges `100.64.0.0/10` or `fd7a:115c:a1e0::/48`. `addProxyForwardedHeaders` in `ipn/ipnlocal/serve.go`
     (`:1036-1044` at tag `v1.98.1`, commit `2f4c02ee68c459aaea92d8b2dd81a38816823bef`) sets it to the tailnet address
@@ -92,7 +98,8 @@ The accounts, sessions, grants and audit rows live in `access.sqlite3` under the
   fix: both are stored for the owner, and neither ever wakes Hermes — a guest link never pings it, so tell it in chat.
   No guest of any link role ever sets `activated`: a viewer cannot reach the wake path at all, and a guest whose link
   role carries `submit` still only stores a plain `@Hermes` mention. Only the owner and signed-in members whose role
-  carries `submit` can activate Hermes, and never on a board created with wake-up off.
+  carries `submit` can activate Hermes, and never on a board created with wake-up off; an activating mention wakes
+  Hermes once through the Send wake route, while a guest, a token and a wake-off board never wake anyone.
 - A viewer's `state.json` carries no submit token, no feedback pins or notes, and only the round the link's version
   picker names (or every round while it says `latest`). The board shows one banner line naming the round.
 - Seats are capped per review: 25 live seats, one of them the owner's. A full link refuses new guests with a 409 page
@@ -182,21 +189,37 @@ with it off.
   that session's token, and a sessionless request is re-resolved from the token's session and must still pass the
   normal access decision. Signing out, regenerating the share link or revoking the grant therefore stops the token
   loading anything. A session or account token lives as long as its binding; only a `local` token carries the
-  two-hour `max_age`. The `s` it carries is a viewer pseudonym the prototype can read from its own URL — a session
+  two-hour `max_age`. A `local` token past that clock is no longer a credential — it grants no read and gets no
+  network — but because it is still signed for exactly this review and round it still counts as same-review for the
+  CORP/cross-site decision, so the page's own scripts and styles keep loading. The `s` it carries is a viewer
+  pseudonym the prototype can read from its own URL — a session
   `id_hash` (already a digest, never the cookie), `user:<id>`, or `local` — so an artifact learns that its viewer is
   the viewer of the round, and nothing more. A valid token authorises round files only, for exactly that review and
   round, and never `state.json`, a board file, `/api/*` or another review; it is redacted from the request log
   (`~…`), and round files keep
-  `Referrer-Policy: no-referrer` so it never appears in a third-party `Referer`. Known edge: a prototype that links
-  with a **root-absolute** path such as `/r/<id>/rounds/1/a/page2.html` drops the token and therefore loads with no
-  network; relative links, which Hermes generates, are unaffected. A navigation to a third-party URL is refused by the
+  `Referrer-Policy: no-referrer` so it never appears in a third-party `Referer`. Every round file also answers
+  `Cross-Origin-Resource-Policy`, because a sandboxed frame (the only thing that renders a prototype or an artifact)
+  has an opaque origin: a file under this review's and this round's token answers `cross-origin`, so its own media,
+  fonts and `rounds/<n>/a/assets/` keep loading inside the review; a file with no token for this review and round
+  answers `same-origin`, and a request for it that a frame makes without such a token is a dead end (a cross-site
+  `Sec-Fetch-Site`, which page script cannot forge, on anything that could execute, style or fetch — scripts, styles,
+  fonts, `fetch`/XHR, nested frames; a navigation, and the images, audio and video that only render, still load as
+  before, because a round page served with the `sandbox` CSP keeps an opaque origin even as a top-level document).
+  So one review's prototype cannot load another review's scripts, styles or fetchable content even when both reviews
+  are served by the same board, and an outside site cannot embed a round file at all. Known edge: a prototype that
+  links with a **root-absolute** path such as `/r/<id>/rounds/1/a/page2.html` drops the token and therefore loads
+  with no network, and also loses its own CSS and JS, because those derived requests carry no token and a cross-site
+  request for them is a dead end; relative links, which Hermes generates, are unaffected. A navigation to a third-party URL is refused by the
   board's own `frame-src 'self'` (no request is made), and a frame that loads anything but its block file (one that does
   not answer the board's ping, which only the block file's probe does) is reset to the block file up to three times and
   then removed. That reset is best effort: a page that forges the probe's reply keeps its frame, and what holds then is the
   header. Media is bundled in as `data:` URIs under the 25 MB per asset and 50 MB per round caps (the round's copied
   `assets/` folder counts against the same 50 MB), the page is capped at 2 MB, and a missing or oversized asset fails
   the create call. The board accepts only a height report, a tap, a pin edit, `data` writes and a `mark` from the
-  frame. Page state is accepted only from a frame that is one of the board's artifact frames on the round it is showing
+  frame. A frame message may ask for the thread under the marker it drew, and only for a thread the board already
+  lays out for that same frame (same block, same device); opening that way never marks it read, because a frame is
+  untrusted HTML and can post any message at any moment — read is set only by a tap on the board's own DOM (a thread
+  row, a marker the board drew, a pin the board owns). Page state is accepted only from a frame that is one of the board's artifact frames on the round it is showing
   (a message tagged with an earlier round is ignored), only for that block's id, and only within 64 keys and 8 KB per
   value and 256 KB per round; the server re-caps the same limits and drops unknown or foreign block ids. A frame that
   floods the 40-messages-per-second bucket is ignored, not obeyed. Page state is untrusted reviewer-supplied data: it is
@@ -223,7 +246,8 @@ with it off.
   40-comments-per-thread caps and the 20-writes-per-minute bucket live in `mockreview/threads.py`, which the board, the
   REST API and the agent tools all call. Comment text is untrusted plain text: the board renders it with `textContent`
   and linkifies bare `http(s)` URLs as DOM nodes, never as HTML, and mentions travel as structured ids rather than as
-  parsed text. Only an owner's or reviewer's `@Hermes` sets a thread's `activated` flag.
+  parsed text. Only an owner's or reviewer's `@Hermes` sets a thread's `activated` flag and wakes Hermes once per
+  comment; a guest, a token and a wake-off board never wake anyone, and mention wakes share the pin-fix caps.
 - The live stream. `GET /r/<id>/events` is access-checked like every other read (a JSON 401 for nobody signed in, the
   same 404 as a missing review for no access) and holds one of 25 seats per review: 24 for anyone, one kept for the
   owner. A stream carries only the events of the review its reader may read; `Last-Event-ID` replays from the retained
@@ -295,7 +319,9 @@ holding a commenter token cannot settle a thread by calling the HTTP route behin
 comment — it appears under that user's name, reaches open
 boards through the same SSE stream and is audited (`mcp.reply`, `mcp.resolve`, `mcp.reopen`) under the token's account.
 An `@Hermes` mention in an agent's reply is dropped and the thread is never activated, so two agents cannot wake each
-other in a loop.
+other in a loop. The plugin's own `mock_review_list_comments`, `mock_review_reply` and `mock_review_resolve` tools run
+in process in the woken session as the install's owner, need no token, and reply with `can_activate=False`: they never
+activate a thread or wake anyone either.
 
 A personal access token is also an HTTP bearer credential (`Authorization: Bearer mrp_...`), accepted on loopback requests
 and only on the two routes an MCP write needs: `POST /r/<id>/api/threads/<tid>/reply` and `.../status`. On the reply
@@ -308,7 +334,7 @@ authority, not an ambient cookie: a page cannot set an `Authorization` header cr
 server never grants (no CORS headers, 501), and the Origin, `Sec-Fetch-Site` and Host checks run before the token is
 read anyway. An invalid or revoked bearer, or one sent from any other address, is anonymous and never falls back to the
 loopback owner. A bearer request never activates `@Hermes` either: `can_activate` is false for a token even where the
-role could submit.
+role could submit, and a mention it adds to an already-activated thread wakes nobody.
 
 The token is never logged and never written into the server descriptor (`.server.json`). That file holds the address,
 the pid, the data root and one per-start secret, is written 0600 by the account that runs the server, and is ignored if
@@ -340,6 +366,22 @@ Setup writes the webhook secret with `hermes config set`, which stores it in the
 secret: command output is redacted before display, and an existing secret is reused instead of replaced. Reviews, tokens
 and feedback are plain files under `$HERMES_HOME/workspace/mock-reviews` with the permissions of your account. Treat that
 folder like the rest of your Hermes home.
+
+The signing secret is kept off command lines wherever Hermes can answer a route on its own. `hermes webhook subscribe`
+keeps an existing route's secret (or generates one) and prints it, so setup subscribes the routes without `--secret`,
+reads the reported value back, and reconciles: a route whose own secret differs from the stored one is re-bound with
+`--secret`, and only a run that has to change the value supplies it. Two residues remain, both because Hermes 0.22
+accepts a value only as an argument - `hermes webhook subscribe --help` and `hermes config set --help` offer no stdin,
+environment or file input, and Hermes's own config command reads the value positionally:
+
+- `hermes config set MOCKREVIEW_WEBHOOK_SECRET …` always carries the value in its argv, on the first install and
+  whenever the secret is rotated.
+- A route Hermes does not have yet is subscribed without a secret, then re-bound with `--secret` to the value the
+  plugin signs with, so a first install puts the value in an argv for the duration of that one call.
+
+Both windows are a single short-lived local process; a user who can read `/proc/<pid>/cmdline` or `ps` on the account
+that runs Hermes already has the account, and the `.env` and the route record that hold the value are readable by it
+too. Re-running setup, which re-subscribes every route, no longer repeats the value on a command line.
 
 ## Hosting modes compared
 

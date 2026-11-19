@@ -197,6 +197,21 @@ def owner_user() -> Dict[str, Any]:
     return get_user(uid)  # type: ignore[return-value]
 
 
+def owner_signed_in_elsewhere() -> bool:
+    """True once the owner account has signed in from another device.
+
+    The signal is a `login_link.use` audit row for the owner: a sign-in link (`hermes mockreview login`, the one
+    setup prints, or the one a review result carries) is the only way a browser that cannot be trusted as loopback
+    becomes the owner, and using one records that row in the same transaction that opens the session. The audit log
+    is append-only, so the answer stays true after a sign-out, a session expiry or a restart: the device has signed
+    in once, which is all the first-run note needs to know. Read fresh on every call, never cached.
+    """
+    uid = int(owner_user()["id"])
+    row = db.connect().execute("SELECT 1 FROM audit WHERE action = 'login_link.use' AND target = ? LIMIT 1",
+                               (f"user:{uid}",)).fetchone()
+    return row is not None
+
+
 def user_for_identity(source: str, subject: str) -> Optional[Dict[str, Any]]:
     r = db.connect().execute("SELECT u.* FROM users u JOIN identities i ON i.user_id = u.id "
                              "WHERE i.source = ? AND i.subject = ?", (source, subject)).fetchone()
@@ -805,6 +820,35 @@ def _set_link(actor: str, review_id: str, action: str, guest_role: Optional[str]
     if guests_changed:
         streams.close_guests(review_id)
     return result
+
+
+# Every table that carries a review id, in the order purge_review clears them. `comments` and `mentions` have no review
+# id of their own: they go with their thread (ON DELETE CASCADE), and a guest's `sessions` go with the guest. `grants`
+# rows with all_reviews = 1 and the `audit` log are not about one review, so they stay.
+REVIEW_TABLES = ("threads", "reads", "events", "guests", "revoked_sessions", "share_links", "invites", "grants")
+
+
+def purge_review(review_id: str, actor: str = "owner") -> Dict[str, int]:
+    """Delete everything the access database holds for one review, in one transaction, and end its guests' live
+    streams. Returns how many rows each table lost (comments and mentions counted before they cascade). Safe to call
+    again: a review with no rows deletes nothing."""
+    store.validate_id(review_id)
+    with db.tx() as conn:
+        counts = {
+            "comments": int(conn.execute("SELECT COUNT(*) FROM comments WHERE thread_id IN "
+                                         "(SELECT id FROM threads WHERE review_id = ?)", (review_id,)).fetchone()[0]),
+            "mentions": int(conn.execute("SELECT COUNT(*) FROM mentions WHERE comment_id IN (SELECT c.id FROM comments c "
+                                         "JOIN threads t ON t.id = c.thread_id WHERE t.review_id = ?)",
+                                         (review_id,)).fetchone()[0]),
+        }
+        hashes = [x["id_hash"] for x in conn.execute(
+            "SELECT s.id_hash FROM sessions s JOIN guests g ON g.id = s.guest_id WHERE g.review_id = ?", (review_id,))]
+        for table in REVIEW_TABLES:
+            counts[table] = conn.execute(f"DELETE FROM {table} WHERE review_id = ?", (review_id,)).rowcount
+        audit(conn, actor, "review.delete", f"review:{review_id}", **{k: v for k, v in counts.items() if v})
+    streams.close_sessions(hashes)
+    streams.close_guests(review_id)
+    return counts
 
 
 def share_link_from(conn: sqlite3.Connection, r: sqlite3.Row) -> Dict[str, Any]:

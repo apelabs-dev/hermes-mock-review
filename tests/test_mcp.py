@@ -159,7 +159,10 @@ def test_look_keys_come_from_settings_spec():
 
 def test_tool_names_match_the_plugin_schemas():
     plugin_mod = load_plugin()
-    assert set(plugin_mod.schemas(False, "local", False)) == set(mcp.BOARD_TOOL_NAMES)
+    wrappers = {"mock_review_list_comments": "list_comments", "mock_review_reply": "reply",
+                "mock_review_resolve": "resolve"}
+    assert set(plugin_mod.schemas(False, "local", False)) == set(mcp.BOARD_TOOL_NAMES) | set(wrappers)
+    assert set(wrappers.values()) == set(mcp.COMMENT_TOOL_NAMES)
     assert set(mcp.TOOL_NAMES) == set(mcp.BOARD_TOOL_NAMES) | set(mcp.COMMENT_TOOL_NAMES)
 
 

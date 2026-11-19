@@ -65,6 +65,8 @@ SPEC: List[Setting] = [
     Setting("default_theme", "str", "project", "Theme the board opens in: project (the design profile's default), "
             "dark or light.", "look", choices=("project", "dark", "light"), review=True),
     Setting("show_theme_toggle", "bool", True, "Show the light/dark toggle in the header.", "look", review=True),
+    Setting("layout", "str", "inline", "Board layout: inline (flowing document with thin rules, no card backgrounds) or "
+            "cards (2.0.0 look with bordered/rounded sections).", "look", choices=("inline", "cards"), review=True),
     Setting("mobile_width", "int", 390, "Mock width in px for Mobile.", "look", lo=280, hi=640, review=True),
     Setting("tablet_width", "int", 820, "Mock width in px for Tablet (capped at a decision's desktop_width).",
             "look", lo=600, hi=1280, review=True),
@@ -84,7 +86,10 @@ SPEC: List[Setting] = [
             "so it responds (a dropdown opens, a switch flips, a tab changes, a field takes text); the comment toggle "
             "is always one press away (C). Off: mocks are static pictures.", "feedback", review=True),
     Setting("pin_fix", "bool", False, "Let a reviewer ask Hermes to patch one block of the current round in place, "
-            "from a pin or an @Hermes comment, instead of sending a new round. Off: pins and comments are notes only.",
+            "from a pin or an @Hermes comment, instead of sending a new round. A review created through the tools "
+            "turns this on when it wakes Hermes and off when it does not; an explicit value from the call, the "
+            "environment or config wins, so a config-level true survives wake=false. Off: pins and comments are "
+            "notes only.",
             "feedback", review=True),
     Setting("pin_fix_window_seconds", "float", 20.0, "Requests that arrive within this many seconds of each other "
             "share one wake-up.", "feedback", lo=0, hi=600, review=True),

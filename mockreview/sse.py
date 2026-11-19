@@ -29,6 +29,9 @@ WRITE_ERRORS = (OSError, ValueError)
 # How long `Output.close()` waits for a frame that is already inside the write path. The socket is shut down and its
 # descriptor closed first, so a blocked write returns at once instead of holding the close for its own timeout.
 CLOSE_WAIT = 2.0
+# How long `Output.close()` probes for an idle write lock before it assumes a writer is parked on a stalled peer. The
+# probe is short because the common case is free: the descriptor then closes under the lock and no CLOSE_WAIT is owed.
+CLOSE_PROBE = 0.1
 
 
 def respond(handler: Any) -> None:
@@ -50,10 +53,11 @@ class Output:
     thread may be anywhere between "this frame is ready" and "the bytes are out". A plain `closed` flag checked before
     the write cannot close that window: the frame can pass the check, wait, and still be written after the close
     returned. So every frame goes through `emit()`, which holds this output's own lock across the check and the write,
-    and `close()` sets the flag, shuts the socket down, closes its descriptor (which wakes a write blocked on a
-    stalled peer) and only then waits for that lock. Once `close()` returns, no further frame can begin to go out, and
-    a frame that was queued or held writes nothing. The lock is per connection and held for one frame, never across a
-    queue or a database call, so a slow client cannot hold up a publisher or another stream.
+    and `close()` sets the flag, shuts the socket down, closes its descriptor (under the lock when it is free, or to
+    cancel a write parked on a stalled peer) and only then waits for that lock. Once `close()` returns, no further
+    frame can begin to go out, and a frame that was queued or held writes nothing. The lock is per connection and held
+    for one frame, never across a queue or a database call, so a slow client cannot hold up a publisher or another
+    stream.
 
     `close()` is also safe to call concurrently, and every caller returns only once the fence is done: the first
     caller through `_close_lock` performs it, the others wait there for `fenced`. A closer that finds a close already
@@ -73,12 +77,16 @@ class Output:
         handler.sse_output = self
         if self.closed:
             _shutdown(handler)
+            _close_descriptor(handler)
 
     def close(self) -> None:
         """End this output. After this returns, no frame can start writing on it, and any write in flight is done.
 
-        One caller performs the fence (flag, shutdown, bounded wait for the write lock); concurrent callers wait on
-        the per-connection close lock until it has completed. No registry or publisher lock is taken here.
+        One caller performs the fence (flag, shutdown, close of the descriptor, bounded wait for the write lock);
+        concurrent callers wait on the per-connection close lock until it has completed. The descriptor is closed
+        under the write lock when that lock is free, so nothing can be writing concurrently; when a writer is parked
+        on a stalled peer, the close itself must cancel that write and the bounded wait follows. No registry or
+        publisher lock is taken here.
         """
         with self._close_lock:
             if self.fenced:
@@ -87,8 +95,15 @@ class Output:
             handler = self._handler
             if handler is not None:
                 _shutdown(handler)
-            if self._lock.acquire(timeout=CLOSE_WAIT):
-                self._lock.release()
+            if self._lock.acquire(timeout=CLOSE_PROBE):
+                try:
+                    _close_descriptor(handler)
+                finally:
+                    self._lock.release()
+            else:
+                _close_descriptor(handler)
+                if self._lock.acquire(timeout=CLOSE_WAIT):
+                    self._lock.release()
             self.fenced = True
 
     def emit(self, frame: str) -> bool:
@@ -105,15 +120,13 @@ class Output:
 
 
 def _shutdown(handler: Any) -> None:
-    """Fence the connection: wake a write parked on a stalled peer, then close the descriptor under it.
+    """Wake a write parked on a stalled peer: `shutdown(SHUT_RDWR)` only, the descriptor stays open.
 
-    `shutdown()` alone wakes a blocked send on POSIX but not on Windows, where a send already inside the Winsock
-    provider keeps going until `closesocket` cancels it, and it never releases the descriptor. A plain `socket.close()`
-    does not close the descriptor either while `http.server`'s `rfile` still holds a `makefile()` reference
-    (`socket._io_refs`): CPython only marks the socket closed and defers the real close. So detach the descriptor and
-    close it through a throwaway wrapper. `detach()` first invalidates this socket object, so a later write or
-    shutdown on it fails locally with EBADF instead of touching a number the system may already have reused; a later
-    `close()` is only a no-op, and the wrapper is the one remaining owner that releases the descriptor.
+    On POSIX this is enough for a blocked send to return; on Windows a send already inside the Winsock provider keeps
+    going until `closesocket` cancels it, so `close()` also calls `_close_descriptor`. The stalled Windows path
+    therefore relies on closesocket cancelling a Winsock call in progress: proven by CI, but against Microsoft's
+    documented contract that a descriptor "may immediately be reused" and that a client "must never issue closesocket
+    on s concurrently with another Winsock function call", not against a stronger guarantee.
     """
     sock = getattr(handler, "connection", None)
     if sock is None:
@@ -122,6 +135,22 @@ def _shutdown(handler: Any) -> None:
         sock.shutdown(socket.SHUT_RDWR)
     except OSError:
         pass
+
+
+def _close_descriptor(handler: Any) -> None:
+    """Release the connection's descriptor so it is not leaked while `http.server`'s file objects still reference it.
+
+    A plain `socket.close()` does not close the descriptor while `rfile`/`wfile` hold a `makefile()` reference
+    (`socket._io_refs`): CPython only marks the socket closed and defers the real close. So detach the descriptor and
+    close it through a throwaway wrapper. `detach()` first invalidates this socket object, so a later write or
+    shutdown on it fails locally with EBADF instead of touching a number the system may already have reused; a later
+    `close()` is only a no-op, and the wrapper is the one remaining owner that releases the descriptor. When a writer
+    is parked on Windows, this closesocket is also what cancels the Winsock call in progress (Microsoft documents the
+    descriptor as immediately reusable).
+    """
+    sock = getattr(handler, "connection", None)
+    if sock is None:
+        return
     try:
         fd = sock.detach()
     except (AttributeError, OSError, ValueError):

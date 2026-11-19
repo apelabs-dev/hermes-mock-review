@@ -304,6 +304,26 @@ def test_packaged_skill_tells_a_tool_less_session_to_hand_off_and_the_thread_to_
     assert "Do not say you cannot" in text
 
 
+def test_the_wake_prompt_and_skill_cover_a_thread_mention_wake():
+    """A woken session must know a mention wake is answered in its thread, and patched only when the comment asks."""
+    prompt = setup.PROMPT_TEMPLATE
+    assert "review.thread_mention" in prompt
+    for name in ("mock_review_list_comments", "mock_review_reply", "mock_review_resolve"):
+        assert name in prompt, name
+    assert "mock_review_patch_block" in prompt and "request_ids=[request_id]" in prompt
+    assert prompt.index("mock_review_patch_block") < prompt.index("mock_review_reply"), \
+        "a change request is patched before it is answered"
+    for bare in ("list_comments", "reply", "resolve"):
+        assert not re.search(rf"(?<![A-Za-z0-9_]){bare}\b", prompt), bare
+    text = (ROOT / "skills" / "usage" / "SKILL.md").read_text(encoding="utf-8")
+    assert "review.thread_mention" in text
+    for name in ("mock_review_list_comments", "mock_review_reply", "mock_review_resolve"):
+        assert name in text, name
+    assert "mock_review_patch_block" in text and "request_ids=[request_id]" in text
+    assert text.index("mock_review_patch_block") < text.index("mock_review_reply"), \
+        "a change request is patched before it is answered"
+
+
 def test_hermes_renders_the_hand_off_line_from_the_real_wake_payload(env, tmp_path):
     src = os.environ.get("HERMES_AGENT_SRC")
     if src:

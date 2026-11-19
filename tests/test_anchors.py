@@ -216,11 +216,19 @@ def test_element_move_resize_delete_restore_and_empty_space(server, anchor_revie
     b.cdp.call('Page.reload', session=b.sid)
     assert b.until("!!document.querySelector('.mpin')")
     assert not b.js("document.querySelector('.mpin').classList.contains('det')")
-    # A stored v1.2.0 coordinate-only draft loads without migration or metadata writes.
-    old = json.loads(b.js("JSON.stringify((()=>{let entry=Object.entries(localStorage).find(([k,v])=>{try{return JSON.parse(v).pins?.length}catch(_){return false}});let d=JSON.parse(entry[1]);d.pins=[{block:'m1',option:null,w:'desktop',x:.25,y:.3,text:'v1.2.0 note'}];let raw=JSON.stringify(d);localStorage.setItem(entry[0],raw);return [entry[0],raw]})())"))
-    b.cdp.call('Page.reload', session=b.sid)
-    assert b.until("document.querySelector('.mpin')?.title==='v1.2.0 note'")
-    assert b.js('localStorage.getItem(%s)' % json.dumps(old[0])) == old[1]
+    # A stored v1.2.0 coordinate-only draft loads without migration or metadata writes. Seed it from a
+    # document-start script: an anchor re-measure can still have a 250 ms saveDraft queued, and that write landing
+    # between a localStorage.setItem and the reload would restore the previous draft over the seeded one.
+    old = json.loads(b.js("JSON.stringify((()=>{let entry=Object.entries(localStorage).find(([k,v])=>{try{return JSON.parse(v).pins?.length}catch(_){return false}});let d=JSON.parse(entry[1]);d.pins=[{block:'m1',option:null,w:'desktop',x:.25,y:.3,text:'v1.2.0 note'}];return [entry[0],JSON.stringify(d)]})())"))
+    seeded = b.cdp.call('Page.addScriptToEvaluateOnNewDocument',
+                        {'source': 'localStorage.setItem(%s,%s)' % (json.dumps(old[0]), json.dumps(old[1]))},
+                        session=b.sid)
+    try:
+        b.cdp.call('Page.reload', session=b.sid)
+        assert b.until("document.querySelector('.mpin')?.title==='v1.2.0 note'")
+        assert b.js('localStorage.getItem(%s)' % json.dumps(old[0])) == old[1]
+    finally:
+        b.cdp.call('Page.removeScriptToEvaluateOnNewDocument', {'identifier': seeded['identifier']}, session=b.sid)
 
 
 @pytest.mark.parametrize('fallback', [False, True])

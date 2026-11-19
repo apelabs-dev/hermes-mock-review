@@ -1220,10 +1220,12 @@ def guest_submission(round_: Dict[str, Any]) -> bool:
     return bool((round_.get("submission") or {}).get("guest"))
 
 
-def review_url(data: Dict[str, Any]) -> str:
+def review_url(data: Dict[str, Any], public_base: Optional[str] = None) -> str:
+    """The review's board address. `public_base` lets a caller listing many reviews resolve config.public_link_base()
+    (which may ask the tailscale CLI) once instead of once per review."""
     if data["mode"] == "local":
         return f"{config.local_link_base()}/r/{data['id']}"
-    base = config.public_link_base()
+    base = config.public_link_base() if public_base is None else public_base
     return f"{base}/r/{data['id']}" if base else ""
 
 

@@ -316,3 +316,34 @@ def test_a_green_run_without_check_log_dir_removes_its_scratch_logs(tmp_path):
     output = proc.stdout
     assert proc.returncode == 0, output
     assert "logs kept:" not in output, output
+
+
+MINI_REPLACING = """\
+import sys
+import pytest
+
+
+def test_plain_replaced_a_browser():
+    print("browserkit: replacing a browser whose page bring-up failed (1/2): the plain job", file=sys.stderr)
+
+
+@pytest.mark.browser
+def test_marked_replaced_a_browser():
+    print("browserkit: replacing a browser whose launch failed (1/2): the browser job", file=sys.stderr)
+"""
+
+
+def test_a_green_run_still_prints_the_browser_replacements_with_the_job_name(tmp_path):
+    """pytest hides a passing test's stderr, so a green job that replaced a browser left no trace in the run's output.
+    Every job's log is searched for the warning and the lines are printed under the job's name, green or not."""
+    mini = make_mixed_suite(tmp_path / "mini")
+    (mini / "tests" / "test_replaced.py").write_text(MINI_REPLACING, encoding="utf-8")
+    proc = run_check(mini, "full", merge_stderr=True)
+    output = proc.stdout
+    assert proc.returncode == 0, output
+    lines = [line for line in output.splitlines() if "browserkit: replacing" in line]
+    assert len(lines) == 2, output
+    plain = next(line for line in lines if "the plain job" in line)
+    marked = next(line for line in lines if "the browser job" in line)
+    assert plain.startswith("[fast] browserkit: replacing a browser whose page bring-up failed"), lines
+    assert marked.startswith("[test_replaced] browserkit: replacing a browser whose launch failed"), lines

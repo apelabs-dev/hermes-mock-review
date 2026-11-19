@@ -7,3 +7,6 @@ pytest-xdist==3.8.0
 pyyaml==6.0.3
 itsdangerous==2.2.0
 pyjwt[crypto]==2.15.1
+# The Desktop dashboard router (dashboard/plugin_api.py) runs inside Hermes, which ships fastapi; pinned to the
+# Hermes release the CI tests against so tests/test_desk.py exercises the real routes instead of skipping them.
+fastapi==0.133.1

@@ -393,6 +393,7 @@
     --rc: 12px;
     --sh: 0 16px 40px -14px rgba(20, 20, 40, 0.28), 0 2px 6px rgba(20, 20, 40, 0.08);
     --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, Roboto, "Helvetica Neue", sans-serif;
+    --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23666672' d='M10.293 3.293L6 7.586 1.707 3.293A1 1 0 00.293 4.707l5 5a1 1 0 001.414 0l5-5a1 1 0 10-1.414-1.414z'/%3E%3C/svg%3E");
     --pad: clamp(16px, 3vw, 24px);
     --hit: 36px;
     color-scheme: light;
@@ -414,6 +415,7 @@
       --wns: rgba(251, 191, 36, 0.14);
       --err: #f87171;
       --errs: rgba(248, 113, 113, 0.12);
+      --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23a0a0ac' d='M10.293 3.293L6 7.586 1.707 3.293A1 1 0 00.293 4.707l5 5a1 1 0 001.414 0l5-5a1 1 0 10-1.414-1.414z'/%3E%3C/svg%3E");
       --sh: 0 16px 40px -12px rgba(0, 0, 0, 0.7), 0 2px 6px rgba(0, 0, 0, 0.4);
       color-scheme: dark;
     }
@@ -434,6 +436,7 @@
     --wns: rgba(251, 191, 36, 0.14);
     --err: #f87171;
     --errs: rgba(248, 113, 113, 0.12);
+    --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23a0a0ac' d='M10.293 3.293L6 7.586 1.707 3.293A1 1 0 00.293 4.707l5 5a1 1 0 001.414 0l5-5a1 1 0 10-1.414-1.414z'/%3E%3C/svg%3E");
     --sh: 0 16px 40px -12px rgba(0, 0, 0, 0.7), 0 2px 6px rgba(0, 0, 0, 0.4);
     color-scheme: dark;
   }
@@ -2114,6 +2117,24 @@
     line-height: 1.6;
     margin: 0 0 10px;
   }
+  body.layout-inline .blk {
+    margin: 0;
+    padding: 22px 0 20px;
+    background: transparent;
+    border-left: 0;
+    border-right: 0;
+    border-top: 0;
+    border-bottom: 1px solid var(--line);
+    border-radius: 0;
+  }
+  body.layout-inline .gsec .blk:last-child {
+    border-bottom: 1px solid var(--line);
+  }
+  @media (max-width: 600px) {
+    body.layout-inline .blk {
+      padding: 16px 0 14px;
+    }
+  }
   .ihead {
     display: flex;
     align-items: baseline;
@@ -2411,7 +2432,7 @@
   }
   .dbtn {
     border: 0;
-    background: transparent;
+    background: var(--surface);
     color: var(--muted);
     font-weight: 600;
     font-size: 13px;
@@ -3185,26 +3206,8 @@
     background: var(--accent-soft);
     color: var(--accent);
   }
-  .qresult {
-    flex: 1 1 200px;
-    min-height: 34px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--muted);
-    min-width: 0;
-  }
-  .qresult-text {
-    overflow-wrap: anywhere;
-    min-width: 0;
-  }
-  .qresult .link-btn[hidden], .qcustom[hidden] {
+  .qcustom[hidden] {
     display: none;
-  }
-  .marked .qresult {
-    color: var(--ok);
   }
   .qcustom {
     display: flex;
@@ -3342,9 +3345,6 @@
     }
     .qdecide .qbtn {
       flex: 1 1 auto;
-    }
-    .qresult {
-      flex-basis: 100%;
     }
   }
   .mpin.det {
@@ -3676,6 +3676,19 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  select, .share-select {
+    -webkit-appearance: none;
+    appearance: none;
+    background-image: var(--chevron);
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    background-size: 12px 12px;
+    padding-right: 28px;
+  }
+  select:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
   .tpop {
     width: 380px;
     max-height: min(76vh, 620px);
@@ -3937,7 +3950,7 @@
     padding: 4px 6px;
     border: 1px solid var(--line-strong);
     border-radius: 6px;
-    background: var(--surface);
+    background-color: var(--surface);
     color: var(--text);
     max-width: 46%;
   }
@@ -4129,7 +4142,7 @@
     padding: 0 12px;
     border: 1px solid var(--line);
     border-radius: var(--r);
-    background: transparent;
+    background: var(--surface);
     color: var(--text);
     font-size: 13px;
     font-weight: 500;
@@ -5252,7 +5265,7 @@
     font-size: 13px;
   }
   .share-select {
-    padding: 0 8px;
+    padding: 0 28px 0 8px;
   }
   .share-url {
     font-size: 12px;

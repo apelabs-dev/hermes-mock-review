@@ -37,7 +37,7 @@ To see a plan board without an agent, create the demo from a checkout with a boa
 
 ## Install
 
-Requires Hermes 0.22.0 or newer and Python 3.11-3.14. The plugin has no Python dependencies.
+Requires Hermes 0.22.0 or newer and Python 3.11-3.14. Hermes installs the plugin's one Python dependency, `itsdangerous`, from `pyproject.toml`. PyJWT is an optional `crypto` extra, needed only for Cloudflare Access sign-in.
 
 Once the plugin is in the Hermes catalog:
 
@@ -135,12 +135,20 @@ but a guest never wakes Hermes: Send is stored for the owner. Regenerating or st
 session of the old link.
 
 Pins are conversations now: each pin opens a thread with replies, resolve/reopen, optional `@Hermes` mentions, and live
-updates on every open board. Comments and their history live in the review's own database under the data root. See
-[docs/comments.md](docs/comments.md) and [docs/security.md](docs/security.md).
+updates on every open board. An owner's or reviewer's `@Hermes` comment wakes Hermes once per comment; the board answers
+at once and the worker tick delivers it, coalescing a burst into one wake, and the anchored block carries a working
+chip until the session replies. It replies in the thread and patches the block in place when the comment asks for it; a
+guest, an agent token and a wake-off board never wake anyone. The wake goes to the chat the review was created
+from; [docs/comments.md](docs/comments.md) says what the session does there. Comments and their history live in the review's own
+database under the data root. See [docs/comments.md](docs/comments.md) and [docs/security.md](docs/security.md).
 
 ![The Share dialog in the board, showing invites, the guest link, its role and expiry, and live seats](docs/img/share-dialog.png)
 
 ![A pin's thread popover, with the original comment and a reply](docs/img/thread-popover.png)
+
+The board opens in the `inline` layout by default: a flowing document with thin rules and no card backgrounds. Set
+`layout` to `cards` for the bordered, rounded sections of 2.0.0. The choice is stored in each review when it is
+created, so changing the setting leaves open reviews as they are.
 
 ## People and access
 
@@ -157,6 +165,11 @@ There are no passwords. The board server has accounts, and every request is chec
   `hermes mockreview users grant <name|id> --review <review id> --role reviewer --expires 30d` is the CLI form.
 - Personal access tokens (`hermes mockreview tokens create --user <id> <name>`) let a coding agent comment as that
   account; the token is shown once and stored hashed.
+
+A device stays signed in: a session lasts 30 days from its last use, so a phone or laptop signs in once with a link
+and is not asked again while it is in use. Settings > Devices lists your signed-in devices and can sign the others out.
+On a tailnet or public board, setup ends by printing a first sign-in link, and until you have used one, the agent's
+create and add-round results carry a fresh link for it to hand over. A link works once and expires after 15 minutes.
 
 Roles and grants are read again on every request, so a change applies immediately. The full model — sessions, proxy
 identities, share-link seats, throttling and audit — is in [docs/security.md](docs/security.md); the migration from
@@ -220,6 +233,7 @@ tools: `mock_review_create`, `mock_review_add_round`, `mock_review_feedback`, `m
 - [docs/settings.md](docs/settings.md): every setting, its default and its environment variable
 - [docs/design.md](docs/design.md): the 2.0 design system, tokens and the rules the tests hold
 - [docs/decisions-format.md](docs/decisions-format.md): the `decisions.json` blocks an agent writes
+- [docs/desktop.md](docs/desktop.md): the Mocks tab in Hermes Desktop (list, read-only viewer, delete)
 - [docs/hosting.md](docs/hosting.md), [docs/security.md](docs/security.md) and
   [docs/troubleshooting.md](docs/troubleshooting.md)
 
@@ -247,6 +261,9 @@ Outbound network calls:
   Build), to say the agent may have stalled. No
   ping for a round with nothing left to build, one the agent acknowledged, or a closed review. Both carry the review title and counts, never your notes, and
   use the same signing secret as the wake-up.
+- Cloudflare Access only: when `cloudflare_team` and `cloudflare_audience` are both set, a GET to
+  `https://<team>.cloudflareaccess.com/cdn-cgi/access/certs` fetches the team's public signing keys, so the board can
+  check the `Cf-Access-Jwt-Assertion` token on a request. The keys are cached for an hour. Nothing is sent but the request itself.
 - Nothing else. There is no telemetry, analytics or update check.
 
 Credentials. The plugin reads one secret through Hermes's secret scope, or from the process environment when it runs
@@ -256,7 +273,11 @@ request; setup generates it and stores it with `hermes config set`). It is decla
 
 Shell commands. `tailscale status --json` and `tailscale serve status --json` find your tailnet address and existing
 routes when you use tailnet hosting (on macOS, the app's own binary when the `tailscale` symlink crashes); they only
-read, and setup prints any `tailscale serve` command for you to run. To match a saved design profile to a project, it
+read, and setup prints any `tailscale serve` command for you to run. `tailscale funnel status --json` also only reads:
+it finds the Funnel URL of this board for a public review. `hermes mockreview public on` runs
+`tailscale funnel --bg --yes --https=<port> http://127.0.0.1:<port>` to map one Funnel port to the loopback board, and
+`public off` runs `tailscale funnel --https=<port> off` to remove it. Both run only when you ask, and neither touches a
+port that serves something other than this board. To match a saved design profile to a project, it
 runs `git -C <project> rev-parse --show-toplevel --git-common-dir`, which only reads the project's git toplevel and,
 inside a linked worktree, the main checkout. `setup` also
 runs `hermes` subcommands: `--version`, `gateway status` and `config get` to read the current state, and `config set`,

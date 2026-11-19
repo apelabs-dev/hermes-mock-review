@@ -107,27 +107,27 @@ elif cmd == "config":
     else:
         out("")
 elif cmd == "webhook" and args[1] == "subscribe":
-    secret = ""
-    for i, a in enumerate(args):
-        if a == "--secret" and i + 1 < len(args):
-            secret = args[i + 1]
     name = args[2]
+    opt = dict(zip(args, args[1:]))
+    home = os.environ.get("HERMES_HOME", "")
+    path = os.path.join(home, "webhook_subscriptions.json") if home else ""
+    # Like Hermes: an existing route keeps its own secret, a new one gets a generated secret, and either way the
+    # value is printed (`Secret: …`), which is the only way setup learns it without a `--secret` argument.
+    try:
+        with open(path, encoding="utf-8") as f:
+            subs = json.load(f)
+    except Exception:
+        subs = {}
+    secret = (opt.get("--secret") or (subs.get(name) or {}).get("secret") or scenario.get("route_secret")
+              or ("gen-" + name).ljust(48, "x"))
     if scenario.get("fail_notice") and name.endswith("-notice"):
         out("error: cannot write the route")
         sys.exit(1)
     if has_webhook():
-        if scenario.get("subs"):
-            # Like Hermes: the route is stored in $HERMES_HOME/webhook_subscriptions.json and an update replaces the whole
+        if scenario.get("subs") and path:
+            # The route is stored in $HERMES_HOME/webhook_subscriptions.json and an update replaces the whole
             # record, so a manual key such as toolsets does not survive a re-subscribe.
-            home = os.environ["HERMES_HOME"]
             os.makedirs(home, exist_ok=True)
-            path = os.path.join(home, "webhook_subscriptions.json")
-            try:
-                with open(path, encoding="utf-8") as f:
-                    subs = json.load(f)
-            except Exception:
-                subs = {}
-            opt = dict(zip(args, args[1:]))
             route = {"description": opt.get("--description", ""), "events": [], "secret": secret,
                      "prompt": opt.get("--prompt", ""), "skills": [], "deliver": opt.get("--deliver", "log"),
                      "profile": "default", "deliver_extra": {"chat_id": opt.get("--deliver-chat-id", "")}}
@@ -230,6 +230,16 @@ def find(log, *prefix):
     return [entry for entry in log if list(entry[:len(prefix)]) == list(prefix)]
 
 
+def route_names(log):
+    """Each route that was subscribed, once, in order: a route's own subscribe plus the optional re-bind that puts it
+    on the stored secret (one right after the other, same name)."""
+    names = []
+    for entry in find(log, "webhook", "subscribe"):
+        if not names or names[-1] != entry[2]:
+            names.append(entry[2])
+    return names
+
+
 class FakeTTY:
     """A terminal stdin that hands back canned answers (one per line) and then EOF."""
 
@@ -256,24 +266,27 @@ def test_full_yes_run_records_exact_argv(monkeypatch, tmp_path, capsys):
     assert len(writes) == 1 and len(writes[0]) == 4 and writes[0][3]
 
     subs = find(log, "webhook", "subscribe")
-    assert len(subs) == 2
-    wake, notice = subs[0], subs[1]
-    name, secret = wake[2], dict(zip(wake, wake[1:])).get("--secret")
-    assert name == "mock-review-telegram"
-    assert secret == writes[0][3]
-    assert "--deliver" in wake and wake[wake.index("--deliver") + 1] == "telegram"
-    assert "--deliver-chat-id" in wake and wake[wake.index("--deliver-chat-id") + 1] == "{chat_id}"
-    assert "--deliver-only" not in wake and "--mirror-to-session" not in wake
+    # A new route is subscribed without the secret (Hermes generates one and prints it) and then re-bound once to the
+    # stored value, because a fresh install has to supply the one it writes to the config.
+    assert len(subs) == 4
+    plain_wake, bound_wake, plain_notice, bound_notice = subs
+    secret_value = writes[0][3]
+    assert plain_wake == ["webhook", "subscribe", "mock-review-telegram",
+                          "--prompt", setup.PROMPT_TEMPLATE, "--description", setup.ROUTE_DESCRIPTION,
+                          "--deliver", "telegram", "--deliver-chat-id", "{chat_id}"]
+    assert bound_wake == ["webhook", "subscribe", "mock-review-telegram", "--secret", secret_value,
+                          "--prompt", setup.PROMPT_TEMPLATE, "--description", setup.ROUTE_DESCRIPTION,
+                          "--deliver", "telegram", "--deliver-chat-id", "{chat_id}"]
 
     # the notice route: same name suffix, same secret, deliver-only and mirrored into the session
-    secret_value = writes[0][3]
-    assert wake == ["webhook", "subscribe", "mock-review-telegram", "--secret", secret_value,
-                    "--prompt", setup.PROMPT_TEMPLATE, "--description", setup.ROUTE_DESCRIPTION,
-                    "--deliver", "telegram", "--deliver-chat-id", "{chat_id}"]
-    assert notice == ["webhook", "subscribe", "mock-review-telegram-notice", "--secret", secret_value,
-                      "--prompt", "{message}", "--description", setup.NOTICE_ROUTE_DESCRIPTION,
-                      "--deliver", "telegram", "--deliver-chat-id", "{chat_id}",
-                      "--deliver-only", "--mirror-to-session"]
+    assert plain_notice == ["webhook", "subscribe", "mock-review-telegram-notice",
+                            "--prompt", "{message}", "--description", setup.NOTICE_ROUTE_DESCRIPTION,
+                            "--deliver", "telegram", "--deliver-chat-id", "{chat_id}",
+                            "--deliver-only", "--mirror-to-session"]
+    assert bound_notice == ["webhook", "subscribe", "mock-review-telegram-notice", "--secret", secret_value,
+                            "--prompt", "{message}", "--description", setup.NOTICE_ROUTE_DESCRIPTION,
+                            "--deliver", "telegram", "--deliver-chat-id", "{chat_id}",
+                            "--deliver-only", "--mirror-to-session"]
     assert re.search(r"^\s*routes\s+ok\s+\(1 route\(s\)\)", out, re.M)
     assert re.search(r"^\s*notice routes\s+ok\s+\(1 route\(s\)\)", out, re.M)
 
@@ -293,8 +306,11 @@ def test_secret_never_printed_but_shim_output_contained_it(monkeypatch, tmp_path
     assert secret in json.dumps(read_log(shim))  # the shim saw (and logged) the real value
 
 
-def test_rerun_is_idempotent(monkeypatch, tmp_path, capsys):
-    shim = make_shim(tmp_path, {"webhook_enabled": True})
+def test_rerun_executes_the_four_findings_contract(monkeypatch, tmp_path, capsys):
+    """SECAUDIT cand_c8a08db252dedec884335a90: setup re-subscribes the routes on every run, so a secret passed as
+    `--secret` was on a command line each time. Hermes keeps an existing route's secret and prints it, so a re-run
+    supplies nothing and only a route whose own secret differs is re-bound."""
+    shim = make_shim(tmp_path, {"webhook_enabled": True, "subs": True})
     fake_create(monkeypatch)
     run_setup(monkeypatch, shim, capsys)
     secret = shim_secret(shim)
@@ -306,8 +322,34 @@ def test_rerun_is_idempotent(monkeypatch, tmp_path, capsys):
     assert not find(log, "config", "set", "MOCKREVIEW_WEBHOOK_SECRET")   # no re-write, no rotation
     assert find(log, "config", "get", "--raw", "MOCKREVIEW_WEBHOOK_SECRET")  # reused via --raw
     subs = find(log, "webhook", "subscribe")
-    assert subs and dict(zip(subs[0], subs[0][1:])).get("--secret") == secret
+    assert len(subs) == 2                                                 # one per route, no re-bind
+    assert all("--secret" not in entry for entry in subs)                 # the value stays off the command line
+    assert secret and secret not in json.dumps(subs)
     assert "reusing" in out
+
+
+def test_a_route_holding_another_secret_is_re_bound_to_the_stored_one(monkeypatch, tmp_path, capsys):
+    """The compare-and-re-bind path: a route left on a different secret must be put back on the stored value, or the
+    plugin's signed wake-up POST would be refused."""
+    shim = make_shim(tmp_path, {"webhook_enabled": True, "route_secret": "stale-route-secret-0123456789abcdefghij"})
+    fake_create(monkeypatch)
+    rc, _, _ = run_setup(monkeypatch, shim, capsys)
+    assert rc == 0
+    log = read_log(shim)
+    stored = shim_secret(shim)                       # the value setup generated and wrote
+    assert stored != "stale-route-secret-0123456789abcdefghij"
+    bound = [entry for entry in find(log, "webhook", "subscribe") if "--secret" in entry]
+    assert bound and all(entry[entry.index("--secret") + 1] == stored for entry in bound)
+
+
+def test_route_secret_reads_the_line_hermes_prints():
+    assert setup.route_secret("Updated webhook subscription: mock-review-telegram\nSecret: abc123\n") == "abc123"
+    assert setup.route_secret("no secret here") == ""
+    assert setup.route_secret(None) == ""
+    argv = setup.wake_route_argv("mock-review", "telegram")
+    assert "--secret" not in argv
+    assert setup.secret_argv(argv, "s3cret") == ["webhook", "subscribe", "mock-review-telegram", "--secret",
+                                                "s3cret", *argv[3:]]
 
 
 def test_non_interactive_without_yes_returns_2_zero_argv(monkeypatch, tmp_path, capsys):
@@ -341,13 +383,16 @@ def test_webhook_disabled_yes_runs_enable_then_subscribes(monkeypatch, tmp_path,
 
 
 def test_rerun_resubscribes_the_same_route_names_and_keeps_the_secret(monkeypatch, tmp_path, capsys):
-    shim = make_shim(tmp_path, {"webhook_enabled": True})
+    shim = make_shim(tmp_path, {"webhook_enabled": True, "subs": True})
     fake_create(monkeypatch)
     assert run_setup(monkeypatch, shim, capsys)[0] == 0
+    first_run = len(read_log(shim))
+    first = len(find(read_log(shim), "webhook", "subscribe"))
     assert run_setup(monkeypatch, shim, capsys)[0] == 0
     log = read_log(shim)
-    names = [c[2] for c in find(log, "webhook", "subscribe")]
-    assert names == ["mock-review-telegram", "mock-review-telegram-notice"] * 2   # same names: updated, not duplicated
+    assert route_names(log[:first_run]) == ["mock-review-telegram", "mock-review-telegram-notice"]
+    rerun = [c[2] for c in find(log, "webhook", "subscribe")[first:]]
+    assert rerun == ["mock-review-telegram", "mock-review-telegram-notice"]   # same names: updated, not duplicated
     assert len(find(log, "config", "set", "MOCKREVIEW_WEBHOOK_SECRET")) == 1       # the secret is reused
 
 
@@ -441,7 +486,7 @@ def test_printed_serve_command_names_the_tailscale_binary_that_works(monkeypatch
     assert "then run once, manually: /Applications/Tailscale.app/Contents/MacOS/Tailscale serve --bg 8790" in out
 
 
-def test_run_tailscale_falls_back_to_the_macos_app_binary(monkeypatch):
+def test_run_tailscale_falls_back_to_the_macos_app_binary(monkeypatch, real_tailscale):
     from mockreview import config
     monkeypatch.setattr(config, "TAILSCALE_WORKING", "tailscale")
     calls = []

@@ -39,6 +39,7 @@ import ipaddress
 import logging
 import re
 import secrets
+import time
 from dataclasses import dataclass, field
 from email.header import decode_header, make_header
 from http.cookies import CookieError, SimpleCookie
@@ -194,11 +195,66 @@ def tailscale_identity(req: Request) -> Optional[Dict[str, str]]:
             or login.split("@")[0], "email": login if "@" in login else ""}
 
 
+_serve_front: Optional[bool] = None
+_serve_front_at: float = 0.0
+_serve_front_failed_at: float = 0.0
+_serve_front_warned: bool = False
+SERVE_FRONT_TTL = 30.0
+SERVE_FRONT_NEGATIVE_TTL = 5.0
+
+
+def reset_serve_front() -> None:
+    """Forget the cached Serve detection: tests, and a board whose `tailscale serve` mapping changed under it."""
+    global _serve_front, _serve_front_at, _serve_front_failed_at, _serve_front_warned
+    _serve_front = None
+    _serve_front_at = 0.0
+    _serve_front_failed_at = 0.0
+    _serve_front_warned = False
+
+
+def serve_fronts_board() -> bool:
+    """Whether `tailscale serve` maps this board's port, Funnel or not. Asked with the Tailscale CLI, only when a
+    request actually reaches forwarded_identity with the setting on, and re-asked after SERVE_FRONT_TTL. A failed
+    probe is cached for SERVE_FRONT_NEGATIVE_TTL seconds, so a forwarded-identity request cannot spawn a subprocess
+    every time, and a later successful probe is seen once that short window passes.
+
+    With Serve in front, every tailnet device reaches the board over loopback and Serve forwards the client's
+    `X-Forwarded-*` headers (it strips only `Tailscale-*`), so a tagged node that has no Serve user login could claim
+    any account a forwarded identity is linked to. There is no per-request way to tell that request from a
+    deliberately configured proxy, so the mapping itself is the signal.
+    """
+    global _serve_front, _serve_front_at, _serve_front_failed_at, _serve_front_warned
+    now = time.monotonic()
+    if _serve_front is not None and (now - _serve_front_at) < SERVE_FRONT_TTL:
+        return _serve_front
+    if _serve_front_failed_at and (now - _serve_front_failed_at) < SERVE_FRONT_NEGATIVE_TTL:
+        return False
+    try:
+        from . import public
+        answer = public.serve_probe()
+    except Exception:            # no plugin state, no CLI: nothing to detect
+        _serve_front_failed_at = now
+        return False
+    if answer is None:           # the probe failed: never trusted, and asked again once the short window passes
+        _serve_front_failed_at = now
+        return False
+    _serve_front, _serve_front_at = bool(answer), now
+    _serve_front_failed_at = 0.0
+    if _serve_front and not _serve_front_warned:      # warn once per detection, not once per TTL
+        _serve_front_warned = True
+        log.warning("forwarded_identity is ignored: Tailscale Serve maps this board's port, so a tailnet device "
+                    "with no Serve login could claim an X-Forwarded-Email. Turn it off with "
+                    "hermes config set plugins.entries.mock-review.settings.forwarded_identity false, then "
+                    "restart the board, and sign people in with the Tailscale identity, an invite or a share "
+                    "link.")
+    return _serve_front
+
+
 def forwarded_identity(req: Request) -> Optional[Dict[str, str]]:
     # Funnel and Serve connect from loopback, a trusted proxy by default, and Tailscale strips only Tailscale-* headers:
     # without this guard a client-sent X-Forwarded-Email on a public request would be believed.
     if (not settings.get("forwarded_identity") or not trusted_peer(req.peer) or req.public_host
-            or via_funnel(req)):
+            or via_funnel(req) or serve_fronts_board()):
         return None
     user = req.header("X-Forwarded-User")
     email = req.header("X-Forwarded-Email").lower()

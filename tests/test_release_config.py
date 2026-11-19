@@ -16,6 +16,7 @@ from conftest import ROOT
 CONFIG = ROOT / "release-please-config.json"
 MANIFEST = ROOT / ".release-please-manifest.json"
 WORKFLOW = ROOT / ".github" / "workflows" / "release-please.yml"
+CI = ROOT / ".github" / "workflows" / "ci.yml"
 PLUGIN = ROOT / "plugin.yaml"
 INIT = ROOT / "mockreview" / "__init__.py"
 PYPROJECT = ROOT / "pyproject.toml"
@@ -48,6 +49,29 @@ def init_version():
     match = re.search(r'^__version__ = "([^"]+)"', INIT.read_text(encoding="utf-8"), re.M)
     assert match, "mockreview/__init__.py declares no __version__"
     return match.group(1)
+
+
+def crypto_requirement():
+    """The PyJWT specifier inside the crypto extra, read from the text so no TOML dependency is needed."""
+    text = PYPROJECT.read_text(encoding="utf-8")
+    block = re.search(r"^crypto\s*=\s*\[(.*?)^\]", text, re.S | re.M)
+    assert block, "pyproject.toml declares no crypto extra"
+    match = re.search(r'"PyJWT\[crypto\]([^"]*)"', block.group(1))
+    assert match, "the crypto extra does not require PyJWT[crypto]"
+    return match.group(1)
+
+
+def admits(spec, version):
+    """A tiny numeric-version comparator for comma-separated comparison clauses, without `packaging`."""
+    got = tuple(int(part) for part in version.split("."))
+    for clause in spec.split(","):
+        match = re.fullmatch(r"\s*(>=|<=|==|!=|>|<)\s*(\d+(?:\.\d+)*)\s*", clause)
+        assert match, "unparsable version clause: {}".format(clause)
+        op, want = match.group(1), tuple(int(part) for part in match.group(2).split("."))
+        if not {"==": got == want, "!=": got != want, ">=": got >= want,
+                "<=": got <= want, ">": got > want, "<": got < want}[op]:
+            return False
+    return True
 
 
 def test_one_version_lives_in_the_manifest_the_plugin_and_the_package():
@@ -109,3 +133,41 @@ def test_workflow_pins_the_action_to_a_commit_and_runs_on_main():
     inputs = steps[0]["with"]
     assert (ROOT / inputs["config-file"]).is_file()
     assert (ROOT / inputs["manifest-file"]).is_file()
+
+
+def test_ci_tests_job_keeps_every_required_check_and_scopes_only_the_run_steps():
+    """Release-only pull requests skip the heavy steps, never the job: a skipped job reports no required check."""
+    job = yaml.safe_load(CI.read_text(encoding="utf-8"))["jobs"]["tests"]
+    assert job["name"] == "tests (${{ matrix.os }}, Python ${{ matrix.python }})"
+    assert job["timeout-minutes"] == 40
+    assert "if" not in job, "a job-level condition would leave every required tests check unreported"
+    assert job["strategy"]["matrix"]["include"] == [
+        {"os": "ubuntu-latest", "python": "3.11"},
+        {"os": "ubuntu-latest", "python": "3.14"},
+        {"os": "macos-latest", "python": "3.14"},
+        {"os": "windows-latest", "python": "3.14"},
+    ]
+    steps = {step["name"]: step for step in job["steps"] if "name" in step}
+    scope = [step for step in job["steps"] if step.get("id") == "scope"]
+    assert len(scope) == 1, "the tests job needs exactly one scope step"
+    gate = scope[0]["if"]
+    assert "github.event_name == 'pull_request'" in gate
+    assert "startsWith(github.head_ref, 'release-please--')" in gate, \
+        "a hand-made pull request that only edits plugin.yaml must still run every test"
+    for name in ("Run the non-browser tier", "Run the browser tier"):
+        assert steps[name]["if"] == "${{ !cancelled() && steps.scope.outputs.tests != 'skip' }}"
+    for name in ("Upload the non-browser logs", "Upload the browser logs"):
+        assert steps[name]["if"] == "always()"
+
+
+def test_crypto_extra_admits_every_supported_hermes_pyjwt_pin():
+    """The crypto extra must range over both PyJWT pins Hermes ships, not re-pin one of them.
+
+    CI installs requirements-dev.txt, not the extra, so an exact pin here only shows up when Hermes's own pin cannot
+    share the plugin environment and the gateway disables the plugin at boot. Hermes 0.22.x pins 2.13.0, 0.23.0+ 2.15.1.
+    """
+    spec = crypto_requirement()
+    assert not any(clause.strip().startswith("==") for clause in spec.split(",")), \
+        "an exact pin cannot sit next to Hermes core's own PyJWT pin: {}".format(spec)
+    for version in ("2.13.0", "2.15.1"):
+        assert admits(spec, version), "the crypto extra excludes Hermes's PyJWT {}: {}".format(version, spec)

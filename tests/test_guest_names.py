@@ -23,6 +23,13 @@ BLOCK_GUEST_NAME_SAVE = ("window.__origFetch=window.fetch;window.fetch=function(
                          "if(String(u).indexOf('api/guest-name')>=0){return Promise.reject(new Error('blocked'))}"
                          "return window.__origFetch.apply(this,arguments)};")
 
+# Holds the activity snapshot (`api/threads?...`) and the mark-read POST for the whole page life, like
+# test_board_threads.DELAYED_EVENTS holds the stream back: the fetched feed never lands, so any row the feed shows
+# came from the live event path alone.
+HOLD_SNAPSHOT = ("window.__origFetch=window.fetch;window.fetch=function(u,o){"
+                 "var s=String(u);if(s.indexOf('api/threads?')>=0||s.indexOf('api/activity/read')>=0)"
+                 "{return new Promise(function(){})}return window.__origFetch.apply(this,arguments)};")
+
 
 def join_guest(rid, role="reviewer"):
     if users.share_link(rid) is None:
@@ -230,6 +237,35 @@ def test_a_guest_named_like_the_owner_is_marked_a_guest_on_the_board(env, server
     assert b.until("!!document.querySelector('.feed .trow')", timeout=10)
     assert b.js("document.querySelectorAll('.feed .trow .guest-mark').length") == 1, \
         "the activity feed does not mark the guest's own row"
+
+
+@pytest.mark.browser
+def test_the_guests_own_live_event_enters_the_feed_before_the_snapshot_lands(env, server, chrome, tmp_path):
+    """The stream replays the guest's own thread.created before any snapshot: that row must be in the feed (it is the
+    only one that carries the guest mark) and it is the reader's own, so it counts no unread."""
+    rid = make_review(tmp_path, wake=False)
+    _made, guest = join_guest(rid)
+    name = users.guest(guest["guest_id"])["display_name"]
+    threads.create(rid, f"guest:{guest['guest_id']}", name, "guest", "The guest's own first comment")
+    b = Board(chrome, "about:blank", wait="true", width=1440, height=900)
+    b.cdp.call("Network.enable", session=b.sid)
+    for key, value in [("mr_session", guest["session"]), ("mr_csrf", guest["csrf"])]:
+        b.cdp.call("Network.setCookie", {"name": key, "value": value, "url": server, "path": "/"},
+                   session=b.sid)
+    b.cdp.call("Page.addScriptToEvaluateOnNewDocument", {"source": HOLD_SNAPSHOT}, session=b.sid)
+    b.cdp.call("Page.navigate", {"url": f"{server}/r/{rid}/"}, session=b.sid)
+    assert b.until(BOARD_WAIT, timeout=60)
+    assert b.until("!!document.querySelector('.tactivity')", timeout=15)
+    b.press(".tactivity")
+    assert b.until("!!document.querySelector('.feed .trow')", timeout=15), \
+        "the guest's own live event never reached the feed"
+    assert b.js("document.querySelectorAll('.feed .trow').length") == 1
+    assert b.js("document.querySelectorAll('.feed .trow .guest-mark').length") == 1, \
+        "the feed row of the guest's own event does not carry the guest mark"
+    assert b.js("document.querySelectorAll('.feed .trow.unrow').length") == 0, \
+        "the reader's own event must not be unread"
+    assert not b.js("document.querySelector('.tactivity').classList.contains('has-unread')"), \
+        "the reader's own event must not count as unread activity"
 
 
 @pytest.mark.browser

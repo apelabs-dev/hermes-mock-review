@@ -65,14 +65,22 @@ HOSTING_CHOICES = ("local", "tailnet", "lan")
 # webhook tools unless wake_toolsets grants more). The origin chat's own session builds the round.
 HANDOFF_LINE = "Round {round} feedback is saved; the build continues in this thread's chat session."
 
-# The wake prompt Hermes renders for an inbound round. `{...}` placeholders are filled by Hermes from the payload.
+# The wake prompt Hermes renders for an inbound round or an @Hermes thread mention. `{...}` placeholders are filled
+# by Hermes from the payload; `{summary}` says what a mention wake is about and which thread it names.
 PROMPT_TEMPLATE = (
-    "Mock review feedback is ready: {review_id} round {round} — {title}. "
-    "Read it with mock_review_feedback(review_id='{review_id}', round={round}), then act on the notes, "
-    "or build if Build was pressed. "
+    "Mock review wake: {event_type} for {review_id} round {round} — {title}. "
+    "If event_type is review.thread_mention, a reviewer mentioned Hermes in a comment thread: {summary} "
+    "Read it with mock_review_list_comments(review_id='{review_id}'). When the comment asks for a change, patch "
+    "one block in place FIRST with mock_review_patch_block (pass the round and the rev you read, and the wake "
+    "payload's request_id as request_ids=[request_id]); then answer in that thread with "
+    "mock_review_reply(thread_id=..., text=...). A question that needs no patch goes straight to the answer. "
+    "Mark it resolved with mock_review_resolve(thread_id=...) when you are done. "
+    "If event_type is review.submitted, read the feedback with "
+    "mock_review_feedback(review_id='{review_id}', round={round}), then act on the notes, or build if Build was "
+    "pressed. "
     "A next round asks only what is still open: approved blocks and answered questions go in a `settled` block, "
     "never back as questions. "
-    "If this session has no mock_review_feedback tool or cannot write files, do not explain what is missing: reply "
+    "If this session has no mock_review tools or cannot write files, do not explain what is missing: answer "
     f"with exactly this one line and stop: {HANDOFF_LINE} "
     "Board: {review_url}"
 )
@@ -96,22 +104,45 @@ def notice_route_name(route: str, platform: str) -> str:
     return f"{route}-{platform}-notice"
 
 
-def wake_route_argv(route: str, platform: str, secret: str) -> List[str]:
-    """`hermes webhook subscribe` argv for the agent route that wakes the origin chat on Send."""
-    return ["webhook", "subscribe", wake_route_name(route, platform), "--secret", secret,
+def wake_route_argv(route: str, platform: str) -> List[str]:
+    """`hermes webhook subscribe` argv for the agent route that wakes the origin chat on Send.
+
+    No `--secret`: Hermes keeps an existing route's secret or generates one and prints it (`Secret: …`), so the
+    signing secret stays off the command line on every setup run that does not have to change it. `secret_argv`
+    supplies it for the one case Hermes cannot answer itself: a route whose own secret differs from the stored one.
+    """
+    return ["webhook", "subscribe", wake_route_name(route, platform),
             "--prompt", PROMPT_TEMPLATE,
             "--description", ROUTE_DESCRIPTION,
             "--deliver", platform, "--deliver-chat-id", "{chat_id}"]
 
 
-def notice_route_argv(route: str, platform: str, secret: str) -> List[str]:
+def notice_route_argv(route: str, platform: str) -> List[str]:
     """`hermes webhook subscribe` argv for the deliver-only route that posts the ack and the stalled ping to the
-    origin chat and mirrors them into that chat's session."""
-    return ["webhook", "subscribe", notice_route_name(route, platform), "--secret", secret,
+    origin chat and mirrors them into that chat's session. No `--secret`, for the reason above."""
+    return ["webhook", "subscribe", notice_route_name(route, platform),
             "--prompt", NOTICE_PROMPT_TEMPLATE,
             "--description", NOTICE_ROUTE_DESCRIPTION,
             "--deliver", platform, "--deliver-chat-id", "{chat_id}",
             "--deliver-only", "--mirror-to-session"]
+
+
+def secret_argv(argv: List[str], secret: str) -> List[str]:
+    """The same `webhook subscribe` argv with the shared secret supplied, right after the route name."""
+    return [*argv[:3], "--secret", secret, *argv[3:]]
+
+
+_SECRET_LINE_RE = re.compile(r"^\s*Secret:\s*(\S+)\s*$", re.MULTILINE)
+
+
+def route_secret(output: Optional[str]) -> str:
+    """The route secret `hermes webhook subscribe` reports (`Secret: …`), or "" when it printed none.
+
+    Hermes is the only writer of a route's secret, and its CLI takes a value only as an argument, so setup reads the
+    value back from the command's own output instead of repeating it on a command line.
+    """
+    m = _SECRET_LINE_RE.search(output or "")
+    return m.group(1) if m else ""
 
 
 def toolsets_line(toolsets: List[str]) -> str:
@@ -650,8 +681,10 @@ def choose_origins(req: Request, detected: List[str]) -> Optional[List[str]]:
 
 
 def next_steps(*, board_running: bool, autostart: bool, gateway: str, restart_for: List[str],
-               windows: bool) -> List[str]:
-    """The `next:` lines, one string each. `gateway` is "running", "stopped" or "unknown"."""
+               windows: bool, sign_in: str = "") -> List[str]:
+    """The `next:` lines, one string each. `gateway` is "running", "stopped" or "unknown". `sign_in` is a minted
+    one-time sign-in URL; pass it when the board is hosted on the tailnet or publicly, so a phone or laptop that has
+    not signed in yet is told how (`hermes mockreview login` prints the same link)."""
     start_gateway = "hermes gateway run (or hermes gateway start for the installed service)"
     lines: List[str] = []
     if board_running:
@@ -678,6 +711,9 @@ def next_steps(*, board_running: bool, autostart: bool, gateway: str, restart_fo
     else:
         lines.append("start or restart the gateway (hermes gateway start, hermes gateway restart, or hermes gateway "
                      f"run) or run {FOREGROUND_CMD}")
+    if sign_in:
+        lines.append(f"sign in from your phone or laptop: {sign_in} (each link works once, for 15 minutes; one link "
+                     "per device)")
     lines.append("then ask your agent for a design review: that is the real test of the wake-up")
     return lines
 
@@ -784,28 +820,42 @@ def _run(args: argparse.Namespace) -> int:
 
     # 3. routes: one per origin platform
     def subscribe(name: str, argv: List[str], what: str) -> str:
-        """Create or update one route; returns "ok", "skipped" (webhook platform disabled) or "failed"."""
+        """Create or update one route; returns "ok", "skipped" (webhook platform disabled) or "failed".
+
+        The argv carries no secret. `hermes webhook subscribe` keeps the secret of a route it already has (or
+        generates one) and prints it, so setup compares that value with the stored one and only re-binds the route
+        (`--secret`) when they differ: the signing secret never appears on a command line on a run that does not
+        have to change it. A first install still has to supply the generated value, and `hermes config set` takes one
+        only as an argument - Hermes 0.22 offers no stdin or file input for either command (docs/security.md).
+        """
         _will_change(f"subscribe webhook route {name} ({what})")
         if req.dry_run:
             return "ok"
         r = run_hermes(argv)
-        out_txt = redact((r.stdout + r.stderr).strip(), secret)
-        print(out_txt)
-        lowered = out_txt.lower()
+        raw = (r.stdout or "") + (r.stderr or "")
+        reported = route_secret(raw)
+        print(redact(raw, reported or secret).strip())
+        lowered = raw.lower()
         if r.returncode != 0:
             return "failed"
         if "disabled" in lowered or "subscription" not in lowered:
             print(f"route {name} was not created (webhook platform disabled)")
             return "skipped"
+        if reported != secret:
+            _will_change(f"re-bind webhook route {name} to the stored secret")
+            bound = run_hermes(secret_argv(argv, secret))
+            print(redact((bound.stdout or "") + (bound.stderr or ""), secret).strip())
+            if bound.returncode != 0:
+                return "failed"
         return "ok"
 
     results = {"routes": [], "notice routes": []}
     for platform in platforms:
         results["routes"].append(subscribe(wake_route_name(req.webhook_route, platform),
-                                           wake_route_argv(req.webhook_route, platform, secret),
+                                           wake_route_argv(req.webhook_route, platform),
                                            f"deliver {platform}"))
         results["notice routes"].append(subscribe(notice_route_name(req.webhook_route, platform),
-                                                  notice_route_argv(req.webhook_route, platform, secret),
+                                                  notice_route_argv(req.webhook_route, platform),
                                                   f"deliver {platform}, notice"))
     for label, outcomes in results.items():
         if req.dry_run:
@@ -873,6 +923,7 @@ def _run(args: argparse.Namespace) -> int:
             print(f"tailnet unavailable ({note}) — staying on local hosting")
 
     hosting_row = ("hosting", "ok", req.hosting)
+    effective_hosting = req.hosting
     if req.hosting == "tailnet":
         base, note = (tailnet_pre, "") if tailnet_pre else tailnet_base()
         if base:
@@ -893,6 +944,7 @@ def _run(args: argparse.Namespace) -> int:
         else:
             print(f"tailnet unavailable ({note}) — staying on local hosting")
             hosting_row = ("hosting", "skipped", f"tailnet unavailable: {note}; links stay local")
+            effective_hosting = "local"
     elif req.hosting == "lan":
         print("warning: " + LAN_WARNING)
         _will_change("set host to 0.0.0.0")
@@ -1039,7 +1091,25 @@ def _run(args: argparse.Namespace) -> int:
     else:
         gateway, _manual = gateway_state()
         for line in next_steps(board_running=board_running, autostart=req.autostart, gateway=gateway,
-                               restart_for=changed_at_start if board_kind == "ours" else [], windows=_is_windows()):
+                               restart_for=changed_at_start if board_kind == "ours" else [], windows=_is_windows(),
+                               sign_in=_sign_in_link(effective_hosting)):
             print(f"next: {line}")
 
     return 1 if failed else 0
+
+
+def _sign_in_link(hosting: str) -> str:
+    """A minted one-time sign-in URL when this setup leaves the board reachable from another device, else "".
+
+    Tailnet and public boards answer a phone or laptop that has not signed in with the sign-in page, so the wizard
+    ends by handing over the link instead of letting the first board look broken. `hermes mockreview login` prints
+    the same link (this is the same call). A failure mints nothing: a cosmetic last line must not undo a setup that
+    otherwise worked, and the user can always run the login command.
+    """
+    if hosting != "tailnet" and settings.get("default_host") not in ("tailnet", "public"):
+        return ""
+    try:
+        with owner.bound(owner.resolve_soft()):
+            return api.login_link(public=True)["url"]
+    except (ReviewError, owner.OwnerError, OSError):
+        return ""

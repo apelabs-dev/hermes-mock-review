@@ -49,11 +49,34 @@ jobs:
           version: "0.11.14"
           enable-cache: false
 
+      # A Release Please pull request only rewrites the five files the action owns, so the four tests jobs still run
+      # (their names are required checks) but the two heavy tiers can be skipped inside them. No fetch happens on a
+      # push or a manual run, and a failed fetch or script leaves tests=run: the fallback is always the full matrix.
+      # Only a release-please branch takes this path; any other pull request, even one that only edits plugin.yaml, runs
+      # every tier (the scope step is skipped, its empty output is not 'skip').
+      - name: Scope the test tiers
+        id: scope
+        if: ${{ github.event_name == 'pull_request' && startsWith(github.head_ref, 'release-please--') }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          echo "tests=run" >> "$GITHUB_OUTPUT"
+          py=python3
+          command -v python3 >/dev/null 2>&1 || py=python
+          if git fetch --no-tags --depth=1 origin "$BASE_SHA"; then
+            scope="$("$py" scripts/version_only.py --base "$BASE_SHA" || true)"
+            scope="${scope%$'\r'}"
+            if [ "$scope" = "version-only" ]; then
+              echo "tests=skip" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
       # The suite is split into its two bounded halves so each has its own log artifact: a red fast tier no longer
       # hides which browser module failed, and the browser tier still runs after it (if: always()) so one job shows
       # every failure. `--part` is exactly the old `full` plan, halved; --all still shows every failure. The logs are
       # written to runner.temp (present on all three OSes) and uploaded with if: always(), green or red.
       - name: Run the non-browser tier
+        if: ${{ !cancelled() && steps.scope.outputs.tests != 'skip' }}
         env:
           CHECK_LOG_DIR: ${{ runner.temp }}/check-logs/nonbrowser
         run: >-
@@ -63,7 +86,7 @@ jobs:
 
       - name: Upload the non-browser logs
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           path: ${{ runner.temp }}/check-logs/nonbrowser
           name: check-logs-${{ matrix.os }}-py${{ matrix.python }}-nonbrowser
@@ -72,7 +95,7 @@ jobs:
           overwrite: true
 
       - name: Run the browser tier
-        if: always()
+        if: ${{ !cancelled() && steps.scope.outputs.tests != 'skip' }}
         env:
           CHECK_LOG_DIR: ${{ runner.temp }}/check-logs/browser
         run: >-
@@ -82,7 +105,7 @@ jobs:
 
       - name: Upload the browser logs
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           path: ${{ runner.temp }}/check-logs/browser
           name: check-logs-${{ matrix.os }}-py${{ matrix.python }}-browser

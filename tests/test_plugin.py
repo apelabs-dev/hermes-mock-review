@@ -8,7 +8,7 @@ import pytest
 import yaml
 
 from conftest import ROOT, load_plugin
-from mockreview import settings, store
+from mockreview import config, settings, store
 from test_store import _decisions as _make_decisions, _design
 
 
@@ -66,7 +66,8 @@ def test_register_registers_everything_and_writes_nothing(env, plugin, tmp_path)
     plugin.register(ctx)
     assert snapshot(tmp_path) == before                       # no writes at register time
     assert set(ctx.tools) == {"mock_review_create", "mock_review_add_round", "mock_review_feedback", "mock_review_ack",
-                              "mock_review_list", "mock_review_patch_block"}
+                              "mock_review_list", "mock_review_patch_block", "mock_review_list_comments",
+                              "mock_review_reply", "mock_review_resolve"}
     assert {t["toolset"] for t in ctx.tools.values()} == {"mock-review"}
     assert set(ctx.skills) == {"usage"} and ctx.skills["usage"]["path"].is_file()
     assert set(ctx.commands) == {"mockreview"} and set(ctx.cli) == {"mockreview"}
@@ -76,7 +77,7 @@ def test_register_registers_everything_and_writes_nothing(env, plugin, tmp_path)
     assert "public" in mode["description"] and "Ask" not in mode["description"]
     for t in ctx.tools.values():                                # short descriptions (they cost tokens every turn)
         assert len(t["schema"]["description"]) < 120
-    assert len(json.dumps([t["schema"] for t in ctx.tools.values()])) < 6600
+    assert len(json.dumps([t["schema"] for t in ctx.tools.values()])) < 8600
     # the woken agent must learn that a build means building now, not acking
     assert "build" in ctx.tools["mock_review_feedback"]["schema"]["description"]
     assert "building" in ctx.tools["mock_review_ack"]["schema"]["description"]
@@ -126,6 +127,7 @@ def test_tool_errors_are_json_never_raised(env, plugin, tmp_path, variants):
 
 def test_slash_command_plain_text(env, plugin, tmp_path, monkeypatch):
     monkeypatch.delenv("MOCKREVIEW_PUBLIC_BASE", raising=False)
+    monkeypatch.setattr(config, "funnel_url", lambda: "")   # a Funnel on this host must not leak into the test
     ctx = FakeCtx({"public_base": "https://board.test", "default_host": "tailnet"})
     plugin.register(ctx)
     slash = ctx.commands["mockreview"]["handler"]
@@ -168,7 +170,8 @@ def test_manifest_schema_matches_settings_spec():
     for line in ("name: mock-review", "manifest_version: 2", "api_version: 1", "kind: standalone"):
         assert line in text.splitlines()
     for tool in ("mock_review_create", "mock_review_add_round", "mock_review_feedback", "mock_review_ack",
-                 "mock_review_list", "mock_review_patch_block"):
+                 "mock_review_list", "mock_review_patch_block", "mock_review_list_comments", "mock_review_reply",
+                 "mock_review_resolve"):
         assert f"  - {tool}" in text
 
 
