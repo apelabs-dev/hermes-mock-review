@@ -3,6 +3,13 @@
 All notable changes to this project are listed here. The format follows Keep a Changelog, and the project follows
 semantic versioning.
 
+## [2.1.1](https://github.com/apelabs-dev/hermes-mock-review/compare/v2.1.0...v2.1.1) (2026-11-19)
+
+
+### Documentation
+
+* README and AGENTS.md list nine agent tools, not six ([#42](https://github.com/apelabs-dev/hermes-mock-review/issues/42)) ([961c250](https://github.com/apelabs-dev/hermes-mock-review/commit/961c2505c411df73374589e6f9a6ac1ca08467ac))
+
 ## [2.1.0](https://github.com/apelabs-dev/hermes-mock-review/compare/v2.0.0...v2.1.0) (2026-11-19)
 
 
