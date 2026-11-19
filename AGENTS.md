@@ -43,7 +43,9 @@ boards for UI mockups and wakes the agent when the reviewer presses Send. User d
 - `docs/`: user docs. `settings.md` and `cli.md` are generated. `img/` holds the README screenshot.
 - `scripts/gen_docs_reference.py`: regenerates `docs/settings.md` and `docs/cli.md`. `scripts/check_docs.py`: checks the
   docs against the tree. `scripts/gen_plugin_manifest.py`: rewrites `config_schema:` in `plugin.yaml`.
-  `scripts/check_identifiers.py`: the secret and identifier sweep (tree or full history). `scripts/sweep-baseline`: the
+  `scripts/tempguard.py`: what the test harnesses use so a killed run leaves nothing behind (scratch dirs with an owner
+  file and a startup sweep, cleanup on SIGTERM/SIGHUP/SIGINT, and a watchdog process that stops the server or browser
+  and removes the dirs after a SIGKILL). `scripts/check_identifiers.py`: the secret and identifier sweep (tree or full history). `scripts/sweep-baseline`: the
   commit after which the history sweep checks private tokens. `scripts/sse_probe.py`: the reproducible
   SSE-through-a-proxy evidence tool.
 - `tests/`: pytest suite.
