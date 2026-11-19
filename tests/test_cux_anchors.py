@@ -169,8 +169,7 @@ def drag_word(b, coords, session=None):
 
 
 def artifact_frame_session(b, rid):
-    target = next(t for t in b.cdp.call("Target.getTargets")["targetInfos"]
-                  if t["type"] == "iframe" and rid in t["url"] and t["url"].endswith("a1.html"))
+    target = b.frame_target(lambda url: rid in url and url.endswith("a1.html"))
     sid = b.cdp.call("Target.attachToTarget", {"targetId": target["targetId"], "flatten": True})["sessionId"]
     b.cdp.call("Runtime.enable", session=sid)
     return sid
@@ -299,10 +298,7 @@ def test_every_element_on_every_surface_anchors_and_survives_a_reload(cux_review
         fresh_reload(b, server, rid)
         on(b)
         assert b.until("!!document.querySelector('.art-frame')", timeout=30)
-        frame_target = next(t for t in b.cdp.call("Target.getTargets")["targetInfos"]
-                            if t["type"] == "iframe" and rid in t["url"] and t["url"].endswith("a1.html"))
-        frame_sid = b.cdp.call("Target.attachToTarget", {"targetId": frame_target["targetId"], "flatten": True})["sessionId"]
-        b.cdp.call("Runtime.enable", session=frame_sid)
+        frame_sid = artifact_frame_session(b, rid)
         local = json.loads(b.cdp.call("Runtime.evaluate", {"expression":
             "JSON.stringify((function(){var e=document.querySelector('#acopy');var r=e.getBoundingClientRect();"
             "return [r.left+r.width/2,r.top+r.height/2]})())", "returnByValue": True}, session=frame_sid)["result"]["value"])

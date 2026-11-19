@@ -136,6 +136,23 @@ class Board:
                                      % (timeout, expression, reason))
         return None
 
+    def frame_target(self, match, timeout=10.0):
+        """The iframe target whose URL `match` accepts, waited for (bounded).
+
+        An out-of-process frame becomes a target only after its element is on the page, and it reports about:blank
+        until it navigates, so a slow runner that looks right after the element appears finds nothing. A miss names
+        the iframe URLs seen instead of a bare StopIteration."""
+        seen = []
+
+        def find():
+            infos = self.cdp.call("Target.getTargets")["targetInfos"]
+            seen[:] = [t["url"] for t in infos if t["type"] == "iframe"]
+            return next((t for t in infos if t["type"] == "iframe" and match(t["url"])), None)
+
+        got = self.cdp.wait(find, time.monotonic() + timeout)
+        assert got, "no matching iframe target after %ss; iframe targets: %s" % (timeout, seen or "none")
+        return got
+
     def press(self, sel):
         # The pin popover's own buttons sit over the cross-process frame, and right after the popover appears Chrome's
         # hit-test data can still send a synthetic click to the frame underneath (a person is never that fast).
