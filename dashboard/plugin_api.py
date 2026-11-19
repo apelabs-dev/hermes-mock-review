@@ -1,4 +1,9 @@
-"""The Mocks tab's backend, mounted by Hermes Desktop at /api/plugins/mock-review/ inside the gateway process.
+"""The Mocks tab's backend, mounted by Hermes Desktop at /api/plugins/mock-review/ in the Hermes dashboard process.
+
+Desktop spawns a `hermes dashboard` backend rather than a gateway, so the router runs there, or in the plugin host under
+`plugins.isolation: host`. A gateway that serves the dashboard routes mounts it too, but it is not the usual host. Hooks
+that only the board server installs, such as the live-stream closer (`live.install()`), are installed in that process
+only when the board server runs in it as well.
 
 A thin adapter: every route calls mockreview.api and turns a ReviewError into an HTTP error carrying its message and
 status. This is the only file of the package that imports fastapi. Importing it starts no thread, socket or subprocess.

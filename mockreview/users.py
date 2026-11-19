@@ -830,8 +830,10 @@ REVIEW_TABLES = ("threads", "reads", "events", "guests", "revoked_sessions", "sh
 
 def purge_review(review_id: str, actor: str = "owner") -> Dict[str, int]:
     """Delete everything the access database holds for one review, in one transaction, and end its guests' live
-    streams. Returns how many rows each table lost (comments and mentions counted before they cascade). Safe to call
-    again: a review with no rows deletes nothing."""
+    streams. The streams end immediately only in the board server's own process, where the live-stream closer is
+    installed. Called from the Desktop backend or the CLI, which may run in another process, the streams end at their
+    own access recheck (`live.py` `RECHECK_EVERY`, 5 seconds). Returns how many rows each table lost (comments and
+    mentions counted before they cascade). Safe to call again: a review with no rows deletes nothing."""
     store.validate_id(review_id)
     with db.tx() as conn:
         counts = {
