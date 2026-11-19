@@ -1,5 +1,7 @@
 /* Source for the committed mock-review/board/tw.css. Edit board.css (components, tokens) or the utilities used in
    markup, then run `npm run build:css`. The build is a release step; nothing at install or run time needs Node. */
 @import "tailwindcss";
+/* The Desktop Mocks tab (desktop/plugin.js) styles itself with the Desktop SDK; its class names are not board CSS. */
+@source not "../../../desktop";
 @config "../../../tailwind.config.js";
 @import "../board.css" layer(components);

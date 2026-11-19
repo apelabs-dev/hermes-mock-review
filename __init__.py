@@ -146,7 +146,138 @@ def schemas(ask_host: bool, default_host: str, live_demo: bool) -> Dict[str, Dic
                                 "description": "The pin fix request ids this patch closes."}},
                 "required": ["review_id", "block", "html", "round", "if_rev"]},
         },
+        "mock_review_list_comments": {
+            "name": "mock_review_list_comments",
+            "description": "List a review's comment threads with their comments (open threads by default).",
+            "parameters": {"type": "object", "properties": {
+                "review_id": {"type": "string"},
+                "status": {"type": "string", "enum": ["open", "resolved", "all"],
+                           "description": "Which threads to list (default: open)."}},
+                "required": ["review_id"]},
+        },
+        "mock_review_reply": {
+            "name": "mock_review_reply",
+            "description": "Reply in a comment thread as the owner. Never activates @Hermes or wakes anyone.",
+            "parameters": {"type": "object", "properties": {
+                "thread_id": {"type": "string"},
+                "text": {"type": "string", "maxLength": 2000, "description": "Reply text, at most 2000 characters."},
+                "request_id": {"type": "string",
+                               "description": "The mention wake's request_id this reply answers (closes its chip)."}},
+                "required": ["thread_id", "text"]},
+        },
+        "mock_review_resolve": {
+            "name": "mock_review_resolve",
+            "description": "Resolve a comment thread (reopen with reopen=true). Never wakes anyone.",
+            "parameters": {"type": "object", "properties": {
+                "thread_id": {"type": "string"},
+                "reopen": {"type": "boolean", "description": "Reopen instead of resolving."},
+                "request_id": {"type": "string",
+                               "description": "The mention wake's request_id this answer closes."}},
+                "required": ["thread_id"]},
+        },
     }
+
+
+# ---------------------------------------------------------------- comment tools (in process, as the owner)
+
+def _comment_actor():
+    from mockreview import users
+    user = users.owner_user()
+    return user, f"user:{user['id']}"
+
+
+def _comment_as(user: Dict[str, Any]) -> Dict[str, Any]:
+    return {"user_id": user["id"], "name": user["name"], "role": "owner"}
+
+
+def _comment_status(value: Any) -> str:
+    from mockreview.store import ReviewError
+    status = str(value or "open").strip().lower()
+    if status not in ("open", "resolved", "all"):
+        raise ReviewError("status must be open, resolved or all", 400)
+    return status
+
+
+def _comment_list(args: Dict[str, Any]) -> Dict[str, Any]:
+    """The board's threads as the install's owner sees them. Read-only, so no audit row."""
+    from mockreview import owner, store, threads
+    from mockreview.store import ReviewError
+    review_id = str(args.get("review_id") or "").strip()
+    if not review_id:
+        raise ReviewError("review_id is required")
+    status = _comment_status(args.get("status"))
+    with owner.bound(owner.resolve_soft()):
+        user, actor = _comment_actor()
+        if not store.exists(review_id):
+            raise ReviewError("review not found", 404)
+        scope = threads.view_scope(review_id, guest=False, role="owner")
+        all_threads = threads.list_threads(review_id, principal=actor, include_resolved=True, scope=scope)
+        shown = [t for t in all_threads if status == "all" or t["status"] == status]
+        return {"review_id": review_id, "status": status, "as": _comment_as(user),
+                "counts": {"open": sum(1 for t in all_threads if t["status"] == "open"),
+                           "resolved": sum(1 for t in all_threads if t["status"] == "resolved")},
+                "rev": threads.rev(review_id, scope), "threads": shown}
+
+
+def _comment_reply(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Reply in a thread as the owner, never activating it: an agent's answer must not wake an agent.
+
+    A `hermes` mention the caller passes is dropped the same way the MCP reply drops it, and `can_activate=False`
+    makes the guard independent of the role. The chip request this answer settles closes here.
+    """
+    from mockreview import db, mcp, owner, service, threads, users
+    from mockreview.store import ReviewError
+    thread_id = str(args.get("thread_id") or "").strip()
+    if not thread_id:
+        raise ReviewError("thread_id is required")
+    text = args.get("text")
+    if not isinstance(text, str) or not text.strip():
+        raise ReviewError("text is required")
+    if len(text) > 2000:
+        raise ReviewError("text must be at most 2000 characters", 400)
+    mentions = mcp._agent_mentions(args.get("mentions"))
+    request_id = args.get("request_id")
+    request_id = str(request_id) if request_id else None
+    with owner.bound(owner.resolve_soft()):
+        user, actor = _comment_actor()
+        row = threads.by_id(thread_id)
+        review_id = str(row["review_id"])
+        thread, comment_id = threads.reply_comment(
+            review_id, thread_id, actor, user["name"], "owner", text,
+            mentions=mentions, can_activate=False, principal=actor)
+        comment = next((c for c in thread.get("comments") or [] if c["id"] == comment_id), None)
+        with db.tx() as conn:
+            users.audit(conn, actor, "plugin.reply", f"review:{review_id}",
+                        thread_id=thread_id, comment=comment_id)
+        closed = service.close_mention_requests(review_id, thread_id, request_id)
+        return {"review_id": review_id, "as": _comment_as(user), "thread": thread, "comment": comment,
+                "closed": closed}
+
+
+def _comment_resolve(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Resolve (or reopen) a thread as the owner; the answer also closes the thread's mention chip request."""
+    from mockreview import db, owner, service, threads, users
+    from mockreview.store import ReviewError
+    thread_id = str(args.get("thread_id") or "").strip()
+    if not thread_id:
+        raise ReviewError("thread_id is required")
+    reopen = args.get("reopen")
+    if reopen is not None and not isinstance(reopen, bool):
+        raise ReviewError("reopen must be true or false", 400)
+    status = "open" if reopen else "resolved"
+    request_id = args.get("request_id")
+    request_id = str(request_id) if request_id else None
+    with owner.bound(owner.resolve_soft()):
+        user, actor = _comment_actor()
+        row = threads.by_id(thread_id)
+        review_id = str(row["review_id"])
+        thread = threads.set_status(review_id, thread_id, status, actor, principal=actor)
+        with db.tx() as conn:
+            users.audit(conn, actor, "plugin.reopen" if reopen else "plugin.resolve",
+                        f"review:{review_id}", thread_id=thread_id)
+        closed = service.close_mention_requests(review_id, thread_id, request_id)
+        return {"review_id": review_id, "status": status, "as": _comment_as(user), "thread": thread,
+                "closed": closed}
 
 
 # ---------------------------------------------------------------- handlers
@@ -225,6 +356,12 @@ class MockReview:
                     out = api.patch_block(a["review_id"], a["block"], a["html"], option=a.get("option"),
                                           round_n=a.get("round"), if_rev=a.get("if_rev"),
                                           request_ids=a.get("request_ids"))
+                elif name == "mock_review_list_comments":
+                    out = _comment_list(a)
+                elif name == "mock_review_reply":
+                    out = _comment_reply(a)
+                elif name == "mock_review_resolve":
+                    out = _comment_resolve(a)
                 else:
                     out = {"reviews": api.list_reviews(include_closed=bool(a.get("include_closed")))}
                 return json.dumps(out, ensure_ascii=False)

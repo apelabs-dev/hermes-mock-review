@@ -89,12 +89,18 @@ def assert_one_filled_action(page, width, theme, state):
         f"{width}px {theme} {state}: the sole filled action must be Invite, got {invite}"
     assert invite["bg"].startswith("rgb("), \
         f"{width}px {theme} {state}: Invite must be accent-filled, got background {invite['bg']}"
+    # 2.0.1 fills .btn with --surface so buttons stand off the canvas. Inside the dialog that fill is the
+    # dialog's own --surface, so a secondary control still reads as outline/ghost: it may be transparent or
+    # exactly the dialog background, never any other fill.
+    dialog_bg = page.js("getComputedStyle(document.querySelector('.share-dialog')).backgroundColor")
+    assert dialog_bg.startswith("rgb"), f"{width}px {theme} {state}: no share dialog background, got {dialog_bg}"
     for button in buttons:
         if button is invite:
             continue
         assert not button["primary"], f"{width}px {theme} {state}: {button['text']} must not be a primary action"
-        assert button["bg"] == "rgba(0, 0, 0, 0)", \
-            f"{width}px {theme} {state}: {button['text']} must be an outline/ghost control, got {button['bg']}"
+        assert button["bg"] in ("rgba(0, 0, 0, 0)", dialog_bg), \
+            f"{width}px {theme} {state}: {button['text']} must be an outline/ghost control (transparent or the " \
+            f"dialog's {dialog_bg}), got {button['bg']}"
     if state == "no-link":
         create = [b for b in buttons if b["text"] == "Create link"]
         assert len(create) == 1, f"{width}px {theme}: Create link must stay available"

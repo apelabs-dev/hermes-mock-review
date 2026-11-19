@@ -7,7 +7,7 @@ import pytest
 
 from authkit import account, signed_in
 from conftest import http
-from mockreview import service, store, threads, users
+from mockreview import live, service, store, threads, users
 from test_live import Stream
 from test_live_round_tool import Board, chrome  # noqa: F401
 
@@ -41,6 +41,30 @@ DELAYED_EVENTS = """(function () {
   }
   window.EventSource = Delayed;
 })();"""
+
+# Counts the `thread.replied` frames the page's own stream receives, so a test can hold one back and prove the UI has
+# handled it: the counter's listener is added before the board's, inside the same synchronous dispatch.
+COUNT_REPLY_FRAMES = """(function () {
+  var Real = window.EventSource;
+  if (!Real) return;
+  function Counted(url, opts) {
+    var es = new Real(url, opts);
+    es.addEventListener('thread.replied', function () { window.__replyFrames = (window.__replyFrames || 0) + 1; });
+    window.__eventStream = es;
+    return es;
+  }
+  Counted.prototype = Real.prototype;
+  window.EventSource = Counted;
+})();"""
+
+
+def reload_with_a_counted_event_stream(b, url):
+    b.cdp.call("Page.addScriptToEvaluateOnNewDocument", {"source": COUNT_REPLY_FRAMES}, session=b.sid)
+    b.cdp.call("Page.navigate", {"url": url}, session=b.sid)
+    assert b.until("!!(document.querySelector('.mock-host') && document.querySelector('.mock-host').shadowRoot && "
+                   "document.querySelector('.mock-host').shadowRoot.querySelector('#copy'))", timeout=60)
+    assert b.until("!!window.__eventStream && window.__eventStream.readyState === 1", timeout=15), \
+        "the counted event stream never opened"
 
 
 def reload_with_a_delayed_event_stream(b, url):
@@ -133,6 +157,63 @@ def test_composer_pin_popover_resolve_reopen_and_reload(thread_review, server, c
     assert b.until("!!document.querySelector('.tpop')")
     assert b.js("document.querySelector('.tpop').textContent.includes('A reply from the popover')")
     assert len(server_threads(server, rid)["threads"][0]["comments"]) == 2
+
+
+def test_a_late_reply_frame_cannot_undo_a_newer_resolve(thread_review, server, chrome, monkeypatch):
+    """A reply frame that lands after a newer resolve must not downgrade the thread on screen (2026-11-17 flake).
+
+    The capture holds the reply's own SSE frame, so the replay is deterministic: the reply HTTP response, then the
+    resolve HTTP response and its live frame are all applied before the held reply snapshot is delivered.
+    """
+    rid = thread_review
+    held = []
+    real_publish = live.publish
+
+    def hold_reply(review_id, kind, thread_id, actor, data):
+        if review_id == rid and kind == "thread.replied" and not held:
+            held.append((review_id, kind, thread_id, actor, data))
+            return 0
+        return real_publish(review_id, kind, thread_id, actor, data)
+
+    def resolved_ui():
+        return {
+            "pins": b.js("document.querySelectorAll('.mpin').length"),
+            "label": b.js("document.querySelector('.tpop .tp-resolve').getAttribute('aria-label')"),
+            "pressed": b.js("document.querySelector('.tpop .tp-resolve').getAttribute('aria-pressed')"),
+            "on": b.js("document.querySelector('.tpop .tp-resolve').classList.contains('on')"),
+        }
+
+    monkeypatch.setattr(live, "publish", hold_reply)
+    b = open_board(chrome, server, rid)
+    reload_with_a_counted_event_stream(b, f"{server}/r/{rid}/")
+    on(b)
+    b.click(*point(b, "#copy"))
+    save_pin(b, "Make this clearer")
+
+    b.press(".mpin")
+    assert b.until("!!document.querySelector('.tpop textarea')")
+    b.js("(function(t){t.value='A reply that arrives late';t.dispatchEvent(new Event('input'));return 1})"
+         "(document.querySelector('.tpop textarea'))")
+    b.press(".tpop .tp-send")
+    assert b.until("document.querySelectorAll('.tpop .tcomment').length === 2")
+    assert len(held) == 1, "the reply's live frame was not held back"
+
+    b.press(".tpop .tp-resolve")
+    assert b.until("!document.querySelector('.tpop') && document.querySelectorAll('.mpin').length === 0")
+
+    b.press(".tcomments")
+    assert b.until("!!document.querySelector('.toverlay')")
+    b.press(".ttoggle .tr")
+    assert b.until("document.querySelector('.toverlay').textContent.includes('Resolved')")
+    b.press(".toverlay .trow")
+    assert b.until("!!document.querySelector('.tpop')")
+    assert resolved_ui() == {"pins": 0, "label": "Reopen", "pressed": "true", "on": True}, \
+        "the reopened thread must show its resolved state before the late frame"
+
+    real_publish(*held[0])
+    assert b.until("window.__replyFrames === 1", timeout=10), "the late reply frame never reached the board"
+    assert resolved_ui() == {"pins": 0, "label": "Reopen", "pressed": "true", "on": True}, \
+        "the late reply frame downgraded the newer resolve on screen"
 
 
 def test_reply_enter_shift_enter_and_the_limit(thread_review, server, chrome):

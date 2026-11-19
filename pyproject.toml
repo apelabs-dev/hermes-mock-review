@@ -13,7 +13,8 @@ dependencies = [
 [project.optional-dependencies]
 # Cloudflare Access sign-in (cloudflare_team / cloudflare_audience) verifies RS256 JWTs.
 crypto = [
-    # A range, not a pin: Hermes core pins PyJWT[crypto]==2.13.0 on Python 3.14, and an exact
-    # 2.15.1 here made the shared plugin environment unsolvable, so Hermes disabled the plugin at boot.
+    # A range, not a pin: Hermes 0.22.x pins PyJWT[crypto]==2.13.0 and 0.23.0+ pins 2.15.1, so an exact pin here
+    # made one shared plugin environment unsolvable and Hermes disabled the plugin at boot. The floor rises to
+    # 2.15.1 when requires_hermes moves to >=0.23.0.
     "PyJWT[crypto]>=2.13.0,<3",
 ]

@@ -3,6 +3,7 @@
 import json
 import socket
 import threading
+import time
 
 import pytest
 
@@ -162,6 +163,64 @@ def test_cross_origin_post_refused_without_side_effects(board, review, env):
     assert code == 403
     assert env["receiver"].requests == []
     assert not feedback_file(rid).exists()
+
+
+def refused_post(port, review, declared, sent, give_up=None):
+    """A POST the Origin check refuses, announcing `declared` body bytes and sending only `sent` of them, then stalling.
+    Returns (response, seconds the 403 took). A reset or broken pipe fails the test: the 403 must stay readable."""
+    head = (f"POST /r/{review['id']}/api/submit HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: null\r\n"
+            f"Content-Type: application/json\r\nContent-Length: {declared}\r\nConnection: close\r\n\r\n").encode()
+    resp = b""
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as s:
+        s.settimeout(10)
+        started = time.monotonic()
+        try:
+            s.sendall(head + b"x" * sent)
+            while chunk := s.recv(65536):
+                resp += chunk
+        except OSError as exc:
+            pytest.fail(f"the refused POST ended with {exc!r} after {len(resp)} bytes, not its 403 and a clean EOF")
+    return resp, time.monotonic() - started
+
+
+def test_a_refused_origin_drains_a_large_body_before_closing(board, review):
+    """The 403 is written before the body is read. Closing with that body still queued makes the kernel send RST, so
+    the client can lose the 403 (Windows reports WinError 10053); the server must consume it first and end with EOF."""
+    body = b'{"pad":"' + b"x" * (1024 * 1024 - 1024) + b'"}'
+    req = (f"POST /r/{review['id']}/api/submit HTTP/1.1\r\nHost: 127.0.0.1:{board}\r\nOrigin: null\r\n"
+           f"Content-Type: application/json\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n"
+           ).encode() + body
+    with socket.create_connection(("127.0.0.1", board), timeout=10) as s:
+        s.settimeout(10)
+        resp = b""
+        try:
+            s.sendall(req)
+            time.sleep(0.2)   # let the close land so the reset, if there is one, is already there
+            while chunk := s.recv(65536):
+                resp += chunk
+        except OSError as exc:
+            pytest.fail(f"the refused POST ended with {exc!r} after {len(resp)} bytes, not its 403 and a clean EOF")
+    assert resp.startswith(b"HTTP/1.1 403") and b"sandboxed frames" in resp
+    assert not feedback_file(review["id"]).exists()
+
+
+def test_a_refused_origin_with_a_partial_body_still_answers_its_403(board, review, monkeypatch):
+    """The client announced a full megabyte, sent 600 KB and stalled. The drain waits for the rest only until the
+    handler's own socket timeout (cut to one second here), then the 403 goes out with nothing left queued."""
+    monkeypatch.setattr(srv.Handler, "timeout", 1)
+    resp, took = refused_post(board, review, declared=srv.BODY_DRAIN_MAX, sent=600 * 1024)
+    assert resp.startswith(b"HTTP/1.1 403") and b"sandboxed frames" in resp, resp[:200]
+    assert took < 8, f"the 403 took {took:.1f}s"
+    assert not feedback_file(review["id"]).exists()
+
+
+def test_a_refused_origin_with_a_body_over_the_drain_cap_does_not_wait_for_the_rest(board, review):
+    """The client announced 8 MB and sent exactly the drain cap, then stalled. The server consumes the cap, answers and
+    closes cleanly at once: it never waits for the other 7 MB (the handler's socket timeout is 30 s)."""
+    resp, took = refused_post(board, review, declared=8 * srv.BODY_DRAIN_MAX, sent=srv.BODY_DRAIN_MAX)
+    assert resp.startswith(b"HTTP/1.1 403") and b"sandboxed frames" in resp, resp[:200]
+    assert took < 8, f"the 403 waited {took:.1f}s for a body it does not read"
+    assert not feedback_file(review["id"]).exists()
 
 
 def test_same_origin_post_works(board, review, env):

@@ -19,8 +19,30 @@ A thread is one anchored conversation:
 - **Status.** `open` or `resolved`. A resolved thread is hidden on the board; replying to it is refused until it is
   reopened.
 - **Comments.** Plain text, in order, each with the author's actor key and the display name at the time of posting.
-- **Activation.** `activated` means someone with the `submit` capability mentioned `@Hermes` in it. This release
-  stores it, publishes a `mention` event and returns it from `list_comments`; nothing in it wakes Hermes on the flag.
+- **Activation.** `activated` means someone with the `submit` capability mentioned `@Hermes` in it. An activating
+  comment wakes Hermes once through the same wake route Send uses; the payload names the review, round, thread, comment
+  and block. The POST answers without waiting for the gateway: the worker tick delivers the wake, a burst inside the
+  spacing window becomes one wake carrying every mention, and the anchored block shows a working chip until the thread
+  is answered. Replaying the same `idem` is a duplicate and never wakes twice. A guest, an agent's token and a wake-off
+  board never activate, so they never wake anyone.
+
+## Waking Hermes from a thread
+
+An `@Hermes` mention in a comment starts a Hermes session without anyone pressing Send.
+
+- **Who.** The owner, or a signed-in member whose role carries `submit` (owner or reviewer). A guest, an agent's
+  token and a viewer never wake it, and neither does a board created with wake-up off or a closed review. Their comment
+  is stored and shown as a plain mention.
+- **Where.** The wake goes to the chat the review was created from, through the same signed webhook route Send uses
+  (see [hosting.md](hosting.md#waking-the-agent)). The payload is a `review.thread_mention` event with the review,
+  thread, comment, anchored block and the comment text.
+- **In the chat.** The mention sends no ack message and no stalled ping; those belong to Send. The woken session reads
+  the thread, answers it with `mock_review_reply` and can close it with `mock_review_resolve`. The reply appears in the
+  thread on the board, not in the chat.
+- **On the board.** The anchored block shows a working chip from the mention until the thread is answered.
+- **Limits.** One wake per comment, a burst inside `pin_fix_min_seconds` becomes one wake, and mentions share
+  `pin_fix_max_per_hour` and `pin_fix_max_per_round` with pin fixes. When a board with `wake_toolsets` set is reachable
+  beyond loopback, the wake is held, not sent.
 
 A thread is created on the round it was pinned in. Later rounds still list it (`carried: true`) so a review does not
 lose a conversation when the board moves on; the server reports `detached: true` when the anchor's block or option is
@@ -43,7 +65,10 @@ When the author's account is gone the name reads "Former member".
   else's `@Hermes` is a plain mention. A hand-typed `@Hermes` and the composer's Send to Hermes box produce the same
   `hermes` mention as the `@` picker, and one comment publishes one `mention` event. Send and pin fix are separate: a
   reviewer-role guest may do both, and both are stored for the owner without ever waking Hermes — a guest link never
-  pings it, so tell it in chat.
+  pings it, so tell it in chat. An owner's or reviewer's activating comment wakes Hermes once: the POST returns
+  immediately, the worker tick delivers the wake, and a burst of mentions inside `pin_fix_min_seconds` is coalesced
+  into one wake that carries every entry. Mention wakes and pin fixes share `pin_fix_max_per_hour` and
+  `pin_fix_max_per_round`: beyond the cap the comment is stored and shown, but nothing wakes.
 
 ## Limits
 
@@ -54,6 +79,8 @@ When the author's account is gone the name reads "Former member".
 | Comments per thread | 40 | 400 |
 | Anchor JSON | 4 kB | 400 |
 | Comment writes per person per review | 20 per 60 s | 429 `{"ok": false, "error": "slow down"}` |
+| Wake requests per review per hour | `pin_fix_max_per_hour` (60), shared by mentions and pin fixes | a mention is stored, not woken; a pin fix gets 429 |
+| Wake requests per round | `pin_fix_max_per_round` (60), shared the same way | the same |
 | Live streams per review | 25 in total, one kept for the owner (owner up to 5) | 429 `{"ok": false, "error": "too many live connections"}` |
 | Replayed events kept per review | 500 | older cursors get `reset` |
 
@@ -222,8 +249,13 @@ feed has its own cursor, moved by `activity/read`. More shows the open-thread an
 
 ## What this release does not do
 
-Nothing in this release wakes Hermes on `@Hermes`: a person's mention sets the thread's activated flag and
-publishes the event; agents reach the same threads through the MCP comment tools (`list_comments`, `reply`, `resolve`);
-when the board server runs for the same store those writes execute in the server, so an open board sees them live, and
-their replies never activate a thread, so an agent cannot wake another agent. Mentions of people notify nobody yet.
-There is no carriage of a thread into a new review, only into a later round of the same one.
+An owner's or reviewer's `@Hermes` mention wakes Hermes once per comment (the worker tick delivers it, and a burst is
+coalesced into one wake that names each mention); mentions of people notify nobody yet. A woken session answers through
+the plugin's own `mock_review_list_comments`, `mock_review_reply` and `mock_review_resolve` tools: they run in process
+as the install's owner and close the block's working chip. Those writes reach an open board live only when the board
+server runs in the same process, which is the gateway with `autostart: true` (off by default); with a standalone
+`hermes mockreview serve` the write is stored and appears on the board's next refetch or reconnect. Agents outside
+Hermes reach the same threads through the MCP comment tools (`list_comments`, `reply`, `resolve`) with a personal
+access token; when the board server runs for the same store those writes execute in the server, so an open board sees
+them live, and replies on either path never activate a thread, so an agent cannot wake another agent. There is no
+carriage of a thread into a new review, only into a later round of the same one.

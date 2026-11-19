@@ -66,7 +66,7 @@ def test_cli_requires_explicit_origin(capsys):
     assert "--platform" in capsys.readouterr().err
 
 
-def test_tailnet_runtime_resolution_and_neutral_defaults(monkeypatch):
+def test_tailnet_runtime_resolution_and_neutral_defaults(monkeypatch, real_tailscale):
     monkeypatch.delenv("MOCKREVIEW_PUBLIC_BASE", raising=False)
     assert settings.BY_NAME["public_base"].default == ""
     assert settings.BY_NAME["default_host"].default == "local"
@@ -127,7 +127,7 @@ class Context:
     def register_platform_handler(self, platform, factory): self.calls.append(("platform", platform))
 ctx = Context()
 plugin.register(ctx)
-assert len(ctx.calls) == len(set(ctx.calls)) == 10
+assert len(ctx.calls) == len(set(ctx.calls)) == 13
 assert pathlib.Path(plugin._mockreview()[0].__file__).is_relative_to(root)
 '''
     proc = subprocess.run([sys.executable, "-I", "-c", script, str(installed)], cwd=tmp_path,

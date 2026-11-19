@@ -238,8 +238,12 @@ def stalled_pair():
     return client, peer, filled
 
 
-def test_actual_stalled_socket_is_aborted_without_blocking_other_streams():
+@pytest.mark.parametrize('socket_timeout', [None, 30], ids=['blocking', 'timeout'])
+def test_actual_stalled_socket_is_aborted_without_blocking_other_streams(socket_timeout):
     left, right, filled = stalled_pair()
+    if socket_timeout is not None:
+        left.settimeout(socket_timeout)       # the production handler mode: StreamRequestHandler.setup()
+        assert left.gettimeout() == socket_timeout
     handover_writable = writable(left, .05)
     assert not handover_writable, 'the pipe must still be full (unwritable) when the writer starts'
     output = sse.Output()

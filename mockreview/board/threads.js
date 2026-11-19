@@ -277,10 +277,13 @@ export function createThreads(opts) {
       if (!stale && kind === 'thread.status' && t.status === 'resolved') S.counts.open = Math.max(0, (S.counts.open || 0) - 1);
       if (!stale && kind === 'thread.status' && t.status === 'open') S.counts.open = (S.counts.open || 0) + 1;
     }
-    if (!stale && !mine && ['thread.created', 'thread.replied', 'thread.status', 'mention'].indexOf(kind) >= 0) {
-      S.counts.activity_unread = (S.counts.activity_unread || 0) + 1;
+    if (!stale && ['thread.created', 'thread.replied', 'thread.status', 'mention'].indexOf(kind) >= 0) {
+      // The fetched snapshot lists the reader's own events too (only `unread` is theirs to lose), so a live own
+      // event must enter the list as well: a feed opened before the snapshot arrives must not miss the reader's
+      // own row, e.g. a guest's thread.created, which is the only row that carries the guest mark.
+      if (!mine) S.counts.activity_unread = (S.counts.activity_unread || 0) + 1;
       S.activity.unshift({id: id, kind: kind, thread_id: (t && t.id) || d.thread_id || '',
-        actor: d.actor, at: Date.now() / 1000, data: d, unread: true});
+        actor: d.actor, at: Date.now() / 1000, data: d, unread: !mine});
       if (S.activity.length > 100) S.activity.length = 100;
     }
     if (S.overlay && S.overlay.kind === 'activity') S.overlay.paint();
@@ -294,7 +297,9 @@ export function createThreads(opts) {
     var i = -1;
     for (var j = 0; j < S.threads.length; j++) if (S.threads[j].id === t.id) { i = j; break; }
     if (i < 0) S.threads.push(t);
-    else S.threads[i] = Object.assign({}, S.threads[i], t);
+    // Every mutation bumps updated_at, so it is a per-thread revision: a replayed frame, a late reply frame or a
+    // slower response must not downgrade a thread that already moved on. An equal or unknown revision still merges.
+    else if (!(Number(S.threads[i].updated_at) > Number(t.updated_at))) S.threads[i] = Object.assign({}, S.threads[i], t);
     S.threads.sort(function (a, b) { return (b.activated - a.activated) || (b.updated_at - a.updated_at); });
     if (S.pop && S.pop.id === t.id && S.pop.render) S.pop.render();
   }
@@ -693,7 +698,9 @@ export function createThreads(opts) {
     S.pop = p;
     document.body.appendChild(el);
     renderPopBody();
-    markRead(t);
+    // A frame may open the thread under the marker it drew; that message is untrusted HTML's word, so it never
+    // changes the read state. Read is a trusted tap on the board, which is marked before it gets here.
+    if (!extra || extra.read !== false) markRead(t);
     var marker = markerFor(t.id);
     p.returnTo = marker;
     var box = marker ? marker.getBoundingClientRect() : null;

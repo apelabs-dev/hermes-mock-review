@@ -849,38 +849,42 @@ def with_live_browser(bring_up: Any, body: Any, observer_factory: Any = Observer
                       startup: float = 20.0, attempts: int = 2) -> Any:
     """Launch a browser, run `bring_up(LiveBrowser)` under a replacement guard, then run `body(LiveBrowser, ctx)` once.
 
-    A transport-class failure during bring-up (the launch, the connection, the alive probe or a bring-up CDP call)
-    replaces the launch, at most `attempts` launches total, and prints one warning per replacement to stderr. `ctx`
-    is whatever bring_up returned and may be None. The body runs outside the guard: every exception it raises -- a
-    page script error, a transport timeout, an assertion -- is raised as is and the scenario is never rerun. A page
-    script error, an assertion, a CDP refusal, a full slot registry, an oversize message and BrowserUnavailable are
-    never replaced. `observer_factory` is called per launch.
+    A transport-class failure during bring-up (the launch, the connection or a bring-up CDP call) replaces the
+    launch, at most `attempts` launches total, and prints one warning per replacement to stderr. A failed alive probe
+    replaces too: that launch runs neither bring_up nor the body. `ctx` is whatever bring_up returned and may be
+    None. The body runs outside the guard: every exception it raises -- a page script error, a transport timeout, an
+    assertion -- is raised as is and the scenario is never rerun. A page script error, an assertion, a CDP refusal, a
+    full slot registry, an oversize message and BrowserUnavailable are never replaced. `observer_factory` is called
+    per launch.
     """
     failure: Optional[BaseException] = None
     for attempt in range(1, attempts + 1):
         chrome = Chrome(executable=executable, startup=startup)
         ws: Optional[WebSocket] = None
         failure = None
+        probed = False
         try:
             host, port, path = chrome.__enter__()
             ws = WebSocket(host, port, path)
             observer = observer_factory() if callable(observer_factory) else observer_factory
             live = LiveBrowser(chrome, ws, Cdp(ws, observer), observer)
-            if not live.alive():
+            probed = live.alive()
+            if not probed:
                 failure = BrowserCheckError("the browser's debugging connection did not answer before setup")
         except (BrowserCheckError, OSError) as e:
             if not _transport_failure(e):
                 raise
             failure = e
         else:
-            try:
-                ctx = bring_up(live)
-            except (BrowserCheckError, OSError) as e:
-                if _never_replaced(e) or (not _transport_failure(e) and live.alive()):
-                    raise
-                failure = e
-            else:
-                return body(live, ctx)                  # outside the guard: the scenario is never rerun
+            if probed:
+                try:
+                    ctx = bring_up(live)
+                except (BrowserCheckError, OSError) as e:
+                    if _never_replaced(e) or (not _transport_failure(e) and live.alive()):
+                        raise
+                    failure = e
+                else:
+                    return body(live, ctx)              # outside the guard: the scenario is never rerun
         finally:
             if ws is not None:
                 ws.close()
@@ -890,6 +894,29 @@ def with_live_browser(bring_up: Any, body: Any, observer_factory: Any = Observer
         print(f"browserkit: replacing a browser that failed during bring-up ({attempt}/{attempts}): {failure}",
               file=sys.stderr, flush=True)
     raise AssertionError("with_live_browser ended without a result")       # unreachable
+
+
+def with_page_bring_up(browser: Any, bring_up: Any, attempts: int = 2) -> Any:
+    """Run one page's bring-up on `browser`, replacing its launch after a transport-class failure.
+
+    `browser` is a launch shared across a module's pages; it must offer `replace()` (and its `__getattr__` otherwise
+    behaves as the current Cdp, like tests/test_export_browser.py's SharedChrome). The policy is the same as
+    `with_live_browser`'s: only a failure `_transport_failure` classifies as transport costs the launch, at most
+    `attempts` launches total, with one warning per replacement. A refusal, a page script error or an assertion is
+    raised as is. The scenario that follows bring_up is the caller's business and is never rerun here.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            return bring_up()
+        except (BrowserCheckError, OSError) as failure:
+            if not _transport_failure(failure) or not callable(getattr(browser, "replace", None)):
+                raise
+            if attempt == attempts:
+                raise
+            print(f"browserkit: replacing a browser whose page bring-up failed ({attempt}/{attempts}): {failure}",
+                  file=sys.stderr, flush=True)
+            browser.replace()
+    raise AssertionError("with_page_bring_up ended without a result")       # unreachable
 
 
 # ---------------------------------------------------------------------- the check

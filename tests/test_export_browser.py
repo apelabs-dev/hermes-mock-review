@@ -43,22 +43,28 @@ PNG_HOOK = """
 PRINT_HOOK = "window.__prints = 0; window.print = function () { window.__prints += 1; };"
 
 
-@pytest.fixture(scope="module")
-def chrome():
-    try:
-        bc.find_browser()
-    except bc.BrowserUnavailable:
-        pytest.skip("no Chrome/Chromium/Edge installed")
-    for attempt in (1, 2):
-        browser = bc.Chrome(startup=60)
-        try:
-            host, port, path = browser.__enter__()
-            break
-        except bc.BrowserCheckError:
-            browser.__exit__(None, None, None)
-            if attempt == 2:
-                raise
-    try:
+class SharedChrome:
+    """One Chrome and its DevTools connection, shared by this module's pages.
+
+    `Page`'s bring-up runs through `browserkit.with_page_bring_up`, which calls `replace()` on a transport-class
+    failure; the module keeps using the new process and connection. Everything else delegates to the current Cdp, so
+    a page created after a replacement talks to the live launch."""
+
+    def __init__(self):
+        self.chrome = None
+        self.ws = None
+        self.cdp = None
+
+    def start(self):
+        for attempt in (1, 2):
+            chrome = bc.Chrome(startup=60)
+            try:
+                host, port, path = chrome.__enter__()
+                break
+            except bc.BrowserCheckError:
+                chrome.__exit__(None, None, None)
+                if attempt == 2:
+                    raise
         ws = bc.WebSocket(host, port, path)
         try:
             cdp = bc.Cdp(ws, bc.Observer())
@@ -66,11 +72,46 @@ def chrome():
                 cdp.call("Browser.setDownloadBehavior", {"behavior": "deny"})
             except bc.BrowserCheckError:
                 pass
-            yield cdp
-        finally:
+        except BaseException:
             ws.close()
+            chrome.__exit__(None, None, None)
+            raise
+        self.chrome, self.ws, self.cdp = chrome, ws, cdp
+
+    def replace(self):
+        self.close_launch()
+        self.start()
+
+    def close_launch(self):
+        ws, chrome = self.ws, self.chrome
+        self.ws = self.chrome = self.cdp = None
+        if ws is not None:
+            ws.close()
+        if chrome is not None:
+            chrome.__exit__(None, None, None)
+
+    def close(self):
+        self.close_launch()
+
+    def __getattr__(self, name):
+        cdp = self.__dict__.get("cdp")
+        if cdp is None:
+            raise AttributeError(name)
+        return getattr(cdp, name)
+
+
+@pytest.fixture(scope="module")
+def chrome():
+    try:
+        bc.find_browser()
+    except bc.BrowserUnavailable:
+        pytest.skip("no Chrome/Chromium/Edge installed")
+    browser = SharedChrome()
+    browser.start()
+    try:
+        yield browser
     finally:
-        browser.__exit__(None, None, None)
+        browser.close()
 
 
 HEADED_EVIDENCE_ENV = "MOCKREVIEW_HEADED_EVIDENCE"
@@ -178,22 +219,27 @@ class Page:
     def __init__(self, cdp, url, script=None, wait=None, width=1280, height=900, media=None, js=True):
         self.cdp = cdp
         self.headed_metrics = None
-        tid = cdp.call("Target.createTarget", {"url": "about:blank"})["targetId"]
-        self.sid = cdp.call("Target.attachToTarget", {"targetId": tid, "flatten": True})["sessionId"]
-        for m in ("Page.enable", "Runtime.enable"):
-            cdp.call(m, session=self.sid)
-        if script:
-            cdp.call("Page.addScriptToEvaluateOnNewDocument", {"source": script}, session=self.sid)
-        if not js:
-            cdp.call("Emulation.setScriptExecutionDisabled", {"value": True}, session=self.sid)
-        headed = bc.headed_requested()
-        if not headed:
-            cdp.call("Emulation.setDeviceMetricsOverride",
-                     {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": False}, session=self.sid)
-        if media:
-            cdp.call("Emulation.setEmulatedMedia",
-                     {"features": [{"name": "prefers-color-scheme", "value": media}]}, session=self.sid)
-        cdp.call("Page.navigate", {"url": url}, session=self.sid)
+
+        def bring_up():
+            tid = cdp.call("Target.createTarget", {"url": "about:blank"})["targetId"]
+            self.sid = cdp.call("Target.attachToTarget", {"targetId": tid, "flatten": True})["sessionId"]
+            for m in ("Page.enable", "Runtime.enable"):
+                cdp.call(m, session=self.sid)
+            if script:
+                cdp.call("Page.addScriptToEvaluateOnNewDocument", {"source": script}, session=self.sid)
+            if not js:
+                cdp.call("Emulation.setScriptExecutionDisabled", {"value": True}, session=self.sid)
+            headed = bc.headed_requested()
+            if not headed:
+                cdp.call("Emulation.setDeviceMetricsOverride",
+                         {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": False}, session=self.sid)
+            if media:
+                cdp.call("Emulation.setEmulatedMedia",
+                         {"features": [{"name": "prefers-color-scheme", "value": media}]}, session=self.sid)
+            cdp.call("Page.navigate", {"url": url}, session=self.sid)
+            return tid, headed
+
+        tid, headed = bc.with_page_bring_up(cdp, bring_up)
         if headed:
             self.window_id, self.headed_metrics = fit_headed_window(self, tid, width, height)
             require_headed_visibility(self.headed_metrics)
@@ -1076,3 +1122,42 @@ def test_browser_args_are_headless_unless_the_headed_switch_is_set(monkeypatch):
     assert bc.headed_requested() is True
     monkeypatch.setenv(bc.HEADED_ENV, "0")
     assert bc.headed_requested() is False
+
+
+CONTRAST_JS = """
+(function(){
+  function rgb(s){var m=s.match(/[\\d.]+/g).map(Number);return {r:m[0],g:m[1],b:m[2],a:m.length>3?m[3]:1};}
+  function lum(c){return [c.r,c.g,c.b].map(function(v){v/=255;return v<=0.03928?v/12.92:Math.pow((v+0.055)/1.055,2.4);})
+    .reduce(function(a,v,i){return a+v*[0.2126,0.7152,0.0722][i];},0);}
+  var el=document.querySelector('.mr-mock .probe'), fg=rgb(getComputedStyle(el).color), n=el, bg=null;
+  while(n && n.nodeType===1){var c=rgb(getComputedStyle(n).backgroundColor);if(c.a>0.5){bg=c;break;}n=n.parentElement;}
+  if(!bg) bg=rgb(getComputedStyle(document.documentElement).backgroundColor);
+  var a=lum(fg)+0.05,b=lum(bg)+0.05;
+  return JSON.stringify({fg:getComputedStyle(el).color, ratio:Math.max(a,b)/Math.min(a,b)});
+})()
+"""
+
+
+@pytest.mark.parametrize("theme", EXPORT_THEMES)
+@pytest.mark.parametrize("mock_html", [
+    '<p class="probe">Plain mock text</p>',
+    '<div style="background:#ffffff;padding:12px"><p class="probe">Text on the mock\'s own white panel</p></div>',
+], ids=["plain", "own-light-panel"])
+def test_mock_text_stays_readable_in_the_export_in_both_themes(env, tmp_path, chrome, theme, mock_html):
+    """A mock is a light design the board shows as authored. The export (and the Desktop viewer, which shows the same
+    document) must not paint the dark theme's light text onto it: mock text keeps WCAG AA contrast against whatever
+    background it actually sits on, in light and in dark."""
+    src = tmp_path / ("contrast-" + theme) / "decisions.json"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text(json.dumps({"blocks": [{"type": "mock", "id": "m1", "html": mock_html}]}), encoding="utf-8")
+    data = store.create_review("contrast-" + theme, "", ORIGIN, "tailscale",
+                               store.parse_round_spec(decisions=str(src)), wake=False)
+    html = export.build_export_html(store.load(data["id"]), 1, False)
+    page = Page(chrome, "about:blank", width=1280, height=900, media=theme)
+    try:
+        set_document(page, html)
+        assert page.until("!!document.querySelector('.mr-mock .probe')"), "the mock fragment lost its text"
+        got = json.loads(page.js(CONTRAST_JS))
+        assert got["ratio"] >= 4.5, f"{theme}: mock text {got['fg']} has contrast {got['ratio']:.2f} (< 4.5)"
+    finally:
+        close_page(page)

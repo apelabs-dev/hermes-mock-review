@@ -33,6 +33,15 @@ In the thread's own chat session, take over: read the feedback with `mock_review
 ping to `stale_after_read_minutes`, 60 by default) and build the next round with `mock_review_add_round`. If no round
 will follow, call `mock_review_ack`.
 
+When a wake says `review.thread_mention`, a reviewer mentioned `@Hermes` in a comment thread. Read that thread with
+`mock_review_list_comments`. When the comment asks for a change, patch the block in place FIRST with
+`mock_review_patch_block`, using the round and the block's `if_rev` you read and passing `request_ids=[request_id]`;
+then answer in the same thread with `mock_review_reply`, passing the wake payload's `request_id` so the block's
+"working" chip closes. A question that needs no patch is answered without one: read, answer, resolve. Resolve the
+thread with `mock_review_resolve` when you are done (it closes the chip too). Do not start a new round unless the
+comment asks for one. Only an owner or reviewer on a wake-on board wakes you this way: a guest, an agent token and a
+wake-off board store the mention without waking anyone, so answer those in chat instead.
+
 The next round asks only what is still open: blocks marked Change (set `revised` on them to a short string label such
 as `Revised`, not a flag), skipped or unanswered ones, and anything new. Approved blocks and answered questions go in
 a `settled` block, never back as questions. Do not copy
@@ -139,6 +148,22 @@ board). From the shell the same settings are `hermes mockreview share`:
 - A viewer link is read-only and cannot send feedback or wake you. If the user asks for a link to collect feedback, use
   the default commenter role; if they only want someone to look, use viewer and say which round it shows.
 
+## First-run sign-in
+
+2.0 asks each device to sign in once. A tailnet or public board answers a browser that has not signed in with the
+sign-in page (HTTP 401), not the board; a local board has no such page, because a request from this computer is
+already the owner.
+
+When `mock_review_create` or `mock_review_add_round` returns a `note` that says "Sign in once per device", hand the user
+that link exactly as written. It is a real one-time sign-in link (the same call as `hermes mockreview login`): it points
+at the public URL when the board has one and at the board's own address otherwise, it works once, and it expires after
+15 minutes. One link per device: for a second phone or laptop run `hermes mockreview login` and hand over its
+`public_url` whenever it prints one (tailnet or public), else its `url`. The note stops appearing once the owner has
+signed in from another device.
+
+Do not answer a "the board asks me to sign in" question with the review URL again. Say why (2.0 boards belong to an
+account), then give the link. 1.x users who opened boards on a phone must sign in once per device after upgrading.
+
 ## Settings
 
 Settings live in `plugins.entries.mock-review.settings` in the Hermes config. `/mockreview settings` and
@@ -147,6 +172,10 @@ These look settings can be overridden per review by passing them to create or ad
 `default_theme`, `show_theme_toggle`, `pins_enabled`, `require_note_on_change`, `max_pins`, `mobile_width`,
 `tablet_width`. A review stores them, so changing the config later never changes an open review. Pass one only when
 the user asked for it.
+
+A review created with wake-up on turns `pin_fix` on (in-place block patches) unless create passes `pin_fix=false`; a
+wake-off board stores it off. Mention wakes and pin fixes share the `pin_fix_max_per_hour` and
+`pin_fix_max_per_round` budget.
 
 ## Rules
 

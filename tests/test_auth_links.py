@@ -381,3 +381,108 @@ def test_each_thread_gets_its_own_connection(env):
     t.start()
     t.join()
     assert seen and seen[0] is not mine and db.connect() is mine
+
+
+# ---------------------------------------------------------------- sign-in links and the shared cookie
+
+def _confirm(server, path):
+    """GET a link's confirmation form: (its form token, the cookie the GET set)."""
+    status, pairs, page = raw("GET", server + path)
+    assert status == 200
+    found = re.search(rb'name="csrf" value="([^"]+)"', page)
+    assert found, page[:400]
+    return found.group(1).decode(), header(pairs, "Set-Cookie")
+
+
+def _post_form(server, path, token, cookie=""):
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    if cookie:
+        headers["Cookie"] = cookie
+    return raw("POST", server + path, ("csrf=" + token).encode(), headers)
+
+
+def test_a_share_link_in_the_same_browser_does_not_break_the_sign_in(env, server, review, monkeypatch):
+    """The reported bug: GET /login/<t>, then a share link in the same browser, then press Sign in.
+
+    `mr_csrf` is one host-scoped cookie, so the share link's session replaces the value the confirm form rendered.
+    The form's token is bound to the link, so the POST still redeems it; on 44d89b3 this answered a raw JSON 403.
+    The loopback owner is off so the browser is a phone or laptop, not this computer (which is already the owner).
+    """
+    monkeypatch.setenv("MOCKREVIEW_LOOPBACK_OWNER", "false")
+    link = users.create_login_link("cli")
+    form_token, _ = _confirm(server, link["path"])
+    share = users.share("cli", review["id"], action="create", guest_role="commenter", audience="anyone")
+    status, pairs, _ = raw("GET", server + share["path"])
+    assert status == 303
+    moved = header(pairs, "Set-Cookie")
+    assert "mr_csrf=" in moved, moved                       # the share link overwrote the cookie this browser holds
+    cookie = "mr_csrf=" + moved.split("mr_csrf=")[1].split(";")[0]
+    assert cookie.split("=", 1)[1] != form_token
+    status, headers, page = _post_form(server, link["path"], form_token, cookie)
+    assert status == 303 and header(headers, "Location") == "/", page[:400]
+
+
+def test_a_link_token_signs_in_with_no_cookie_at_all(env, server, monkeypatch):
+    """The form's token carries the proof now: a browser that lost the cookie (or never had it) still signs in."""
+    monkeypatch.setenv("MOCKREVIEW_LOOPBACK_OWNER", "false")
+    link = users.create_login_link("cli")
+    form_token, _ = _confirm(server, link["path"])
+    status, headers, page = _post_form(server, link["path"], form_token)
+    assert status == 303 and header(headers, "Location") == "/", page[:400]
+    assert "mr_session=" in header(headers, "Set-Cookie")
+
+
+def test_a_wrong_token_rerenders_the_confirm_page_and_keeps_the_link(env, server, monkeypatch):
+    """A mismatch is never JSON, never uses the link, and never counts as a failed sign-in."""
+    monkeypatch.setenv("MOCKREVIEW_LOOPBACK_OWNER", "false")
+    link = users.create_login_link("cli")
+    form_token, _ = _confirm(server, link["path"])
+    for cookie in ("mr_csrf=another-token", ""):
+        status, pairs, page = _post_form(server, link["path"], "stale-token", cookie)
+        assert status == 403, (status, page[:200])
+        assert header(pairs, "Content-Type").startswith("text/html")
+        assert b"<form" in page and form_token.encode() in page
+        assert users.check_link("login", token_of(link["path"]))["purpose"] == "login"
+    assert users.throttled("127.0.0.1") == 0.0            # a stale token is not a failed sign-in
+    status, headers, _ = _post_form(server, link["path"], form_token)
+    assert status == 303                                   # the same link still works
+
+
+def test_a_valid_link_token_from_a_foreign_origin_is_refused(env, server, monkeypatch):
+    """The Origin / Fetch-Metadata guard, not the token, is what stops another site posting this form."""
+    monkeypatch.setenv("MOCKREVIEW_LOOPBACK_OWNER", "false")
+    link = users.create_login_link("cli")
+    form_token, _ = _confirm(server, link["path"])
+    body = ("csrf=" + form_token).encode()
+    form = {"Content-Type": "application/x-www-form-urlencoded"}
+    assert raw("POST", server + link["path"], body, dict(form, Origin="https://evil.example.test"))[0] == 403
+    assert raw("POST", server + link["path"], body, dict(form, **{"Sec-Fetch-Site": "cross-site"}))[0] == 403
+    assert users.check_link("login", token_of(link["path"]))["purpose"] == "login"
+
+
+# ---------------------------------------------------------------- a confirm page leaves a signed-in tab alone
+
+@pytest.mark.parametrize("purpose", ["login", "invite"])
+def test_opening_a_confirm_page_keeps_a_signed_in_board_tab_working(env, server, review, purpose):
+    """A confirm GET shares one host-scoped cookie jar with every board tab, so it must not move `mr_csrf`.
+
+    A signed-in reviewer's tab reads `mr_csrf` from `document.cookie` and sends it as `X-CSRF-Token`. A link page
+    that overwrote it with the link's HMAC made the tab's next write answer 403.
+    """
+    from conftest import FEEDBACK
+    member = account(review_id=review["id"], role="reviewer")
+    link = users.create_login_link("cli") if purpose == "login" else users.create_invite("test")
+    jar = {"mr_session": member["session"], "mr_csrf": member["csrf"]}
+    status, pairs, _ = raw("GET", server + link["path"],
+                           headers={"Cookie": "mr_session={}; mr_csrf={}".format(member["session"], member["csrf"])})
+    assert status == 200
+    for pair in header(pairs, "Set-Cookie").splitlines():     # a browser applies them to that one jar
+        name, _, rest = pair.partition("=")
+        if name.strip():
+            jar[name.strip()] = rest.split(";", 1)[0]
+    current = "mr_session={}; mr_csrf={}".format(jar["mr_session"], jar["mr_csrf"])
+    status, _, page = http("POST", server + "/r/%s/api/submit" % review["id"],
+                           {"round": 1, "token": review["token"], "feedback": FEEDBACK},
+                           {"Cookie": current, "X-CSRF-Token": jar["mr_csrf"]})
+    assert status == 200, page[:400]
+    assert "mr_csrf=" not in header(pairs, "Set-Cookie")

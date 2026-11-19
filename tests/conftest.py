@@ -15,8 +15,16 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from mockreview import config as _config  # noqa: E402
+
 SECRET = "test-secret-" + "x" * 20
 PLUGIN_MODULE = "_mockreview_root_plugin"
+_REAL_RUN_TAILSCALE = _config.run_tailscale
+
+
+def _no_tailscale(args, timeout=5):
+    """No test asks this machine's Tailscale CLI: its Serve and Funnel mappings are host state, not test state."""
+    raise FileNotFoundError("tailscale")
 
 
 def python_child_env(tmp_path):
@@ -211,8 +219,9 @@ FEEDBACK = {
 
 @pytest.fixture(autouse=True)
 def isolated_settings(tmp_path, monkeypatch):
-    """No test reads the real ~/.hermes/config.yaml: point the config layer at a temp file (absent unless a test
-    writes it) and reset the in-process config source / reader switch afterwards."""
+    """No test reads the real ~/.hermes/config.yaml or asks this machine's Tailscale: point the config layer at a
+    temp file (absent unless a test writes it), replace the CLI with one that is not installed, and reset the
+    in-process config source / reader switch afterwards."""
     from mockreview import api, config as config_mod, owner, settings, secrets
     secret_values = {"MOCKREVIEW_WEBHOOK_SECRET": SECRET}
     monkeypatch.setattr(secrets, "get_secret", lambda name: (secret_values.get(name) or "").strip())
@@ -223,7 +232,15 @@ def isolated_settings(tmp_path, monkeypatch):
         if s.env_name not in ("MOCKREVIEW_HOME", "MOCKREVIEW_PUBLIC_BASE", "MOCKREVIEW_WEBHOOK_URL",
                               "MOCKREVIEW_RETRY_SECONDS"):
             monkeypatch.delenv(s.env_name, raising=False)
+    monkeypatch.setattr(config_mod, "run_tailscale", _no_tailscale)
     monkeypatch.setattr(api, "server_up", lambda: False)
+    # No test shells out to the real tailscale binary: pin `auth.serve_fronts_board`'s cache to "Serve fronts nothing"
+    # and make `public.serve_probe` answer "unknown", so a TTL expiring inside a long browser test still cannot reach
+    # the CLI. A test that exercises the detection resets the cache and fakes the probe (or `config.run_tailscale`)
+    # itself.
+    from mockreview import auth as auth_mod, public as public_mod
+    monkeypatch.setattr(auth_mod, "_serve_front", False)
+    monkeypatch.setattr(public_mod, "serve_probe", lambda commands=None: None)
     # setup's port check must not meet the real board that may run on this machine's default port
     from mockreview import setup as setup_mod
     real_identity = setup_mod.board_identity
@@ -234,6 +251,13 @@ def isolated_settings(tmp_path, monkeypatch):
     settings.set_config_source(None)
     settings.FORCE_MINI_PARSER = False
     settings._cache["key"] = None
+
+
+@pytest.fixture
+def real_tailscale(monkeypatch):
+    """The genuine launcher for tests of Tailscale detection itself; they stub subprocess.run."""
+    from mockreview import config as config_mod
+    monkeypatch.setattr(config_mod, "run_tailscale", _REAL_RUN_TAILSCALE)
 
 
 @pytest.fixture(autouse=True)

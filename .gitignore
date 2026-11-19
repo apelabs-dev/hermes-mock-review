@@ -7,5 +7,6 @@ venv/
 *.egg-info/
 build/
 dist/
+uv.lock
 
 node_modules/

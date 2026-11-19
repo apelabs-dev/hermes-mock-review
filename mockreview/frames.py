@@ -91,6 +91,24 @@ def _within_clock(token: str) -> bool:
     return True
 
 
+def signed_for(token: str, review_id: str, round_text: str) -> bool:
+    """Whether the signature and payload name exactly this review and round, ignoring the clock and any binding.
+    An expired `local` token is no longer a credential - validate() still refuses it and it grants no network - but
+    a signed URL still proves it was minted for this review, which is all the cross-site / CORP decision needs."""
+    if not token or len(token) > MAX_TOKEN:
+        return False
+    data = _payload(token)
+    if data is None or data.get("v") != 1:
+        return False
+    if not isinstance(data.get("r"), str) or data["r"] != review_id:
+        return False
+    try:
+        round_n = int(round_text)
+    except (TypeError, ValueError):
+        return False
+    return data.get("n") == round_n
+
+
 @dataclass(frozen=True)
 class Grant:
     """A valid token's decision and the identity it speaks for (the session/account it is bound to)."""

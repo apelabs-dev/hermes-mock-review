@@ -19,7 +19,7 @@ import yaml
 
 from conftest import ROOT, load_plugin
 from mockreview import api, cli, config, setup
-from test_setup import FakeTTY, fake_create, find, make_shim, read_log, run_setup, shim_secret
+from test_setup import FakeTTY, fake_create, find, make_shim, read_log, route_names, run_setup, shim_secret
 
 RID = "review-setuptest-000000"
 CHAT_PLATFORMS = {"telegram": {"enabled": True}, "discord": {"enabled": True}}
@@ -147,21 +147,21 @@ def test_origin_the_only_chat_platform_is_used_and_said(monkeypatch, tmp_path, c
     assert r.rc == 0
     assert ("origin platform: telegram (the only chat platform configured; pass --origin-platform to choose "
             "another)") in r.out
-    assert [c[2] for c in find(r.log, "webhook", "subscribe")] == ["mock-review-telegram", "mock-review-telegram-notice"]
+    assert route_names(r.log) == ["mock-review-telegram", "mock-review-telegram-notice"]
 
 
 def test_origin_explicit_webhook_is_honoured(monkeypatch, tmp_path, capsys):
     r = go(monkeypatch, tmp_path, capsys, {"platforms": {"webhook": {"enabled": True}}},
            args=("--yes", "--origin-platform", "webhook"))
     assert r.rc == 0
-    assert [c[2] for c in find(r.log, "webhook", "subscribe")] == ["mock-review-webhook", "mock-review-webhook-notice"]
+    assert route_names(r.log) == ["mock-review-webhook", "mock-review-webhook-notice"]
     assert not find(r.log, "webhook", "list")          # webhook is chosen: there is no stale route to look for
 
 
 def test_origin_explicit_wins_over_several_detected(monkeypatch, tmp_path, capsys):
     r = go(monkeypatch, tmp_path, capsys, {"platforms": CHAT_PLATFORMS}, args=("--yes", "--origin-platform", "discord"))
     assert r.rc == 0
-    assert [c[2] for c in find(r.log, "webhook", "subscribe")] == ["mock-review-discord", "mock-review-discord-notice"]
+    assert route_names(r.log) == ["mock-review-discord", "mock-review-discord-notice"]
 
 
 @pytest.mark.parametrize("flag", ["--yes", "--dry-run"])
@@ -200,14 +200,14 @@ def test_origin_several_interactive_asks_once_and_honours_the_answer(monkeypatch
     r = go(monkeypatch, tmp_path, capsys, {"platforms": CHAT_PLATFORMS}, args=("--skip-validate",))
     assert r.rc == 0
     assert "discord, telegram" in r.out                     # the question lists them
-    assert [c[2] for c in find(r.log, "webhook", "subscribe")] == ["mock-review-telegram", "mock-review-telegram-notice"]
+    assert route_names(r.log) == ["mock-review-telegram", "mock-review-telegram-notice"]
 
 
 def test_origin_several_interactive_enter_means_all(monkeypatch, tmp_path, capsys):
     tty(monkeypatch, "")
     r = go(monkeypatch, tmp_path, capsys, {"platforms": CHAT_PLATFORMS}, args=("--skip-validate",))
     assert r.rc == 0
-    assert sorted(c[2] for c in find(r.log, "webhook", "subscribe")) == [
+    assert sorted(route_names(r.log)) == [
         "mock-review-discord", "mock-review-discord-notice", "mock-review-telegram", "mock-review-telegram-notice"]
 
 
@@ -216,7 +216,7 @@ def test_origin_interactive_unlisted_name_asks_again_once_then_accepts(monkeypat
     r = go(monkeypatch, tmp_path, capsys, {"platforms": CHAT_PLATFORMS}, args=("--skip-validate",))
     assert r.rc == 0
     assert "slack" in r.out                                  # named as not listed
-    assert len(find(r.log, "webhook", "subscribe")) == 4
+    assert len(route_names(r.log)) == 4
 
 
 def test_origin_interactive_two_bad_answers_stop_with_no_change(monkeypatch, tmp_path, capsys):
@@ -684,7 +684,7 @@ def test_help_lists_setup_first_and_says_who_should_run_it():
     p = argparse.ArgumentParser(prog="mockreview")
     cli.add_commands(p)
     names = list(p._subparsers._group_actions[0].choices)
-    assert names[0] == "setup" and len(names) == 23 and "migrate" in names and "ack" in names and "mcp" in names
+    assert names[0] == "setup" and len(names) == 24 and "migrate" in names and "ack" in names and "mcp" in names and "delete" in names
     assert "public" in names
     assert "password" not in names and "publish" not in names and "poll" not in names
     assert all(n in names for n in ("login", "users", "invite", "admin", "share", "tokens"))

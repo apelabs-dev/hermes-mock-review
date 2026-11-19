@@ -47,7 +47,7 @@ from mockreview import cli, settings, store  # noqa: E402
 from mockreview.users import SIGNER_MISSING  # noqa: E402
 
 DOC_FILES = ["README.md", "CHANGELOG.md", "AGENTS.md", "CLAUDE.md", "skills/usage/SKILL.md",
-             "docs/comments.md", "docs/decisions-format.md", "docs/design.md", "docs/hosting.md", "docs/migrating-to-2.md",
+             "docs/comments.md", "docs/decisions-format.md", "docs/design.md", "docs/desktop.md", "docs/hosting.md", "docs/migrating-to-2.md",
              "docs/security.md", "docs/public-hosting.md", "docs/public-hosting-live-checks.md",
              "docs/troubleshooting.md"]
 GENERATED = ["docs/settings.md", "docs/cli.md"]

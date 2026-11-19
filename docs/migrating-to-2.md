@@ -11,7 +11,7 @@ for another proxy, then create the review with `--mode public`. See [public-host
 2.0.0 requires Python 3.11-3.14 (`requires-python = ">=3.11,<3.15"` in `pyproject.toml`); Python 3.9 and 3.10 are no
 longer supported. Upgrade the interpreter Hermes runs on before upgrading the plugin, then run `hermes mockreview setup`
 (it validates the installed plugin folder) or `hermes plugins validate <plugin folder>`.
-The plugin itself still has no Python dependencies beyond `itsdangerous` (and the optional `crypto` extra).
+The plugin needs one Python dependency, `itsdangerous`, which Hermes installs. The optional `crypto` extra (PyJWT) is only for Cloudflare Access.
 
 ## Getting a public URL now
 
@@ -99,3 +99,18 @@ from then on. The remote here.now site is not deleted for you: delete it at here
 
 `hermes mockreview setup` removes the obsolete `herenow_credentials`, `subscriptions_file` and
 `herenow_publish_script` settings when it finds them.
+
+## Signing in from a phone or laptop
+
+1.x had no accounts, so any device that could reach the board could open it. 2.0 gives every page, comment and pin an
+account, and each device signs in once.
+
+- A tailnet or public board answers a device that has not signed in with its sign-in page (HTTP 401), not the board.
+- `hermes mockreview setup` prints a sign-in link at the end when it set the board up for the tailnet; `hermes
+  mockreview login` prints a fresh one at any time. Open it on the device, press **Sign in**, and that browser stays
+  signed in.
+- A link works once and expires after 15 minutes, so mint one per device: run the login command again for the second
+  phone or laptop.
+- A local board needs no sign-in: a request from this computer is the owner.
+
+If a board link opened fine in 1.x and now shows a sign-in page, that is this change and not a broken link.
