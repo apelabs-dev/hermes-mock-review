@@ -54,12 +54,12 @@ def test_make_dir_lives_under_the_system_temp_dir_and_names_its_owner(tmp_path, 
     monkeypatch.setattr("tempfile.tempdir", str(tmp_path))
     made = Path(tempguard.make_dir("mockreview-unit-"))
     assert made.parent == tmp_path and made.name.startswith("mockreview-unit-")
-    assert (made / tempguard.OWNER_FILE).read_text() == str(os.getpid())
+    assert (made / tempguard.OWNER_FILE).read_text(encoding="utf-8") == str(os.getpid())
 
 
 def test_sweep_removes_an_old_dir_whose_owner_is_dead(tmp_path):
     dead = Path(tempguard.make_dir("mockreview-unit-", str(tmp_path)))
-    (dead / tempguard.OWNER_FILE).write_text(str(_dead_pid()))
+    (dead / tempguard.OWNER_FILE).write_text(str(_dead_pid()), encoding="utf-8")
     (dead / "profile" / "deep").mkdir(parents=True)
     _old(dead, 5 * HOURS)
     assert tempguard.sweep("mockreview-unit-", str(tmp_path)) == [str(dead)]
@@ -69,7 +69,7 @@ def test_sweep_removes_an_old_dir_whose_owner_is_dead(tmp_path):
 def test_sweep_keeps_everything_that_may_still_be_in_use(tmp_path):
     base = str(tmp_path)
     young = Path(tempguard.make_dir("mockreview-unit-", base))
-    (young / tempguard.OWNER_FILE).write_text(str(_dead_pid()))
+    (young / tempguard.OWNER_FILE).write_text(str(_dead_pid()), encoding="utf-8")
     live = Path(tempguard.make_dir("mockreview-unit-", base))        # owner is this process, which is alive
     _old(live, 50 * HOURS)
     ownerless = tmp_path / "mockreview-unit-ownerless"      # no owner file, changed an hour ago: maybe in use
@@ -77,13 +77,13 @@ def test_sweep_keeps_everything_that_may_still_be_in_use(tmp_path):
     stamp = time.time() - HOURS
     os.utime(ownerless, (stamp, stamp))
     other = Path(tempguard.make_dir("mockreview-other-", base))
-    (other / tempguard.OWNER_FILE).write_text(str(_dead_pid()))
+    (other / tempguard.OWNER_FILE).write_text(str(_dead_pid()), encoding="utf-8")
     _old(other, 50 * HOURS)
     garbled = tmp_path / "mockreview-unit-garbled"
     garbled.mkdir()
-    (garbled / tempguard.OWNER_FILE).write_text("not a pid")
+    (garbled / tempguard.OWNER_FILE).write_text("not a pid", encoding="utf-8")
     os.utime(garbled, (stamp, stamp))
-    (tmp_path / "mockreview-unit-file").write_text("x")
+    (tmp_path / "mockreview-unit-file").write_text("x", encoding="utf-8")
     assert tempguard.sweep("mockreview-unit-", base) == []
     for kept in (young, live, ownerless, other, garbled, tmp_path / "mockreview-unit-file"):
         assert kept.exists(), kept
@@ -102,7 +102,7 @@ def test_sweep_removes_a_dir_with_no_owner_file_once_it_is_a_day_stale(tmp_path)
 @posix_only
 def test_sweep_never_follows_a_symlink(tmp_path):
     target = Path(tempguard.make_dir("mockreview-unit-target-", str(tmp_path)))
-    (target / tempguard.OWNER_FILE).write_text(str(_dead_pid()))
+    (target / tempguard.OWNER_FILE).write_text(str(_dead_pid()), encoding="utf-8")
     _old(target, 50 * HOURS)
     link = tmp_path / "mockreview-unit-link"
     link.symlink_to(target, target_is_directory=True)
@@ -135,19 +135,20 @@ SIGNAL_CHILD = """
 
 
 @posix_only
-@pytest.mark.parametrize("name,codes", [("SIGTERM", (-signal.SIGTERM,)), ("SIGHUP", (-signal.SIGHUP,)),
-                                        ("SIGINT", (-signal.SIGINT, 130, 1))])
-def test_a_termination_signal_runs_the_cleanup_then_ends_the_process_the_usual_way(tmp_path, name, codes):
+@pytest.mark.parametrize("name,extra", [("SIGTERM", ()), ("SIGHUP", ()), ("SIGINT", (130, 1))])
+def test_a_termination_signal_runs_the_cleanup_then_ends_the_process_the_usual_way(tmp_path, name, extra):
+    codes = (-int(getattr(signal, name)),) + extra
     marker = tmp_path / "marker"
     proc = _run_child(SIGNAL_CHILD.replace("sys.argv[1]", repr(str(marker))).replace("sys.argv[2]", repr(name)),
-                      tmp_path, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+                      tmp_path, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                      encoding="utf-8", errors="replace")
     try:
         out, _ = proc.communicate(timeout=20)
     finally:
         if proc.poll() is None:
             proc.kill()
             proc.wait()
-    assert marker.read_text() == "cleaned"
+    assert marker.read_text(encoding="utf-8") == "cleaned"
     assert proc.returncode in codes
     assert "survived" not in out
 
@@ -158,7 +159,8 @@ def test_an_ignored_signal_stays_ignored(tmp_path):
     code = SIGNAL_CHILD.replace("sys.argv[1]", repr(str(marker))).replace("sys.argv[2]", repr("SIGHUP")).replace(
         "tempguard.on_termination(first)", "signal.signal(signal.SIGHUP, signal.SIG_IGN)\n    tempguard.on_termination(first)")
     proc = _run_child(code.replace("time.sleep(30)", "time.sleep(0.5)"), tmp_path, stdout=subprocess.PIPE,
-                      stderr=subprocess.DEVNULL, text=True)
+                      stderr=subprocess.DEVNULL, text=True,
+                      encoding="utf-8", errors="replace")
     out, _ = proc.communicate(timeout=20)
     assert proc.returncode == 0 and "survived" in out and not marker.exists()
 
@@ -205,7 +207,8 @@ def _alive(pid: int) -> bool:
 
 @posix_only
 def test_the_watchdog_cleans_up_after_a_harness_killed_with_sigkill(tmp_path):
-    proc = _run_child(WATCH_CHILD, tmp_path, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    proc = _run_child(WATCH_CHILD, tmp_path, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                      encoding="utf-8", errors="replace")
     pids = []
     try:
         server, forgotten, scratch, kept_dir, helper = proc.stdout.readline().split()
@@ -234,7 +237,7 @@ def test_the_watchdog_removes_only_dirs_named_like_a_harness_scratch_dir(tmp_pat
     other = tmp_path / "precious"
     for d in (mine, other):
         d.mkdir()
-        (d / "f").write_text("x")
+        (d / "f").write_text("x", encoding="utf-8")
     proc = subprocess.run([sys.executable, str(ROOT / "scripts" / "tempguard.py"), "--watch"], timeout=30,
                           input=("dir\t%s\ndir\t%s\ngroup\t1\ngroup\tnonsense\nbogus\n" % (mine, other)).encode())
     assert proc.returncode == 0
