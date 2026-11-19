@@ -135,6 +135,7 @@ MAP: List[Tuple[str, Optional[List[str]]]] = [
     ("scripts/gen_plugin_manifest.py", ["tests/test_plugin.py", "tests/test_release_compliance.py"]),
     ("scripts/gen_docs_reference.py", ["tests/test_release_compliance.py"]),
     ("scripts/check_docs.py", ["tests/test_release_compliance.py"]),
+    ("scripts/tempguard.py", ["tests/test_tempguard.py"]),
     ("README.md", []),
     ("docs/*", []),
     ("CHANGELOG.md", []),

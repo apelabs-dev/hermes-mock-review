@@ -11,10 +11,12 @@ What it does:
      private tokens in MOCKREVIEW_SWEEP_TOKENS when that is set.
   4. The decisions.json and design.json examples in docs/decisions-format.md pass the plugin's own validators.
   5. The generated pages are current (scripts/gen_docs_reference.py --check).
-  6. The documented commands run against a throwaway HERMES_HOME created next to the real one, with the plugin copied
+  6. The documented commands run against a throwaway HERMES_HOME next to the real one, with the plugin copied
      in: setup, settings, owner, design, create, feedback, add-round, list, close, housekeeping, migrate, notify-test
      against a local stand-in receiver, and `serve` in the foreground. Nothing touches the real Hermes home, the live
-     gateway or the webhook port. The throwaway home and every process this script starts are removed at the end.
+     gateway or the webhook port. The throwaway dirs and every process this script starts are removed at the end, and
+     also when the script is killed (SIGTERM, SIGHUP, SIGINT, even SIGKILL: see scripts/tempguard.py); dirs left by a
+     run killed before that are swept at the next start.
   7. Docs and package prose name no internal tracker id, which public readers cannot look up.
 
 Needs the `hermes` CLI (0.22.0 or newer) on PATH.
@@ -43,6 +45,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import check_identifiers  # noqa: E402
+import tempguard  # noqa: E402
 from mockreview import cli, settings, store  # noqa: E402
 from mockreview.users import SIGNER_MISSING  # noqa: E402
 
@@ -387,11 +390,56 @@ def http_get(url: str, timeout: float = 5.0) -> Tuple[int, str]:
         return r.status, r.read().decode()
 
 
-def live_run(tmp_base: Path) -> None:
-    home = Path(tempfile.mkdtemp(prefix="mockreview-docs-check-", dir=tmp_base))
-    work = Path(tempfile.mkdtemp(prefix="mockreview-docs-work-"))
+# The throwaway Hermes homes (HOME_PREFIX, HELP_PREFIX) stay under the real Hermes home, because Hermes scopes its
+# committed dependency environment to the data root it runs in: from a HERMES_HOME elsewhere (the system temp dir),
+# an install that uses Hermes's own managed Python stops at "no dependency environment is committed for this
+# install; run `hermes pm repair`". The dir that is not a Hermes home (WORK_PREFIX) goes to the system temp dir.
+HOME_PREFIX = "mockreview-docs-check-"
+WORK_PREFIX = "mockreview-docs-work-"
+HELP_PREFIX = "mockreview-docs-help-"
+
+
+def stop_group(p: "subprocess.Popen") -> None:
+    """Stop a child started with start_new_session, helpers included. Safe to call twice."""
+    try:
+        os.killpg(p.pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        p.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    else:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)      # helpers that outlived the leader
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
+def live_run() -> None:
+    home = Path(tempguard.make_dir(HOME_PREFIX, str(settings.default_hermes_home())))
+    work = Path(tempguard.make_dir(WORK_PREFIX))
+    guard = tempguard.watchdog()
+    guard.track_dir(str(home))
+    guard.track_dir(str(work))
     procs: List[subprocess.Popen] = []
     recv = None
+
+    def cleanup() -> None:
+        # the one cleanup, run by the finally below and by a termination signal
+        for p in procs:
+            stop_group(p)
+            guard.forget_group(p.pid)
+        procs.clear()
+        if recv is not None:
+            recv.shutdown()
+        shutil.rmtree(home, ignore_errors=True)
+        shutil.rmtree(work, ignore_errors=True)
+
+    unregister = tempguard.on_termination(cleanup)
     try:
         install_plugin(home)
         L = Live(home)
@@ -418,6 +466,7 @@ def live_run(tmp_base: Path) -> None:
         serve = subprocess.Popen(H + ["serve"], env=L.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                  text=True, start_new_session=True)
         procs.append(serve)
+        guard.track_group(serve.pid)      # if this script is SIGKILLed, the watchdog stops the server and removes the dirs
         up = False
         for _ in range(60):
             try:
@@ -503,19 +552,10 @@ def live_run(tmp_base: Path) -> None:
                      "hermes gateway restart, hermes skills install, hermes mockreview adopt, tailscale; their syntax "
                      "is checked above")
     finally:
-        for p in procs:
-            try:
-                os.killpg(p.pid, signal.SIGTERM)
-            except (ProcessLookupError, PermissionError):
-                pass
-            try:
-                p.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                os.killpg(p.pid, signal.SIGKILL)
-        if recv is not None:
-            recv.shutdown()
-        shutil.rmtree(home, ignore_errors=True)
-        shutil.rmtree(work, ignore_errors=True)
+        unregister()
+        cleanup()
+        guard.forget_dir(str(home))
+        guard.forget_dir(str(work))
         record("OK" if not home.exists() and not work.exists() else "FAIL", "removed the throwaway home and work dirs")
 
 
@@ -534,17 +574,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     check_internal_ids()
     check_examples()
     check_generated()
-    base = settings.default_hermes_home()
+    base = str(settings.default_hermes_home())
+    for prefix, where in ((HOME_PREFIX, base), (HELP_PREFIX, base), (WORK_PREFIX, None)):
+        tempguard.sweep(prefix, where)    # dirs of earlier runs that were killed before they could clean up
     env = dict(os.environ, COLUMNS="80", NO_COLOR="1")
-    probe = Path(tempfile.mkdtemp(prefix="mockreview-docs-help-", dir=base))
+    probe = Path(tempguard.make_dir(HELP_PREFIX, base))
+    tempguard.watchdog().track_dir(str(probe))
+    unregister = tempguard.on_termination(lambda: shutil.rmtree(probe, ignore_errors=True))
     try:
         install_plugin(probe)
         env["HERMES_HOME"] = str(probe)
         subprocess.run(["hermes", "plugins", "enable", "mock-review"], env=env, capture_output=True, timeout=120)
         check_command_syntax(env)
     finally:
+        unregister()
         shutil.rmtree(probe, ignore_errors=True)
-    live_run(base)
+        tempguard.watchdog().forget_dir(str(probe))
+    live_run()
+    tempguard.watchdog().close()
     fails = [r for r in results if r[0] == "FAIL"]
     skips = [r for r in results if r[0] == "SKIP"]
     print(f"\n{len(results) - len(fails) - len(skips)} OK, {len(skips)} SKIP, {len(fails)} FAIL")

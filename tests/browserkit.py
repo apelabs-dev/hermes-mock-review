@@ -30,6 +30,9 @@ import time
 import urllib.parse
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "scripts"))
+import tempguard  # noqa: E402
+
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 MAX_MESSAGE = 32 * 1024 * 1024
 BROWSER_ENV = "MOCKREVIEW_BROWSER"
@@ -101,29 +104,7 @@ def chrome_budget() -> int:
     return max(1, min(MAX_CHROMES, wanted))
 
 
-def _pid_alive(pid: int) -> bool:
-    """Whether process `pid` still exists, without signalling it (Windows included: os.kill would terminate it)."""
-    if pid <= 0:
-        return False
-    if os.name == "nt":
-        import ctypes
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        handle = kernel32.OpenProcess(0x00100000, False, pid)      # SYNCHRONIZE
-        if not handle:
-            return ctypes.get_last_error() == 5                    # ERROR_ACCESS_DENIED: someone's live process
-        try:
-            return kernel32.WaitForSingleObject(handle, 0) == 0x102   # WAIT_TIMEOUT
-        finally:
-            kernel32.CloseHandle(handle)
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
+_pid_alive = tempguard.pid_alive      # kept under its old name: the slot registry and the tests use it
 
 
 def _machine_slot_dir() -> str:
@@ -680,6 +661,7 @@ def _kill_group(proc: "subprocess.Popen[Any]") -> None:
             pass
 
 
+PROFILE_PREFIX = "mockreview-browser-"
 CHROME_SINGLETON = "com.google.Chrome."
 
 
@@ -727,16 +709,20 @@ class Chrome:
         self.proc: Optional["subprocess.Popen[Any]"] = None
         self.profile: Optional[str] = None
         self.slot: Optional[str] = None
+        self._unregister: Optional[Any] = None
 
     def __enter__(self) -> Tuple[str, int, str]:
         exe = self.executable or find_browser()
         self.slot = _acquire_chrome_slot()
         try:
-            self.profile = tempfile.mkdtemp(prefix="mockreview-browser-")
+            tempguard.sweep(PROFILE_PREFIX)           # profiles of earlier runs killed before they could clean up
+            self.profile = tempguard.make_dir(PROFILE_PREFIX)
         except OSError:
             self._cleanup()
             raise
         atexit.register(self._cleanup)
+        self._unregister = tempguard.on_termination(self._cleanup)
+        tempguard.watchdog().track_dir(self.profile)
         args = browser_args(exe, self.profile, headed_requested())
         kw: Dict[str, Any] = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
                               "env": _child_env()}
@@ -746,6 +732,7 @@ class Chrome:
             kw["start_new_session"] = True
         try:
             self.proc = subprocess.Popen(args, **kw)
+            tempguard.watchdog().track_group(self.proc.pid)     # a SIGKILLed run must not leave Chrome behind
         except OSError:
             self._cleanup()
             raise BrowserUnavailable("the browser could not be started") from None
@@ -771,6 +758,7 @@ class Chrome:
         leftover = _singleton_leftover(self.profile) if self.profile else None
         if self.proc is not None:
             _kill_group(self.proc)
+            tempguard.watchdog().forget_group(self.proc.pid)
             self.proc = None
         if leftover and not _listening(os.path.join(leftover, "SingletonSocket")):
             for _ in range(3):
@@ -786,7 +774,11 @@ class Chrome:
                 if not os.path.exists(self.profile):
                     break
                 time.sleep(0.3)
+            tempguard.watchdog().forget_dir(self.profile)
             self.profile = None
+        if self._unregister is not None:
+            self._unregister()
+            self._unregister = None
         try:
             atexit.unregister(self._cleanup)
         except Exception:
