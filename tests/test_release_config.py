@@ -138,15 +138,25 @@ def test_workflow_pins_the_action_to_a_commit_and_runs_on_main():
 def test_ci_tests_job_keeps_every_required_check_and_scopes_only_the_run_steps():
     """Release-only pull requests skip the heavy steps, never the job: a skipped job reports no required check."""
     job = yaml.safe_load(CI.read_text(encoding="utf-8"))["jobs"]["tests"]
-    assert job["name"] == "tests (${{ matrix.os }}, Python ${{ matrix.python }})"
+    assert job["name"] == "${{ matrix.check }} (${{ matrix.os }}, Python ${{ matrix.python }})"
     assert job["timeout-minutes"] == 40
     assert "if" not in job, "a job-level condition would leave every required tests check unreported"
-    assert job["strategy"]["matrix"]["include"] == [
-        {"os": "ubuntu-latest", "python": "3.11"},
-        {"os": "ubuntu-latest", "python": "3.14"},
-        {"os": "macos-latest", "python": "3.14"},
-        {"os": "windows-latest", "python": "3.14"},
-    ]
+    rows = job["strategy"]["matrix"]["include"]
+    names = ["{} ({}, Python {})".format(row["check"], row["os"], row["python"]) for row in rows]
+    assert [name for name in names if name.startswith("tests (")] == [
+        "tests (ubuntu-latest, Python 3.11)",
+        "tests (ubuntu-latest, Python 3.14)",
+        "tests (macos-latest, Python 3.14)",
+        "tests (windows-latest, Python 3.14)",
+    ], "the four required tests checks must keep their names"
+    # Every required row runs both tiers itself or hands the browser tier to a row of its own on the same OS and Python.
+    for row in rows:
+        if row["check"] == "tests" and row["part"] == "nonbrowser":
+            assert {"check": "browser tier", "os": row["os"], "python": row["python"], "part": "browser"} in rows
+    assert {row["part"] for row in rows if row["check"] == "tests"} <= {"both", "nonbrowser"}
+    assert {row["part"] for row in rows if row["check"] == "browser tier"} == {"browser"}
+    assert {row["os"] for row in rows if row["part"] == "both"} == {"ubuntu-latest"}, \
+        "Linux must keep blocking pull requests on a browser regression"
     steps = {step["name"]: step for step in job["steps"] if "name" in step}
     scope = [step for step in job["steps"] if step.get("id") == "scope"]
     assert len(scope) == 1, "the tests job needs exactly one scope step"
@@ -154,10 +164,15 @@ def test_ci_tests_job_keeps_every_required_check_and_scopes_only_the_run_steps()
     assert "github.event_name == 'pull_request'" in gate
     assert "startsWith(github.head_ref, 'release-please--')" in gate, \
         "a hand-made pull request that only edits plugin.yaml must still run every test"
-    for name in ("Run the non-browser tier", "Run the browser tier"):
-        assert steps[name]["if"] == "${{ !cancelled() && steps.scope.outputs.tests != 'skip' }}"
-    for name in ("Upload the non-browser logs", "Upload the browser logs"):
-        assert steps[name]["if"] == "always()"
+    for name, skipped_part in (("Run the non-browser tier", "browser"), ("Run the browser tier", "nonbrowser")):
+        assert steps[name]["if"] == \
+            "${{{{ !cancelled() && steps.scope.outputs.tests != 'skip' && matrix.part != '{}' }}}}".format(skipped_part)
+    for name, skipped_part in (("Upload the non-browser logs", "browser"), ("Upload the browser logs", "nonbrowser")):
+        assert steps[name]["if"] == "${{{{ always() && matrix.part != '{}' }}}}".format(skipped_part)
+    # Only the separate browser row on a pull request may end green on a failure; main still fails on it.
+    assert steps["Run the browser tier"]["continue-on-error"] == \
+        "${{ matrix.part == 'browser' && github.event_name == 'pull_request' }}"
+    assert all("continue-on-error" not in step for step in job["steps"] if step.get("id") != "browser")
 
 
 def test_crypto_extra_admits_every_supported_hermes_pyjwt_pin():
