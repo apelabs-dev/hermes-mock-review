@@ -147,6 +147,11 @@ def _slot_wait() -> float:
         return 300.0
 
 
+# Windows answers mkdir over a directory another process is still removing ("delete pending") with WinError 5, not
+# FileExistsError. The name frees within milliseconds, so the registry lock waits that out like a held lock.
+_MKDIR_DENIED_MEANS_BUSY = os.name == "nt"
+
+
 def _lock(root: str) -> str:
     lock = os.path.join(root, ".lock")
     deadline = time.monotonic() + 30
@@ -161,6 +166,12 @@ def _lock(root: str) -> str:
                     continue
             except OSError:
                 continue
+            if time.monotonic() >= deadline:
+                raise BrowserCheckError("the Chrome slot registry stayed locked for 30s")
+            time.sleep(0.02)
+        except PermissionError:
+            if not _MKDIR_DENIED_MEANS_BUSY:
+                raise
             if time.monotonic() >= deadline:
                 raise BrowserCheckError("the Chrome slot registry stayed locked for 30s")
             time.sleep(0.02)
