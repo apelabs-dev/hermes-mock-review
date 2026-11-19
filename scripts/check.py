@@ -18,6 +18,13 @@ Tiers
              Chrome fixture is reused and the machine-wide slot files hold the cap. The browser phase starts
              only when the non-browser phase passed, unless --all asks to see every failure.
 
+Browser retry
+    A browser module that fails runs once more: only its failed tests when the first run saw every failure
+    (--all, which is how CI runs), the whole module otherwise (a fail-fast run stopped early, or the report names
+    no test). When the retry passes, the module counts as green and every test that failed first is reported as
+    flaky: under the module's name as it happens, in a roll-up before the summary, as a GitHub warning and in the
+    job summary on Actions. A test that fails twice fails the run. The non-browser tier is never retried.
+
 Browser inventory
     The browser modules are not the hand-kept list alone: one `pytest --collect-only -m browser` call finds every
     module that carries the mark, and the run is the union of that inventory and BROWSER_JOBS. A declared module
@@ -34,14 +41,16 @@ Environment knobs
     CHECK_ROOT           run against another tree (default: this checkout; the inventory and plans are relative to it)
     CHECK_WORKERS        non-browser xdist workers (default: min(8, CPU count - 2))
     CHECK_CHROMES        this run's Chrome budget (default: MOCKREVIEW_CHROMES or 3)
+    CHECK_RETRIES=0      fail a browser module on its first failure instead of retrying it once (default 1)
     CHECK_BROWSER_BASE   browser job log/XML base (default: a temp dir)
     CHECK_LOG_DIR        write logs/XML into this directory (created if missing), keep it even when green, and
                          print its absolute path after the summary (CI uploads it); default is a temp dir kept
                          only on red or CHECK_KEEP_LOGS
     CHECK_KEEP_LOGS=1    keep the logs of a green run (a red one is always kept)
 
-Exit status is 1 when any selected test fails, a pytest run produced no report, or a part ran nothing. The
-last line is the summary: counts, wall time, workers and Chrome budget, and the log directory when it is kept.
+Exit status is 1 when any selected test fails, a pytest run produced no report, or a part ran nothing; a flaky test
+alone does not fail the run. The last line is the summary: counts (flaky ones too, when there are any), wall time,
+workers and Chrome budget, and the log directory when it is kept.
 """
 
 from __future__ import annotations
@@ -173,6 +182,7 @@ else:
     _DEFAULT_WORKERS, _DEFAULT_CHROMES = min(8, max(2, _CPU - 2)), 3
 WORKERS = _env_int("CHECK_WORKERS", _DEFAULT_WORKERS)
 CHROMES = _env_int("CHECK_CHROMES", _env_int("MOCKREVIEW_CHROMES", _DEFAULT_CHROMES, 1, 4), 1, 4)
+RETRIES = _env_int("CHECK_RETRIES", 1, 0, 1)
 
 
 class InventoryError(RuntimeError):
@@ -288,6 +298,8 @@ class Result:
     failed: int = 0
     skipped: int = 0
     note: str = ""
+    flaky: List[str] = field(default_factory=list)   # failed first, passed on the retry
+    retry_log: Optional[Path] = None
 
     @property
     def passed(self) -> int:
@@ -315,8 +327,12 @@ class Runner:
         return (self.logs / ("%02d-%s.log" % (serial, safe)),
                 self.logs / ("%02d-%s.xml" % (serial, safe)))
 
+    def record(self, res: Result) -> None:
+        with self._lock:
+            self.results.append(res)
+
     def run(self, name: str, files: Sequence[str], marker: Optional[str] = None,
-            workers: int = 1) -> Result:
+            workers: int = 1, record: bool = True) -> Result:
         log, xml = self._paths(name)
         temp = self.logs / ("tmp-" + log.stem)
         cmd = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-rfEP",
@@ -353,7 +369,8 @@ class Runner:
             res.note = "pytest produced no report"
         elif res.tests == 0:
             res.note = "pytest ran no tests"
-        self.results.append(res)
+        if record:
+            self.record(res)
         print("[%s] %d tests, %d failed, %d skipped in %.1fs%s"
               % (name, res.tests, res.failed, res.skipped, res.wall, (" (" + res.note + ")") if res.note else ""),
               flush=True)
@@ -372,6 +389,29 @@ def _counts(xml: Path) -> Tuple[int, int, int]:
     failed = sum(1 for c in cases if c.find("failure") is not None or c.find("error") is not None)
     skipped = sum(1 for c in cases if c.find("skipped") is not None)
     return len(cases), failed, skipped
+
+
+def failed_ids(xml: Path, path: str) -> List[str]:
+    """The node IDs of the failed tests in one module's JUnit report, or [] when any of them cannot be rebuilt.
+
+    pytest writes a node ID `tests/test_x.py::TestA::test_b[p]` as classname `tests.test_x.TestA` and name
+    `test_b[p]`. A failure outside a test (a collection error has an empty classname) has no node ID to retry, so
+    the caller retries the whole module instead.
+    """
+    try:
+        root = ET.parse(xml).getroot()
+    except (OSError, ET.ParseError):
+        return []
+    module = re.sub(r"\.py$", "", path).replace("/", ".")
+    ids: List[str] = []
+    for case in root.iter("testcase"):
+        if case.find("failure") is None and case.find("error") is None:
+            continue
+        cls, name = case.get("classname", ""), case.get("name", "")
+        if not name or not (cls == module or cls.startswith(module + ".")):
+            return []
+        ids.append("::".join([path] + cls[len(module):].split(".")[1:] + [name]))
+    return _ordered(ids)
 
 
 def _git(*args: str) -> str:
@@ -490,6 +530,33 @@ def run_nonbrowser(runner: Runner, files: Optional[Sequence[str]] = None, name: 
     return runner.run(name, files or [], marker="not browser", workers=WORKERS)
 
 
+def run_browser_job(runner: Runner, path: str, units: int) -> Result:
+    """One browser module, retried once when it fails (see "Browser retry" above). Only the final verdict is
+    recorded: a module that passes on the retry is one green result that lists its flaky tests."""
+    name = Path(path).stem
+    first = runner.run(name, [path], marker="browser", workers=units, record=False)
+    if first.ok or not RETRIES:
+        runner.record(first)
+        return first
+    ids = failed_ids(first.xml, path) if runner.all_failures else []
+    print("[%s] retrying %s once" % (name, ("%d failed test(s)" % len(ids)) if ids else "the module"), flush=True)
+    second = runner.run(name + "-retry", ids or [path], marker="browser",
+                        workers=min(units, len(ids)) if ids else units, record=False)
+    if not second.ok or (ids and second.tests < len(ids)):
+        first.retry_log = second.log
+        print("[%s] failed again on the retry" % name, flush=True)
+        runner.record(first)
+        return first
+    flaky = ids or failed_ids(first.xml, path) or ["%s (the whole module, pytest exit %d)" % (path, first.rc)]
+    base = first if ids else second
+    final = Result(name=name, cmd=first.cmd, log=first.log, xml=first.xml, wall=first.wall + second.wall,
+                   tests=base.tests, skipped=base.skipped, flaky=flaky, retry_log=second.log)
+    print("[%s] flaky: %d test(s) failed, then passed on the retry: %s" % (name, len(flaky), ", ".join(flaky)),
+          flush=True)
+    runner.record(final)
+    return final
+
+
 def run_browser_pool(runner: Runner, jobs: Sequence[Tuple[str, int]]) -> List[Result]:
     """Start jobs, heaviest first, while their worker counts fit under the Chrome budget; stop on the first
     failure unless --all. In-flight jobs are never killed: a browser job ends on its own (bounded), and killing
@@ -511,7 +578,7 @@ def run_browser_pool(runner: Runner, jobs: Sequence[Tuple[str, int]]) -> List[Re
                 holder: List[Result] = []
 
                 def target(p: str = path, u: int = units, box: List[Result] = holder) -> None:
-                    box.append(runner.run(Path(p).stem, [p], marker="browser", workers=u))
+                    box.append(run_browser_job(runner, p, u))
 
                 t = threading.Thread(target=target)
                 t.start()
@@ -549,9 +616,10 @@ def _summary(kind: str, results: Sequence[Result], wall: float, detail: str) -> 
     tests = sum(r.tests for r in results)
     failed = sum(r.failed for r in results) + sum(1 for r in results if r.note)
     skipped = sum(r.skipped for r in results)
-    return "%s: %d tests, %d passed, %d skipped, %d failed in %s; %s" % (
+    flaky = sum(len(r.flaky) for r in results)
+    return "%s: %d tests, %d passed, %d skipped, %d failed%s in %s; %s" % (
         kind, tests, tests - sum(r.failed for r in results) - skipped, skipped, failed,
-        _duration(wall), detail)
+        (", %d flaky" % flaky) if flaky else "", _duration(wall), detail)
 
 
 def _duration(seconds: float) -> str:
@@ -586,6 +654,33 @@ def _failure_tail(res: Result) -> None:
           file=sys.stderr, flush=True)
 
 
+def _flaky_report(results: Sequence[Result]) -> None:
+    """List every test that passed only on its retry, with both logs. A flaky test does not fail the run, so on
+    GitHub Actions it is also a warning annotation and a job-summary section, where a green check still shows it."""
+    flaky = [res for res in results if res.flaky]
+    if not flaky:
+        return
+    print("\nflaky (failed, then passed on the retry):", flush=True)
+    for res in flaky:
+        for test in res.flaky:
+            print("  %s" % test, flush=True)
+        print("    logs: %s, retry %s" % (res.log, res.retry_log), flush=True)
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+    for res in flaky:
+        for test in res.flaky:
+            print("::warning title=Flaky browser test::%s failed, then passed on the retry" % test, flush=True)
+    summary = os.environ.get("GITHUB_STEP_SUMMARY", "").strip()
+    if summary:
+        lines = ["### Flaky browser tests", "", "These failed, then passed on the retry, so they did not fail the job.",
+                 ""] + ["- `%s`" % test for res in flaky for test in res.flaky]
+        try:
+            with open(summary, "a", encoding="utf-8") as out:
+                out.write("\n".join(lines) + "\n")
+        except OSError as e:
+            print("could not write the job summary: %s" % e, file=sys.stderr, flush=True)
+
+
 def _failed_logs(runner: Runner) -> None:
     """The end-of-run roll-up of what failed and where its log is. The 60-line tail was printed by Runner.run."""
     failed = [res for res in runner.results if not res.ok]
@@ -594,7 +689,8 @@ def _failed_logs(runner: Runner) -> None:
     print("\nfailed: %s" % ", ".join(res.name for res in failed), file=sys.stderr)
     for res in failed:
         note = (" (" + res.note + ")") if res.note else ""
-        print("  %s%s: %s" % (res.name, note, res.log), file=sys.stderr)
+        retry = (", retry %s" % res.retry_log) if res.retry_log else ""
+        print("  %s%s: %s%s" % (res.name, note, res.log, retry), file=sys.stderr)
     sys.stderr.flush()
 
 
@@ -691,6 +787,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 130
 
     green = all(r.ok for r in results)
+    _flaky_report(results)
     print(summary, flush=True)
     if keep_logs:
         print("logs kept: %s" % logs, flush=True)

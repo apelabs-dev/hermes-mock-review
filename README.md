@@ -310,6 +310,16 @@ that cannot be scheduled is reported as a failure, never dropped. A browser job 
 module that also holds unmarked ones keeps those in the non-browser pass, so every test runs exactly once in both
 `full` and `changed`.
 
+A browser module that fails runs once more: only its failed tests after `--all`, the whole module after a fail-fast
+run. When the retry passes, the run stays green and each test that failed first is listed as flaky, before the summary
+and in its count (and as a warning and a job-summary line on GitHub Actions); a test that fails twice fails the run.
+`CHECK_RETRIES=0` turns the retry off. The non-browser tier is never retried.
+
+In CI the four `tests (...)` checks are required. The Linux ones run both tiers. On macOS and Windows the browser tier
+runs as a separate `browser tier (...)` check that does not block a pull request: when it fails there, the check stays
+green and shows a warning. On main it fails like any other check, and a nightly run of the full matrix opens or
+updates a `nightly-ci` issue when anything fails.
+
 The browser harness caps Chromes machine-wide for this OS user: `MOCKREVIEW_CHROMES` (default 3, never more than 4) is
 one run's budget, and slot files in `/tmp/mockreview-chrome-slots-<uid>` (POSIX; `%LOCALAPPDATA%\mockreview\chrome-slots`
 on Windows) make every process of this user respect the same ceiling, whatever its `TMPDIR` or `HOME` says. It does not

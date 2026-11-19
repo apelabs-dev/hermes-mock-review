@@ -1,4 +1,5 @@
-"""Regressions for scripts/check.py: the browser inventory, the Chrome-budget scheduler and the phase gate.
+"""Regressions for scripts/check.py: the browser inventory, the Chrome-budget scheduler, the browser retry and the
+phase gate.
 
 These run no browser and no repository test: the scheduler is driven with a fake runner, and the inventory and
 phase-gate regressions point the real runner (`CHECK_ROOT`) at a miniature suite in a temp directory.
@@ -63,23 +64,127 @@ def test_macos_defaults_one_worker_and_one_chrome_fewer(monkeypatch):
 
 
 class FakeRunner:
-    """A Runner shape for the scheduler: records every job and returns a green Result with a fixed case count."""
+    """A Runner shape for the scheduler: records every job and returns a green Result with a fixed case count.
 
-    def __init__(self, logs: Path):
+    `fail` maps a module to how many of its runs fail; a failing run writes a JUnit report with the two FLAKY_CASES
+    failed, so the retry can rebuild their node IDs. Every call's file arguments and workers land in `calls`."""
+
+    def __init__(self, logs: Path, fail: dict | None = None):
         self.logs = logs
         self.logs.mkdir(parents=True, exist_ok=True)
         self.all_failures = False
         self.results = []
         self.runs = []
+        self.calls = []
+        self.fail = dict(fail or {})
         self.cases = {path: 10 + index for index, (path, _) in enumerate(check.BROWSER_JOBS)}
 
-    def run(self, name, files, marker=None, workers=1):
-        path = files[0]
-        self.runs.append((path, workers))
-        result = check.Result(name=name, cmd=[], log=self.logs / (name + ".log"),
-                              xml=self.logs / (name + ".xml"), tests=self.cases.get(path, 1))
+    def record(self, result):
         self.results.append(result)
+
+    def run(self, name, files, marker=None, workers=1, record=True):
+        path = files[0].split("::", 1)[0]
+        self.runs.append((path, workers))
+        self.calls.append((list(files), workers))
+        log, xml = self.logs / (name + ".log"), self.logs / (name + ".xml")
+        tests = self.cases.get(path, 1) if files == [path] else len(files)
+        result = check.Result(name=name, cmd=[], log=log, xml=xml, tests=tests)
+        if self.fail.get(path, 0) > 0:
+            self.fail[path] -= 1
+            write_junit(xml, path, {case: True for case in FLAKY_CASES})
+            result.rc, result.failed = 1, len(FLAKY_CASES)
+        if record:
+            self.record(result)
         return result
+
+
+# (classname suffix after the module, name): a module-level test and a class test with a parametrize ID that holds
+# a dot and "::", which must stay in the name.
+FLAKY_CASES = [("", "test_one"), (".TestTwo", "test_two[a.b::c]")]
+
+
+def write_junit(xml: Path, path: str, cases: dict) -> None:
+    """A JUnit report shaped like pytest's: {(classname suffix, name): failed?} for the module at `path`."""
+    module = path[:-3].replace("/", ".")
+    rows = ['<testcase classname="%s%s" name="%s">%s</testcase>'
+            % (module, suffix, name, "<failure message=\"x\"/>" if failed else "")
+            for (suffix, name), failed in cases.items()]
+    xml.write_text('<testsuites><testsuite name="pytest">%s</testsuite></testsuites>' % "".join(rows),
+                   encoding="utf-8")
+
+
+def test_failed_ids_rebuild_the_node_ids_pytest_wrote(tmp_path):
+    """Module, class and nested-class tests map back to node IDs; a passing case is left out and a teardown error
+    that repeats a test's row is one ID. A failure with no test behind it (a collection error) gives [], so the
+    caller retries the whole module."""
+    xml = tmp_path / "report.xml"
+    write_junit(xml, "tests/test_x.py", {("", "test_a"): True, (".TestB", "test_b[p.q::r]"): True,
+                                          (".TestB.TestC", "test_c"): True, ("", "test_green"): False})
+    root = xml.read_text(encoding="utf-8")
+    xml.write_text(root.replace("</testsuite>", '<testcase classname="tests.test_x" name="test_a">'
+                                "<error message=\"teardown\"/></testcase></testsuite>"), encoding="utf-8")
+    assert check.failed_ids(xml, "tests/test_x.py") == [
+        "tests/test_x.py::test_a", "tests/test_x.py::TestB::test_b[p.q::r]", "tests/test_x.py::TestB::TestC::test_c"]
+    xml.write_text('<testsuites><testsuite><testcase classname="" name="tests.test_x"><error/></testcase>'
+                   "</testsuite></testsuites>", encoding="utf-8")
+    assert check.failed_ids(xml, "tests/test_x.py") == []
+    assert check.failed_ids(tmp_path / "missing.xml", "tests/test_x.py") == []
+
+
+FLAKY_JOBS = [("tests/test_anchors.py", 3), ("tests/test_pin_stack.py", 1)]
+FLAKY_IDS = ["tests/test_anchors.py::test_one", "tests/test_anchors.py::TestTwo::test_two[a.b::c]"]
+
+
+def test_a_module_that_passes_on_the_retry_is_green_and_lists_its_flaky_tests(tmp_path, monkeypatch):
+    """With every failure seen (--all, as CI runs) only the failed tests run again, on no more workers than tests;
+    the module is then one green result with its full case count, and the summary counts the flaky tests."""
+    monkeypatch.setattr(check, "CHROMES", 3)
+    monkeypatch.setattr(check, "RETRIES", 1)
+    runner = FakeRunner(tmp_path / "logs", fail={"tests/test_anchors.py": 1})
+    runner.all_failures = True
+    results = check.run_browser_pool(runner, FLAKY_JOBS)
+    assert (FLAKY_IDS, 2) in runner.calls, runner.calls
+    assert len(results) == 2 and all(result.ok for result in results), results
+    anchors = next(result for result in results if result.name == "test_anchors")
+    assert anchors.flaky == FLAKY_IDS
+    assert anchors.tests == runner.cases["tests/test_anchors.py"]
+    assert anchors.retry_log is not None and anchors.retry_log.name == "test_anchors-retry.log"
+    assert "0 failed, 2 flaky in" in check._summary("FULL", results, 1.0, "3 workers")
+
+
+def test_a_fail_fast_run_retries_the_whole_module(tmp_path, monkeypatch):
+    """A fail-fast run stopped at the first failure, so the tests after it never ran: the retry is the whole module."""
+    monkeypatch.setattr(check, "CHROMES", 3)
+    monkeypatch.setattr(check, "RETRIES", 1)
+    runner = FakeRunner(tmp_path / "logs", fail={"tests/test_anchors.py": 1})
+    results = check.run_browser_pool(runner, FLAKY_JOBS)
+    assert [call for call in runner.calls if call[0] == ["tests/test_anchors.py"]] == [
+        (["tests/test_anchors.py"], 3), (["tests/test_anchors.py"], 3)]
+    assert all(result.ok for result in results), results
+    assert next(result for result in results if result.name == "test_anchors").flaky == FLAKY_IDS
+
+
+def test_a_module_that_fails_its_retry_fails_the_run(tmp_path, monkeypatch):
+    monkeypatch.setattr(check, "CHROMES", 3)
+    monkeypatch.setattr(check, "RETRIES", 1)
+    runner = FakeRunner(tmp_path / "logs", fail={"tests/test_anchors.py": 2})
+    runner.all_failures = True
+    results = check.run_browser_pool(runner, FLAKY_JOBS)
+    anchors = [result for result in results if result.name == "test_anchors"]
+    assert len(anchors) == 1 and not anchors[0].ok and anchors[0].flaky == []
+    assert anchors[0].retry_log is not None
+    assert "2 failed in" in check._summary("FULL", results, 1.0, "3 workers")
+
+
+def test_check_retries_0_fails_a_module_on_its_first_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(check, "CHROMES", 3)
+    monkeypatch.setattr(check, "RETRIES", 0)
+    runner = FakeRunner(tmp_path / "logs", fail={"tests/test_anchors.py": 1})
+    runner.all_failures = True
+    results = check.run_browser_pool(runner, FLAKY_JOBS)
+    assert [files for files, _ in runner.calls].count(["tests/test_anchors.py"]) == 1
+    assert not any(len(files) == 2 for files, _ in runner.calls), runner.calls
+    assert not all(result.ok for result in results)
 
 
 @pytest.mark.parametrize("budget", [1, 2, 3, 4])
@@ -193,8 +298,9 @@ def run_check(mini: Path, *args: str, merge_stderr: bool = False,
               env: dict | None = None) -> subprocess.CompletedProcess:
     e = dict(os.environ)
     e["CHECK_ROOT"] = str(mini)
-    e.pop("CHECK_KEEP_LOGS", None)
-    e.pop("CHECK_LOG_DIR", None)
+    # When this suite itself runs on Actions, a miniature run must not annotate or summarize the real job.
+    for name in ("CHECK_KEEP_LOGS", "CHECK_LOG_DIR", "CHECK_RETRIES", "GITHUB_ACTIONS", "GITHUB_STEP_SUMMARY"):
+        e.pop(name, None)
     e.update(env or {})
     return subprocess.run([sys.executable, str(CHECK), *args], cwd=str(ROOT), env=e,
                           stdout=subprocess.PIPE,
@@ -211,6 +317,7 @@ def test_full_runs_a_marked_module_that_is_not_in_browser_jobs(tmp_path):
     assert proc.returncode != 0, output
     assert "[browser] warning: tests/test_new_browser.py carries pytest.mark.browser" in output
     assert "[test_new_browser] 2 tests, 1 failed" in output
+    assert "[test_new_browser] failed again on the retry" in output, output
     assert ("FULL: %d tests" % total) in output, output
     assert "test_marked_failure" in output
 
@@ -347,3 +454,46 @@ def test_a_green_run_still_prints_the_browser_replacements_with_the_job_name(tmp
     marked = next(line for line in lines if "the browser job" in line)
     assert plain.startswith("[fast] browserkit: replacing a browser whose page bring-up failed"), lines
     assert marked.startswith("[test_replaced] browserkit: replacing a browser whose launch failed"), lines
+
+
+MINI_FLAKY = """\
+from pathlib import Path
+
+import pytest
+
+
+@pytest.mark.browser
+def test_steady():
+    assert True
+
+
+@pytest.mark.browser
+def test_flaky_once():
+    flag = Path(__file__).with_name("flaky.flag")
+    if not flag.exists():
+        flag.write_text("failed once", encoding="utf-8")
+        assert False, "the first attempt fails on purpose"
+"""
+
+
+@pytest.mark.parametrize("all_failures", [True, False], ids=["all", "fail-fast"])
+def test_a_browser_test_that_passes_on_the_retry_is_reported_flaky_and_the_run_stays_green(tmp_path, all_failures):
+    """The real runner end to end: the module's failed test (or, fail-fast, the whole module) runs once more, the
+    run exits 0, and the flaky test is named in the output, in the summary count and, on Actions, as a warning
+    annotation and in the job summary."""
+    mini = make_mixed_suite(tmp_path / "mini")
+    (mini / "tests" / "test_flaky.py").write_text(MINI_FLAKY, encoding="utf-8")
+    total = collect_count(mini)
+    job_summary = tmp_path / "step-summary.md"
+    args = ["full", "--all"] if all_failures else ["full"]
+    proc = run_check(mini, *args, merge_stderr=True,
+                     env={"GITHUB_ACTIONS": "true", "GITHUB_STEP_SUMMARY": str(job_summary)})
+    output = proc.stdout
+    test_id = "tests/test_flaky.py::test_flaky_once"
+    assert proc.returncode == 0, output
+    retrying = "[test_flaky] retrying 1 failed test(s) once" if all_failures else "[test_flaky] retrying the module once"
+    assert retrying in output, output
+    assert ("[test_flaky] flaky: 1 test(s) failed, then passed on the retry: %s" % test_id) in output, output
+    assert ("FULL: %d tests, %d passed, 0 skipped, 0 failed, 1 flaky in" % (total, total)) in output, output
+    assert ("::warning title=Flaky browser test::%s failed, then passed on the retry" % test_id) in output, output
+    assert ("- `%s`" % test_id) in job_summary.read_text(encoding="utf-8")
