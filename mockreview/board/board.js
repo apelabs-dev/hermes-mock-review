@@ -2247,10 +2247,10 @@ import {paintAvatar} from './avatar.js';
       if (S.draft.pins.length >= LIMIT.pins) { toast('That’s ' + LIMIT.pins + ' pins — use the notes for the rest.', 'warn'); return; }
       var x = num(d.x, 0, 1), y = num(d.y, 0, 1);
       var target = cleanTarget(d.target);
-      f.ghost = { x: x, y: y }; pushArtifact(f);
+      var mine = f.ghost = { x: x, y: y }; pushArtifact(f);
       notePop({ title: 'New pin · ' + pinWhat(b, null), where: target ? 'on ' + target.label : wlabel(f.device) + ' · ~' + pct(x) + ', ' + pct(y) + ' of the artifact', isNew: true, target: target,
         anchor: { x: rc.left + num(d.cx, 0, 4000), y: rc.top + num(d.cy, 0, 4000) }, text: '',
-        onClose: function () { f.ghost = null; pushArtifact(f); },
+        onClose: function () { if (f.ghost === mine) { f.ghost = null; pushArtifact(f); } },
         onSave: function (text, ta) {
           saveNewThread({ id: newPinId(), block: b.id, option: null, w: f.device, x: x, y: y, ...(target ? {target: target} : {}) }, text, ta);
           redrawPins(b.id);
@@ -3103,10 +3103,10 @@ import {paintAvatar} from './avatar.js';
       if (S.draft.pins.length >= LIMIT.pins) { toast('That’s ' + LIMIT.pins + ' pins — use the notes for the rest.', 'warn'); return; }
       var x = num(d.x, 0, 1), y = num(d.y, 0, 1);
       var target = cleanTarget(d.target);
-      f.ghost = { x: x, y: y }; pushProto(f);
+      var mine = f.ghost = { x: x, y: y }; pushProto(f);
       notePop({ title: 'New pin · prototype', where: target ? 'on ' + target.label : wlabel(f.device) + ' · ~' + pct(x) + ', ' + pct(y) + ' of the page', isNew: true, target: target,
         anchor: { x: rc.left + num(d.cx, 0, 4000), y: rc.top + num(d.cy, 0, 4000) }, text: '',
-        onClose: function () { f.ghost = null; pushProto(f); },
+        onClose: function () { if (f.ghost === mine) { f.ghost = null; pushProto(f); } },
         onSave: function (text, ta) {
           saveNewThread({ block: 'proto', option: null, w: f.device, x: x, y: y, ...(target ? {target: target} : {}) }, text, ta);
           f.ghost = null; pushProto(f); redrawPins('proto');
