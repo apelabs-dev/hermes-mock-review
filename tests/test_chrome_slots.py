@@ -226,3 +226,34 @@ def test_a_symlinked_slot_directory_is_rejected(monkeypatch, tmp_path):
         assert list(target.iterdir()) == []
     finally:
         os.unlink(path)
+
+
+def denied_mkdir(times: int):
+    """os.mkdir that refuses `times` calls with WinError 5's PermissionError, then creates the directory."""
+    real, calls = os.mkdir, []
+
+    def mkdir(path, *args, **kwargs):
+        calls.append(path)
+        if len(calls) <= times:
+            raise PermissionError(13, "Access is denied", path)
+        return real(path, *args, **kwargs)
+
+    return mkdir, calls
+
+
+def test_a_lock_mid_removal_on_windows_is_waited_for(monkeypatch, tmp_path):
+    mkdir, calls = denied_mkdir(2)
+    monkeypatch.setattr(bk, "_MKDIR_DENIED_MEANS_BUSY", True)
+    monkeypatch.setattr(bk.os, "mkdir", mkdir)
+    lock = bk._lock(str(tmp_path))
+    assert lock == str(tmp_path / ".lock") and len(calls) == 3
+    bk._unlock(lock)
+
+
+def test_a_denied_lock_elsewhere_fails_at_once(monkeypatch, tmp_path):
+    mkdir, calls = denied_mkdir(1)
+    monkeypatch.setattr(bk, "_MKDIR_DENIED_MEANS_BUSY", False)
+    monkeypatch.setattr(bk.os, "mkdir", mkdir)
+    with pytest.raises(PermissionError):
+        bk._lock(str(tmp_path))
+    assert len(calls) == 1
