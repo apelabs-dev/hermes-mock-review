@@ -29,8 +29,7 @@ def artifact_review(env, tmp_path):
 
 
 def frame_session(b, rid):
-    targets = b.cdp.call("Target.getTargets")["targetInfos"]
-    target = next(x for x in targets if x["type"] == "iframe" and rid in x["url"])
+    target = b.frame_target(lambda url: rid in url)
     sid = b.cdp.call("Target.attachToTarget", {"targetId": target["targetId"], "flatten": True})["sessionId"]
     b.cdp.call("Runtime.enable", session=sid)
     return sid

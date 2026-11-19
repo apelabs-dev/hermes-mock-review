@@ -2373,6 +2373,10 @@ import {paintAvatar} from './avatar.js';
   }
   function drawPins(m) {
     m.pins.textContent = '';
+    drawSavedPins(m);
+    if (m.ghost) m.pins.appendChild(m.ghost);   // a new pin's ghost is not in the draft yet: keep it through a redraw
+  }
+  function drawSavedPins(m) {
     if (!pinsOn()) return;
     S.draft.pins.forEach(function (p, i) {
       if (p.block !== m.b.id || p.option !== m.o.id || p.w !== S.width || !pinVisible(p)) return;
@@ -2714,6 +2718,7 @@ import {paintAvatar} from './avatar.js';
         c.list.appendChild(T.row(t));
       });
     }
+    CANVAS.forEach(function (c) { if (c.ghost) c.layer.appendChild(c.ghost); });   // a new pin's ghost survives the redraw
     updateSendbar();
     if (before !== null && before !== JSON.stringify(S.draft.pins)) saveDraft();
   }
@@ -2805,10 +2810,12 @@ import {paintAvatar} from './avatar.js';
     var scroll = scrollPoint();
     var doc = { x: num(e.clientX + scroll.x, 0, 1000000), y: num(e.clientY + scroll.y, 0, 1000000) };
     var ghost = h('div', { class: 'mpin ghost', style: { left: (x * 100) + '%', top: (y * 100) + '%' } }, h('span', { text: String(S.draft.pins.length + 1) }));
-    canvasLayer(sec).layer.appendChild(ghost);
+    var c = canvasLayer(sec);
+    c.ghost = ghost;
+    c.layer.appendChild(ghost);
     notePop({ title: 'New pin · ' + (title || ref), where: target ? 'on ' + target.label : wlabel(S.width) + ' · ~' + pct(x) + ', ' + pct(y),
       anchor: { x: e.clientX, y: e.clientY }, isNew: true, target: target,
-      onClose: function () { ghost.remove(); },
+      onClose: function () { ghost.remove(); if (c.ghost === ghost) c.ghost = null; },
       onSave: function (text, ta) {
         saveNewThread({ id: newPinId(), block: ref, option: null, w: S.width, x: x, y: y, on: 'board', ...(target ? { target: target } : { doc: doc }) }, text, ta);
         redrawCanvasPins();
@@ -2853,10 +2860,11 @@ import {paintAvatar} from './avatar.js';
     if (range && !m.root.contains(range.commonAncestorContainer)) range = null;
     var target = e.mrTarget || anchorFor((e.composedPath ? e.composedPath()[0] : e.target), m.root, e.clientX, e.clientY, range);
     var ghost = h('div', { class: 'mpin ghost', style: { left: (x * 100) + '%', top: (y * 100) + '%' } }, h('span', { text: String(S.draft.pins.length + 1) }));
+    m.ghost = ghost;
     m.pins.appendChild(ghost);
     notePop({ title: 'New pin · ' + pinWhat(m.b, m.o.id), where: target ? 'on ' + target.label : wlabel(S.width) + ' · ~' + pct(x) + ', ' + pct(y) + ' of the mock',
       anchor: { x: e.clientX, y: e.clientY }, text: '', isNew: true, target: target,
-      onClose: function () { ghost.remove(); },
+      onClose: function () { ghost.remove(); if (m.ghost === ghost) m.ghost = null; },
       onSave: function (text, ta) {
         saveNewThread({ id: newPinId(), block: m.b.id, option: m.o.id, w: S.width, x: x, y: y, ...(target ? {target: target} : {}) }, text, ta);
         redrawPins(m.b.id);

@@ -74,9 +74,13 @@ BROWSER_JOBS: List[Tuple[str, int]] = [
     ("tests/test_header_integration.py", 3),
     ("tests/test_export_browser.py", 3),
     ("tests/test_board_canvas.py", 3),
+    # one worker each: 112 s / 61 s serial on the macOS runner, 131-168 s / 79-119 s on Windows; declared so they
+    # start by weight instead of joining the tail of the run
+    ("tests/test_cux_anchors.py", 1),
     ("tests/test_board_threads.py", 3),
     ("tests/test_share_design.py", 3),
     ("tests/test_anchors.py", 3),
+    ("tests/test_pin_stack.py", 1),
     ("tests/test_board_share.py", 2),
     ("tests/test_page_marks.py", 2),
     # one worker: its module-scoped fixtures (scenario and navigation) can each hold a Chrome at once
