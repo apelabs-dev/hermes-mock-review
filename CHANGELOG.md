@@ -3,6 +3,14 @@
 All notable changes to this project are listed here. The format follows Keep a Changelog, and the project follows
 semantic versioning.
 
+## [2.1.3](https://github.com/apelabs-dev/hermes-mock-review/compare/v2.1.2...v2.1.3) (2026-11-20)
+
+
+### Bug Fixes
+
+* **board:** show the reviewed project's icon in the header bar ([#56](https://github.com/apelabs-dev/hermes-mock-review/issues/56)) ([2a6efff](https://github.com/apelabs-dev/hermes-mock-review/commit/2a6efff6e0dc2ce38c7793bad6bf59632b9d1261))
+* **desktop:** render design-profile mocks styled in the Mocks tab viewer ([#58](https://github.com/apelabs-dev/hermes-mock-review/issues/58)) ([8cdd9b2](https://github.com/apelabs-dev/hermes-mock-review/commit/8cdd9b2444800302441fbb5e262f9dfb65130266))
+
 ## [2.1.2](https://github.com/apelabs-dev/hermes-mock-review/compare/v2.1.1...v2.1.2) (2026-11-20)
 
 
