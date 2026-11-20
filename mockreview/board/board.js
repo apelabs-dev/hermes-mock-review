@@ -1487,12 +1487,13 @@ import {paintAvatar} from './avatar.js';
   }
 
   // ---- the bar: project icon · title · rounds | Desktop/Mobile · theme · Tailnet/Local/Public · Send ----
+  // The bar shows the reviewed project's icon from the round's design profile (labelled by the design). A round with
+  // no design icon, or whose icon file fails to load, shows the mock-review mark instead.
   function projectIcon(r) {
-    var d = r.design, label = (d && d.label) || R().title;
-    var fallback = h('span', { class: 'proj-icon proj-fallback', 'aria-hidden': 'true', text: initials(label) });
-    if (!d || !d.icon) return fallback;
-    var img = h('img', { class: 'proj-icon', src: roundBase(r) + 'design/' + d.icon, alt: label });
-    img.addEventListener('error', function () { img.replaceWith(fallback); });
+    var d = r.design;
+    if (!d || !d.icon) return brandMark();
+    var img = h('img', { class: 'proj-icon', src: roundBase(r) + 'design/' + d.icon, alt: (d.label || R().title) });
+    img.addEventListener('error', function () { img.replaceWith(brandMark()); });
     return img;
   }
   // Sticky heights: one live observer per surface. A rerender builds a new bar/footer, so the previous observer is
@@ -1539,7 +1540,7 @@ import {paintAvatar} from './avatar.js';
     var subline = 'Round ' + r.n + (r.kind === 'prototype' ? ' · prototype'
       : idx.length ? ' · ' + idx.length + (idx.length === 1 ? ' decision' : ' decisions') : '');
     var bar = h('header', { class: 'dzbar', id: 'dzbar' },
-      brandMark(),
+      projectIcon(r),
       h('div', { class: 'pb-title' }, h('strong', { class: 'pb-name', title: st.title, text: st.title }), h('span', { class: 'pb-sub', text: subline })),
       h('span', { class: 'spacer' }),
       h('div', { class: 'bar-actions' }, commentToggle(), widthSeg, shareButton(), avatarControl(), moreButton()),
