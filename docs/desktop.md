@@ -6,7 +6,13 @@ review except to delete it, and it adds nothing to the board's own HTTP surface 
 cookies and CSRF are untouched).
 
 The tab is one unified package: `desktop/plugin.js` is the Desktop half, `dashboard/plugin_api.py` is the backend half
-(a thin adapter over `mockreview/api.py` that runs inside the gateway) and `dashboard/manifest.json` registers it.
+(a thin adapter over `mockreview/api.py`) and `dashboard/manifest.json` registers it.
+
+Hermes mounts the backend half on the dashboard app. Desktop spawns a `hermes dashboard` backend rather than a gateway,
+so the backend half runs in that process, or in the plugin host under `plugins.isolation: host`. A gateway that serves
+the dashboard routes mounts it too, but it is not the usual host. The process is not always the one running the board
+server: hooks that only the board server installs, such as the live-stream closer, are installed there only when the
+board server runs in the same process (the gateway with `autostart` on, or `hermes mockreview serve`).
 
 ## The list
 
@@ -56,7 +62,9 @@ gateway: configure a tailnet or public host (see [hosting](hosting.md)) for such
 ## Delete
 
 **Delete** is on every row and in the viewer header. It opens a confirmation that names the review's title and says it
-cannot be undone. An open review is closed first (its share link and live guest connections end), then deleted.
+cannot be undone. An open review is closed first, then deleted. Closing ends its share link at once. Live guest
+connections end at once only when the board server runs in the same process as the caller. Otherwise they end at their
+own access recheck, within about 5 seconds.
 
 The same operation is `api.delete_review(review_id)`, behind `hermes mockreview delete <id> --yes` (without `--yes` it
 refuses) and the `prune` step of housekeeping. It removes the review's directory and every database row keyed by the
