@@ -224,7 +224,10 @@ def test_chrome_that_exits_early_or_never_opens_its_port_is_cleaned_up(tmp_path)
 
 def test_chrome_never_adds_security_relaxing_flags():
     src = Path(bk.__file__).read_text(encoding="utf-8")
-    assert "--disable-web-security" not in src and "--disable-site-isolation" not in src and "disable-features" not in src
+    assert "--disable-web-security" not in src and "--disable-site-isolation" not in src
+    # --disable-features is how site isolation gets switched off, so it is banned except for the one switch that stops
+    # macOS Chrome cloning its app bundle at every launch (nothing security-related). The match is the whole flag.
+    assert re.findall(r"disable-features\S*", src) == ['disable-features=MacAppCodeSignClone",']
 
 
 @posix_only
