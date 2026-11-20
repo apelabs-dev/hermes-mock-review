@@ -37,12 +37,14 @@ A decisions round with a design profile renders its mocks the way the board does
   `@media (min|max-width)` rules turned into `@container mock` rules, as on the board. Each mock sits in the board's
   box, `<div class="cq"><div class="app" data-theme="...">`. The theme is the review's `default_theme` when the
   profile has it, else the profile's default. The viewer has no theme toggle.
-- Every style rule from the profile is placed under that design's own class (`.mr-d1`, ...). The profile cannot
-  restyle the export's header or other blocks, and two designs cannot style each other's mocks. Identical CSS and
+- Every style rule from the profile is placed under that design's own class (`.mr-d1`, ...). A nested rule whose
+  only `&` sits inside a pseudo-class (`:not(&)`, `:is(&, ...)`) is dropped, since it could match outside that class.
+  The profile cannot restyle the export's header or other blocks, and two designs cannot style each other's mocks. Identical CSS and
   identical `@font-face` rules are inlined once.
 - The fonts that `fonts_css` points to (`.woff2`/`.woff` under the round's `design/` folder) are inlined as
   `data:font/...` URLs. They count against the same 20 MiB inline budget as images; a font past it is left out and
-  the mock falls back to the next family in its stack.
+  the mock falls back to the next family in its stack. When the viewer's document would pass the data URL limit,
+  it is rebuilt once without the fonts before the tab falls back to Open in browser.
 - Mocks keep app elements (`nav`, `aside`, `main`, `button`, `label`, form controls, `progress`, `meter`, `time` and
   similar) plus `role`, `aria-*`, `data-*` and form-state attributes, so the profile's attribute selectors match.
   Inline SVG keeps a static subset: shapes, groups, `text`, `use`, gradients, clip paths, masks and symbols, with

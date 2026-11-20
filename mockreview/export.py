@@ -432,6 +432,9 @@ def _css_rules(css: str, scope: Optional[str] = None, ctx: str = "top") -> str:
             continue
         if not prelude or not _css_text_ok(prelude):
             continue
+        if ctx == "style" and scope and any("&" in p and len(_css_split(p, "&")) == 1
+                                            for p in _css_split(prelude, ",")):
+            continue      # `:not(&)`, `:is(&, x)`: an `&` only inside parentheses can match outside the scope
         selector = _css_scope(prelude, None if ctx == "style" else scope)
         if selector is None:
             continue
@@ -519,8 +522,9 @@ class _Designs:
     under its own class (.mr-d1, .mr-d2, ...), so it cannot restyle the export chrome or another design's mocks; an
     identical sheet or @font-face (same content) is emitted once."""
 
-    def __init__(self, budget: _Budget) -> None:
+    def __init__(self, budget: _Budget, fonts: bool = True) -> None:
         self.budget = budget
+        self.fonts = fonts
         self.scopes: Dict[str, str] = {}
         self.sheets: List[str] = []
         self.font_rules: Dict[str, None] = {}
@@ -552,7 +556,7 @@ class _Designs:
         if key not in self.font_uris:
             uri = None
             try:
-                if f.stat().st_size <= MAX_FONT_BYTES:
+                if self.fonts and f.stat().st_size <= MAX_FONT_BYTES:
                     data = f.read_bytes()
                     if self.budget.take(len(data)):
                         uri = f"data:{mime};base64," + base64.b64encode(data).decode("ascii")
@@ -1235,8 +1239,9 @@ def export_filename(data: Dict[str, Any], round_n: int, ext: str) -> str:
 
 def build_export_html(data: Dict[str, Any], round_n: int, include_comments: bool, *,
                       threads: Optional[List[Dict[str, Any]]] = None, generated_at: Optional[str] = None,
-                      csp: str = EXPORT_CSP) -> str:
-    """The one static export document. Pure data in, HTML out; no listener and no script."""
+                      csp: str = EXPORT_CSP, fonts: bool = True) -> str:
+    """The one static export document. Pure data in, HTML out; no listener and no script. fonts=False leaves the
+    design profile's fonts out (each mock falls back to the next family in its stack)."""
     rnd = _round_of(data, int(round_n))
     rid = str(data.get("id") or "")
     kind = rnd.get("kind") or ("decisions" if rnd.get("decisions") else "variants")
@@ -1246,7 +1251,7 @@ def build_export_html(data: Dict[str, Any], round_n: int, include_comments: bool
         if variants and variants[0].get("label"):
             label = str(variants[0]["label"])
     budget = _Budget()
-    designs = _Designs(budget)
+    designs = _Designs(budget, fonts)
     opts = _Options(review_id=rid, round_n=int(round_n), variant="a",
                     image=_image_reader(rid, int(round_n), "a", budget), budget=budget, designs=designs)
     # Every variant has its own image resolver; the base one covers decisions mocks (variant a).

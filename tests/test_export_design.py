@@ -334,3 +334,36 @@ def test_a_font_over_the_budget_drops_its_font_face(env, tmp_path):
     designs = export._Designs(export._Budget(remaining=len(FONT) - 1))
     designs.add(rid, 1, "a", rnd["design"], "")
     assert "@font-face" not in designs.css() and "data:font" not in designs.css()
+
+
+@pytest.mark.parametrize("nested", [":not(&)", ":is(&, .mr-header)", ":where(body, &)", ":not(&)[data-x]"])
+def test_a_nested_selector_with_amp_only_inside_parentheses_is_dropped(nested):
+    out = sheet(".app{.k{color:red}" + nested + "{display:none}}", scope=".mr-d1")
+    assert "display:none" not in out
+    assert ".mr-d1 .app{.k{color:red}}" in out
+
+
+@pytest.mark.parametrize("nested", ["&:hover", ".x", "& + .y", "body &", "&.on"])
+def test_nested_selectors_anchored_on_amp_or_relative_are_kept(nested):
+    out = sheet(".app{" + nested + "{color:teal}}", scope=".mr-d1")
+    assert nested + "{color:teal}" in out
+
+
+def test_the_export_can_leave_the_fonts_out(env, tmp_path):
+    review = designed_review(tmp_path)
+    doc = export.build_export_html(store.load(review["id"]), 1, False, fonts=False)
+    assert "data:font/" not in doc and "@font-face" not in style_of(doc)
+    assert ".mr-d1 .app > .shell > nav{display:flex}" in style_of(doc)
+
+
+def test_the_desk_view_drops_the_fonts_before_it_gives_up(env, tmp_path, monkeypatch):
+    from mockreview import api
+    review = designed_review(tmp_path, font=b"wOF2" + bytes(range(256)) * 400)
+    with_fonts = len(api.desk_view(review["id"])["data_url"])
+    monkeypatch.setattr(api, "DESK_DATA_URL_LIMIT", with_fonts - 1)
+    payload = api.desk_view(review["id"])
+    assert payload["too_large"] is False
+    doc = base64.b64decode(payload["data_url"].split(",", 1)[1]).decode("utf-8")
+    assert "data:font/" not in doc and ".mr-d1 .app" in doc
+    monkeypatch.setattr(api, "DESK_DATA_URL_LIMIT", 100)
+    assert api.desk_view(review["id"])["too_large"] is True
