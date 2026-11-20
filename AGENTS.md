@@ -14,7 +14,8 @@ boards for UI mockups and wakes the agent when the reviewer presses Send. User d
   calls the tools and must stay generic.
 - `bin/mockreview`: runs the same CLI from a checkout, without Hermes.
 - `desktop/plugin.js`, `dashboard/plugin_api.py`, `dashboard/manifest.json`: the Mocks tab in Hermes Desktop. The
-  backend half is a thin adapter over `mockreview/api.py` that runs inside the gateway (`docs/desktop.md`).
+  backend half is a thin adapter over `mockreview/api.py`, mounted by the Hermes dashboard process (or its plugin
+  host under `plugins.isolation: host`), not the gateway (`docs/desktop.md`).
 - `pyproject.toml`: the dependencies Hermes installs (itsdangerous) and the optional `crypto` extra (PyJWT).
 - `mockreview/`: the implementation: the standard library plus itsdangerous.
   - `settings.py`: the `SPEC` table (every setting, its type, range, default, env var) and the resolver
@@ -44,14 +45,17 @@ boards for UI mockups and wakes the agent when the reviewer presses Send. User d
     frames, heartbeats) that the live-update layer drives. `live.py`: that layer, the SSE subscription registry,
     presence and typing leases and the event publisher.
   - `notify.py`: the signed wake-up POST. `secrets.py`: the only way to read a secret. `config.py`, `locks.py`: paths,
-    URLs and a cross-platform file lock.
+    URLs and a cross-platform file lock. `wakeguard.py`: when a board may wake a session that `wake_toolsets`
+    gave tools: only while it is gated (loopback bind, no `public_url`, not `public`).
   - `db.py`: the SQLite store (`access.sqlite3`): one connection per thread, WAL, `user_version` migrations.
     `users.py`: accounts, invite/login/share links, sessions, grants, tokens, audit. `access.py`: the one access check
     (`resolve`). `auth.py`: who is asking (session, proxy identity, loopback owner), CSRF and throttling. `pages.py`: the
     sign-in, invite and dead-link pages. `streams.py`: the hook that closes live streams when sessions or links end.
   - `board/`: the static board UI (`index.html`, `board.js`, `board.css`) and the Settings page (`settings.js`,
-    `settings.css`).
-- `docs/`: user docs. `settings.md` and `cli.md` are generated. `img/` holds the README screenshot.
+    `settings.css`). `tw.css` is generated from `mockreview/board/src/board.src.css` by `npm run build:css`; never
+    edit it by hand. `vendor/`: vendored DOMPurify, SnapDOM and Turndown builds.
+- `docs/`: user docs. `settings.md` and `cli.md` are generated. `img/` holds the README screenshots and the
+  plugin catalog banner.
 - `scripts/gen_docs_reference.py`: regenerates `docs/settings.md` and `docs/cli.md`. `scripts/check_docs.py`: checks the
   docs against the tree. `scripts/gen_plugin_manifest.py`: rewrites `config_schema:` in `plugin.yaml`.
   `scripts/tempguard.py`: what the test harnesses use so a killed run leaves nothing behind (scratch dirs with an owner
