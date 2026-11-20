@@ -160,13 +160,17 @@ def test_ci_tests_job_keeps_every_required_check_and_scopes_only_the_run_steps()
     steps = {step["name"]: step for step in job["steps"] if "name" in step}
     scope = [step for step in job["steps"] if step.get("id") == "scope"]
     assert len(scope) == 1, "the tests job needs exactly one scope step"
-    gate = scope[0]["if"]
-    assert "github.event_name == 'pull_request'" in gate
-    assert "startsWith(github.head_ref, 'release-please--')" in gate, \
+    assert scope[0]["if"] == "${{ github.event_name == 'pull_request' }}"
+    assert scope[0]["env"]["RELEASE_BRANCH"] == "${{ startsWith(github.head_ref, 'release-please--') }}"
+    script = scope[0]["run"]
+    assert '[ "$scope" = "version-only" ] && [ "$RELEASE_BRANCH" = "true" ]' in script, \
         "a hand-made pull request that only edits plugin.yaml must still run every test"
-    for name, skipped_part in (("Run the non-browser tier", "browser"), ("Run the browser tier", "nonbrowser")):
-        assert steps[name]["if"] == \
-            "${{{{ !cancelled() && steps.scope.outputs.tests != 'skip' && matrix.part != '{}' }}}}".format(skipped_part)
+    assert '"$scope" = "docs-only"' in script and 'echo "browser=skip"' in script
+    assert steps["Run the non-browser tier"]["if"] == \
+        "${{ !cancelled() && steps.scope.outputs.tests != 'skip' && matrix.part != 'browser' }}", \
+        "a docs-only pull request must still run the non-browser tier, which holds the docs checks"
+    assert steps["Run the browser tier"]["if"] == ("${{ !cancelled() && steps.scope.outputs.tests != 'skip' && "
+                                                   "steps.scope.outputs.browser != 'skip' && matrix.part != 'nonbrowser' }}")
     for name, skipped_part in (("Upload the non-browser logs", "browser"), ("Upload the browser logs", "nonbrowser")):
         assert steps[name]["if"] == "${{{{ always() && matrix.part != '{}' }}}}".format(skipped_part)
     # Only the separate browser row on a pull request may end green on a failure; main still fails on it.

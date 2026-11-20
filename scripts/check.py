@@ -349,7 +349,7 @@ class Runner:
         if workers > 1:
             cmd += ["-n", str(workers)]
         cmd += list(files)
-        print("[%s] $ %s" % (name, " ".join(cmd[1:])), flush=True)
+        _emit("[%s] $ %s" % (name, " ".join(cmd[1:])))
         res = Result(name=name, cmd=cmd, log=log, xml=xml)
         env = dict(os.environ)
         env.update(MOCKREVIEW_CHROMES=str(CHROMES),
@@ -376,10 +376,7 @@ class Runner:
             res.note = "pytest ran no tests"
         if record:
             self.record(res)
-        print("[%s] %d tests, %d failed, %d skipped in %.1fs%s"
-              % (name, res.tests, res.failed, res.skipped, res.wall, (" (" + res.note + ")") if res.note else ""),
-              flush=True)
-        _replacements(res)
+        _report(res)
         if not res.ok:
             _failure_tail(res)
         return res
@@ -544,20 +541,19 @@ def run_browser_job(runner: Runner, path: str, units: int) -> Result:
         runner.record(first)
         return first
     ids = failed_ids(first.xml, path) if runner.all_failures else []
-    print("[%s] retrying %s once" % (name, ("%d failed test(s)" % len(ids)) if ids else "the module"), flush=True)
+    _emit("[%s] retrying %s once" % (name, ("%d failed test(s)" % len(ids)) if ids else "the module"))
     second = runner.run(name + "-retry", ids or [path], marker="browser",
                         workers=min(units, len(ids)) if ids else units, record=False)
     if not second.ok or (ids and second.tests < len(ids)):
         first.retry_log = second.log
-        print("[%s] failed again on the retry" % name, flush=True)
+        _emit("[%s] failed again on the retry" % name)
         runner.record(first)
         return first
     flaky = ids or failed_ids(first.xml, path) or ["%s (the whole module, pytest exit %d)" % (path, first.rc)]
     base = first if ids else second
     final = Result(name=name, cmd=first.cmd, log=first.log, xml=first.xml, wall=first.wall + second.wall,
                    tests=base.tests, skipped=base.skipped, flaky=flaky, retry_log=second.log)
-    print("[%s] flaky: %d test(s) failed, then passed on the retry: %s" % (name, len(flaky), ", ".join(flaky)),
-          flush=True)
+    _emit("[%s] flaky: %d test(s) failed, then passed on the retry: %s" % (name, len(flaky), ", ".join(flaky)))
     runner.record(final)
     return final
 
@@ -606,12 +602,12 @@ def run_browser_pool(runner: Runner, jobs: Sequence[Tuple[str, int]]) -> List[Re
             failures += sum(1 for r in holder if not r.ok)
         if failures and not runner.all_failures:
             if pending:
-                print("[browser] stopped scheduling after a failure", flush=True)
+                _emit("[browser] stopped scheduling after a failure")
             pending.clear()
     if pending:                                 # nothing that fits was left, yet work remains: never green
         names = ", ".join(Path(path).stem for path, _ in pending)
         note = "%d browser module(s) never ran: %s" % (len(pending), names)
-        print("[browser] %s" % note, flush=True)
+        _emit("[browser] %s" % note)
         runner.results.append(Result(name="browser", cmd=[], log=runner.logs / "browser-unscheduled.log",
                                      xml=runner.logs / "browser-unscheduled.xml", note=note))
     return runner.results
@@ -636,17 +632,47 @@ def _duration(seconds: float) -> str:
 
 REPLACING = "browserkit: replacing"
 
+#: Job output comes from one thread per browser job (see run_browser_pool), and print() writes its text and its
+#: newline in separate calls. Two jobs printing at the same moment could therefore put one job's line inside
+#: another's newline: on the Windows CI job that merged a summary line with the next job's replacement line and
+#: the two never split again. Whole blocks go out in a single write, under a lock.
+_WRITE_LOCK = threading.Lock()
 
-def _replacements(res: Result) -> None:
-    """Print the browser replacements a job's log recorded, whatever the job's outcome. pytest hides a passing test's
+
+def _write(text: str, stream=None) -> None:
+    """Write a block that already ends in a newline in one call, so no other thread can land inside it."""
+    if not text.endswith("\n"):
+        text += "\n"
+    out = stream or sys.stdout
+    with _WRITE_LOCK:
+        out.write(text)
+        out.flush()
+
+
+def _emit(*lines: str, stream=None) -> None:
+    """Print whole lines in one write: the newline always travels with the text of its own line."""
+    _write("".join(line if line.endswith("\n") else line + "\n" for line in lines), stream)
+
+
+def _replacements(res: Result) -> List[str]:
+    """The browser replacements a job's log recorded, whatever the job's outcome. pytest hides a passing test's
     stderr unless -rP lists it, and a green run that had to replace a browser is the one nobody opens the log of."""
     try:
         lines = res.log.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
-        return
-    for line in lines:
-        if REPLACING in line:
-            print("[%s] %s" % (res.name, line[line.index(REPLACING):].rstrip()), flush=True)
+        return []
+    return ["[%s] %s" % (res.name, line[line.index(REPLACING):].rstrip())
+            for line in lines if REPLACING in line]
+
+
+def _summary_line(res: Result) -> str:
+    return "[%s] %d tests, %d failed, %d skipped in %.1fs%s" % (
+        res.name, res.tests, res.failed, res.skipped, res.wall, (" (" + res.note + ")") if res.note else "")
+
+
+def _report(res: Result, stream=None) -> None:
+    """A job's summary and its replacement lines as one write, so they always read as that job's own block."""
+    _emit(_summary_line(res), *_replacements(res), stream=stream)
 
 
 def _failure_tail(res: Result) -> None:
@@ -655,8 +681,7 @@ def _failure_tail(res: Result) -> None:
         lines = res.log.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         lines = []
-    print("\n----- %s failed (%s) -----\n%s" % (res.name, res.log, "\n".join(lines[-60:])),
-          file=sys.stderr, flush=True)
+    _write("\n----- %s failed (%s) -----\n%s\n" % (res.name, res.log, "\n".join(lines[-60:])), stream=sys.stderr)
 
 
 def _flaky_report(results: Sequence[Result]) -> None:
