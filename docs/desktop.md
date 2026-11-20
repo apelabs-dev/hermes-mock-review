@@ -29,6 +29,35 @@ The round is the same self-contained HTML as `hermes mockreview export`: `mockre
 through an allowlist, so a `<script>`, an event handler or a remote URL in a block does not survive, and the document
 carries a CSP meta tag with `default-src 'none'`.
 
+### What a mock looks like
+
+A decisions round with a design profile renders its mocks the way the board does:
+
+- The profile's `mock_css` and the round's `extra_css` go into the document's one `<style>`, with width-only
+  `@media (min|max-width)` rules turned into `@container mock` rules, as on the board. Each mock sits in the board's
+  box, `<div class="cq"><div class="app" data-theme="...">`. The theme is the review's `default_theme` when the
+  profile has it, else the profile's default. The viewer has no theme toggle.
+- Every style rule from the profile is placed under that design's own class (`.mr-d1`, ...). A nested rule whose
+  only `&` sits inside a pseudo-class (`:not(&)`, `:is(&, ...)`) is dropped, since it could match outside that class.
+  The profile cannot restyle the export's header or other blocks, and two designs cannot style each other's mocks. Identical CSS and
+  identical `@font-face` rules are inlined once.
+- The fonts that `fonts_css` points to (`.woff2`/`.woff` under the round's `design/` folder) are inlined as
+  `data:font/...` URLs. They count against the same 20 MiB inline budget as images; a font past it is left out and
+  the mock falls back to the next family in its stack. When the viewer's document would pass the data URL limit,
+  it is rebuilt once without the fonts before the tab falls back to Open in browser.
+- Mocks keep app elements (`nav`, `aside`, `main`, `button`, `label`, form controls, `progress`, `meter`, `time` and
+  similar) plus `role`, `aria-*`, `data-*` and form-state attributes, so the profile's attribute selectors match.
+  Inline SVG keeps a static subset: shapes, groups, `text`, `use`, gradients, clip paths, masks and symbols, with
+  presentation and geometry attributes only.
+
+Still stripped: scripts, event handlers, `href` on links, form `action` and `formaction`, every `src` except an
+inlined image, and in SVG `foreignObject`, `script`, `style`, `image`, animation elements, filters and any `href`
+or `url()` that is not a `#fragment`. In CSS, a rule that fails a check is dropped on its own. That covers `<`
+anywhere, `>` inside a value, any non-`data:` URL, `@import`, `@property` and other unknown at-rules, a selector
+that opens with a combinator, and an `@font-face` source other than a `data:font/woff2` or `data:font/woff` URL. The
+board draws a desktop mock 1280 px wide and scales it down; the viewer lays it out at the column's real width (about
+900 px), so the app's narrower container layouts can apply.
+
 ### `data:` URL, not a route
 
 The frame gets the document as a `data:text/html;base64,...` URL. A plugin_api route cannot be the frame's `src`: every

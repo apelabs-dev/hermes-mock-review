@@ -1162,3 +1162,93 @@ def test_mock_text_stays_readable_in_the_export_in_both_themes(env, tmp_path, ch
         assert got["ratio"] >= 4.5, f"{theme}: mock text {got['fg']} has contrast {got['ratio']:.2f} (< 4.5)"
     finally:
         close_page(page)
+
+
+DESIGN_MOCK_CSS = """
+.app{--bg:#123456;background:var(--bg);color:#f0f0f0;padding:8px}
+.app[data-theme=light]{--bg:#fedcba;color:#101010}
+.app > .shell > nav.tabs{display:flex;gap:8px}
+.app .tabs > a + a{margin-left:4px}
+.app .ico{width:16px;height:16px;display:inline-block}
+.app [data-state=on]{color:rgb(4, 5, 6)}
+.app [aria-current=page]{font-weight:700}
+.app .grid > table td{padding:3px}
+@media (max-width: 1000px){.app .cq-probe{color:rgb(1, 2, 3)}}
+@keyframes mo-fade{from{opacity:0}to{opacity:1}}
+"""
+
+DESIGN_MOCK_HTML = (
+    '<div class="shell"><nav class="tabs"><a href="#" aria-current="page">Overview</a><a>Activity</a>'
+    '<a>Settings</a></nav>'
+    '<svg class="ico" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M0 0h16v16H0z" '
+    'fill="currentColor"/></svg>'
+    '<span class="flag" data-state="on">On</span><p class="cq-probe">Narrow box</p>'
+    '<div class="grid"><table><tr><td>A</td><td>B</td></tr></table></div></div>')
+
+
+def design_review(tmp_path, name="designed"):
+    """A decisions round with a small design profile: child combinators, a width media query, keyframes, an svg icon,
+    a nav and data-/aria- attribute selectors. The extra_css also tries to restyle the export's own chrome."""
+    prof = tmp_path / (name + "-profile")
+    prof.mkdir(parents=True)
+    (prof / "design.json").write_text(json.dumps({
+        "name": "sample", "label": "Sample", "default_theme": "dark", "mock_css": "mock.css",
+        "themes": {"dark": {"bg": "#123456", "surface": "#1a2b3c", "text": "#f0f0f0", "accent": "#88aaff"},
+                   "light": {"bg": "#fedcba", "surface": "#ffffff", "text": "#101010", "accent": "#3355cc"}}}),
+        encoding="utf-8")
+    (prof / "mock.css").write_text(DESIGN_MOCK_CSS, encoding="utf-8")
+    src = tmp_path / (name + "-round") / "decisions.json"
+    src.parent.mkdir(parents=True)
+    src.write_text(json.dumps({
+        "extra_css": ".app .shell{border-top:3px solid rgb(7, 8, 9)}\nh1{color:rgb(255, 0, 0)}\n"
+                     ".mr-header{display:none}",
+        "blocks": [{"type": "mock", "id": "m1", "title": "Designed", "html": DESIGN_MOCK_HTML}]}), encoding="utf-8")
+    return store.create_review(name, "", ORIGIN, "tailscale",
+                               store.parse_round_spec(decisions=str(src), design=str(prof)), wake=False)
+
+
+DESIGN_PROBE_JS = r"""
+(function () {
+  function cs(sel, prop) { var e = document.querySelector(sel); return e ? getComputedStyle(e)[prop] : null; }
+  var svg = document.querySelector('.mr-mock svg.ico'), box = svg ? svg.getBoundingClientRect() : null;
+  return JSON.stringify({
+    app_bg: cs('.mr-mock .app', 'backgroundColor'),
+    app_theme: (document.querySelector('.mr-mock .app') || {getAttribute: function () { return null; }})
+      .getAttribute('data-theme'),
+    nav_display: cs('.mr-mock nav.tabs', 'display'),
+    svg_box: box ? [box.width, box.height] : null,
+    flag: cs('.mr-mock [data-state=on]', 'color'),
+    current: cs('.mr-mock [aria-current=page]', 'fontWeight'),
+    container_probe: cs('.mr-mock .cq-probe', 'color'),
+    shell_border: cs('.mr-mock .shell', 'borderTopColor'),
+    h1: cs('.mr-header h1', 'color'),
+    header_display: cs('.mr-header', 'display')
+  });
+})()
+"""
+
+
+def test_a_design_profile_mock_is_styled_in_the_desk_viewer(env, tmp_path, chrome):
+    """The Desktop viewer (api.desk_view's data: URL, the export document) renders a design-profile mock the way the
+    board does: the profile CSS + extra_css apply inside a `.cq > .app[data-theme]` box, width media queries become
+    container queries on that box, and the inline svg, nav and data-/aria- attributes survive. The design CSS cannot
+    restyle the export's own chrome."""
+    from mockreview import api
+    data = design_review(tmp_path)
+    view = api.desk_view(data["id"])
+    assert view["too_large"] is False and view["data_url"]
+    page = Page(chrome, view["data_url"], width=1280, height=900)
+    try:
+        assert page.until("!!document.querySelector('.mr-mock')"), "the desk document has no mock"
+        got = json.loads(page.js(DESIGN_PROBE_JS))
+        assert got["app_bg"] == "rgb(18, 52, 86)", f"the design background is not on .app: {got}"
+        assert got["app_theme"] == "dark", got
+        assert got["nav_display"] == "flex", f"the nav is not the design's flex row: {got}"
+        assert got["svg_box"] and got["svg_box"][0] > 0 and got["svg_box"][1] > 0, f"the svg icon has no box: {got}"
+        assert got["flag"] == "rgb(4, 5, 6)", f"a data-* attribute selector did not match: {got}"
+        assert got["current"] == "700", f"an aria-* attribute selector did not match: {got}"
+        assert got["container_probe"] == "rgb(1, 2, 3)", f"the width media query is not a container query: {got}"
+        assert got["shell_border"] == "rgb(7, 8, 9)", f"extra_css did not apply: {got}"
+        assert got["h1"] != "rgb(255, 0, 0)" and got["header_display"] != "none", f"design CSS restyled chrome: {got}"
+    finally:
+        close_page(page)

@@ -14,6 +14,7 @@ only data: images. Comments are plain text.
 from __future__ import annotations
 
 import base64
+import hashlib
 import html
 import importlib
 import inspect
@@ -35,16 +36,44 @@ MAX_INLINE_BYTES = 20 * 1024 * 1024
 IMAGE_MIMES = {"png": "image/png", "jpeg": "image/jpeg", "jpg": "image/jpeg", "webp": "image/webp", "gif": "image/gif"}
 
 ALLOWED_TAGS = frozenset("""
-p div span a b i em strong small code pre ul ol li table thead tbody tr td th h1 h2 h3 h4 h5 h6 img figure
-figcaption section article header footer dl dt dd blockquote hr br details summary
+p div span a b i em strong small code pre ul ol li table thead tbody tfoot tr td th caption colgroup col h1 h2 h3
+h4 h5 h6 img figure figcaption section article header footer dl dt dd blockquote hr br details summary
+nav aside main button label select option input textarea progress meter time mark sup sub s u abbr kbd
 """.split())
 VOID_TAGS = frozenset("area base br col embed hr img input link meta param source track wbr".split())
-# These are dropped together with everything inside them: their "text" is code/markup, not prose.
+# These are dropped together with everything inside them: their "text" is code/markup, not prose. `svg` is not here:
+# it goes through the inline SVG subset (_serialize_svg).
 DROP_SUBTREE = frozenset("""
-script style iframe frame frameset object embed applet svg math template noscript canvas video audio source
+script style iframe frame frameset object embed applet math template noscript canvas video audio source
 link meta base title head
 """.split())
-ALLOWED_ATTRS = frozenset("class id style alt title width height colspan rowspan".split())
+ALLOWED_ATTRS = frozenset("""
+class id style alt title width height colspan rowspan span role type value placeholder checked disabled selected for
+name hidden open min max low high optimum readonly multiple rows cols datetime
+""".split())
+# data-* and aria-* keep their (escaped) value so a design's attribute selectors still match.
+_DATA_ARIA_ATTR = re.compile(r"(?:data-[a-z0-9_.-]{1,60}|aria-[a-z]{1,30})")
+
+# The inline SVG subset: static shapes, text and paint servers. No foreignObject, script, style, image, animation,
+# filter or link element; those go with everything inside them. The HTML parser lowercases names, so each maps back
+# to its SVG spelling.
+SVG_TAGS = {t.lower(): t for t in """
+svg g path circle rect line polyline polygon ellipse defs linearGradient radialGradient stop clipPath mask symbol use
+title text tspan
+""".split()}
+SVG_LEAF_TAGS = frozenset("path circle rect line polyline polygon ellipse stop use".split())
+SVG_UNWRAP = frozenset(("a", "switch"))
+SVG_ATTRS = {a.lower(): a for a in """
+id class style role width height x y x1 y1 x2 y2 cx cy r rx ry d points pathLength viewBox preserveAspectRatio
+transform fill fill-opacity fill-rule stroke stroke-width stroke-linecap stroke-linejoin stroke-dasharray
+stroke-dashoffset stroke-opacity stroke-miterlimit opacity color display visibility overflow clip-path clip-rule mask
+vector-effect shape-rendering paint-order gradientUnits gradientTransform spreadMethod fx fy fr offset stop-color
+stop-opacity clipPathUnits maskUnits maskContentUnits refX refY dx dy rotate text-anchor dominant-baseline
+alignment-baseline baseline-shift font-family font-size font-weight font-style letter-spacing word-spacing
+textLength lengthAdjust focusable
+""".split()}
+_SVG_FRAGMENT = re.compile(r"#[A-Za-z_][A-Za-z0-9_.:-]{0,100}")
+_SVG_URL_FRAGMENT = re.compile(r"""url\(\s*(["']?)#[A-Za-z_][A-Za-z0-9_.:-]{0,100}\1\s*\)""", re.I)
 _URL_SCHEME = re.compile(r"(?i)\b(https?|mailto|javascript|blob|cid|ftp|file):")
 _DATA_IMAGE = re.compile(r"^data:image/(png|jpeg|webp|gif);base64,([A-Za-z0-9+/=\s]+)$", re.I)
 MAX_BASE64 = (MAX_IMAGE_BYTES * 4) // 3 + 4
@@ -140,7 +169,8 @@ _CSS_HEX_ESCAPE = re.compile(r"\\([0-9a-fA-F]{1,6})[ \t\r\n\f]?")
 _CSS_CHAR_ESCAPE = re.compile(r"\\([^0-9a-fA-F\r\n])")
 _CSS_URL = re.compile(r"""url\(\s*(?:"([^"]*)"|'([^']*)'|([^)\s]*))\s*\)""", re.I)
 _CSS_DATA_IMAGE = re.compile(r"data:image/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+", re.I)
-_CSS_PROPERTY = re.compile(r"-?[a-z][a-z0-9-]*", re.I)
+_CSS_DATA_FONT = re.compile(r"data:font/(woff2|woff);base64,[A-Za-z0-9+/=]+", re.I)
+_CSS_PROPERTY = re.compile(r"--[a-z0-9_-]{1,80}|-?[a-z][a-z0-9-]*", re.I)   # custom properties too
 _CSS_SCHEME = re.compile(r"[a-z][a-z0-9+.-]*:", re.I)
 _CSS_DANGER = ("expression(", "javascript:", "vbscript:", "-moz-binding", "behavior", "image-set(", "src(")
 
@@ -180,7 +210,8 @@ def _css_replace_urls(text: str) -> str:
         payload = _css_url_payload(m)
         if len(payload) > 1 and payload.startswith("#"):
             return m.group(0)
-        if _CSS_DATA_IMAGE.fullmatch(payload):
+        if _CSS_DATA_IMAGE.fullmatch(payload) or _CSS_DATA_FONT.fullmatch(payload):
+            # A data: font survives only into an @font-face src (_css_font_src); every other value refuses it.
             return 'url("' + payload + '")'
         return 'url("")'
     return _CSS_URL.sub(repl, text)
@@ -201,6 +232,8 @@ def _css_balanced(text: str) -> bool:
         if quote:
             if ch == quote:
                 quote = ""
+            elif ch in "\r\n\f":
+                return False      # a browser ends a string at a newline (a bad string): never emit one
         elif ch in "\"'":
             quote = ch
         elif ch == "(":
@@ -245,7 +278,7 @@ def _css_value(value: str) -> Optional[str]:
     if "\\" in value or "<" in value or ">" in value:
         return None
     value = _css_strip_danger(_css_replace_urls(value))
-    if "\\" in value or "<" in value or ">" in value or not _css_balanced(value):
+    if "\\" in value or "<" in value or ">" in value or "{" in value or "}" in value or not _css_balanced(value):
         return None
     remaining = _CSS_URL.sub(lambda m: "" if _css_safe_url(_css_url_payload(m)) else "\0", value)
     if "\0" in remaining or "url(" in remaining.lower():
@@ -258,7 +291,7 @@ def _css_value(value: str) -> Optional[str]:
     return value
 
 
-def _css_declarations(text: str) -> Optional[str]:
+def _css_declarations(text: str, font_face: bool = False) -> Optional[str]:
     out = []
     for part in _css_split(text, ";"):
         if not part.strip():
@@ -269,26 +302,83 @@ def _css_declarations(text: str) -> Optional[str]:
         prop = pair[0].strip()
         if not _CSS_PROPERTY.fullmatch(prop):
             continue
-        value = _css_value(pair[1])
+        value = _css_font_src(pair[1]) if font_face and prop.lower() == "src" else _css_value(pair[1])
         if value is None:
             continue
         out.append(prop + ":" + value.strip())
     return ";".join(out)
 
 
-def _css_prelude_ok(prelude: str) -> bool:
-    text = prelude.strip()
-    if not text:
-        return True
-    if text.startswith("@"):
-        if not re.match(r"(?i)@media\b", text):
-            return False
-        text = re.sub(r"(?i)^@media\b", "", text, count=1)
-    if "\\" in text or "<" in text or ">" in text or "@" in text or "//" in text:
+_CSS_FONT_SOURCE = re.compile(
+    r"""\s*url\(\s*(["']?)(data:font/(?:woff2|woff);base64,[A-Za-z0-9+/=]+)\1\s*\)"""
+    r"""(?:\s+format\(\s*(["']?)(woff2|woff)\3\s*\))?\s*""", re.I)
+
+
+def _css_font_src(value: str) -> Optional[str]:
+    """An @font-face src: data:font/woff2 and data:font/woff URLs only; local() and every other source is dropped."""
+    keep = []
+    for item in _css_split(value, ","):
+        m = _CSS_FONT_SOURCE.fullmatch(item)
+        if m:
+            keep.append('url("' + m.group(2) + '")' + (' format("' + m.group(4).lower() + '")' if m.group(4) else ""))
+    return ", ".join(keep) or None
+
+
+def _css_text_ok(text: str) -> bool:
+    """Prelude text: no escape, `<`, at-sign, brace, semicolon, comment, `//`, url() or dangerous token; balanced."""
+    if any(c in text for c in "\\<@{};") or "//" in text or "/*" in text:
         return False
-    if "url(" in text.lower() or not _css_balanced(text):
+    low = text.lower()
+    if "url(" in low or any(token in low for token in _CSS_DANGER):
         return False
-    return not any(token in text.lower() for token in _CSS_DANGER)
+    return _css_balanced(text)
+
+
+_CSS_CONDITION = re.compile(r"[A-Za-z0-9\s().:,%=>-]*")
+_CSS_KEYFRAME_SELECTOR = re.compile(r"\s*(?:from|to|\d{1,3}(?:\.\d+)?%)\s*(?:,\s*(?:from|to|\d{1,3}(?:\.\d+)?%)\s*)*",
+                                    re.I)
+_CSS_KEYFRAMES_NAME = re.compile(r"""\s*(?:-?[A-Za-z_][A-Za-z0-9_-]*|"[A-Za-z0-9 _-]{1,60}")\s*""")
+_CSS_GROUP_RULES = ("media", "container", "supports")
+
+
+def _css_at_rule(prelude: str) -> Tuple[Optional[str], str]:
+    """(kind, rebuilt prelude) for an at-rule this sanitizer keeps, (None, "") for one whose rule is dropped:
+    @property (its syntax descriptor carries `<`), @import, @namespace, @page, @layer and anything unknown."""
+    m = re.match(r"@(-?[A-Za-z][A-Za-z-]*)(.*)$", prelude, re.S)
+    if not m:
+        return None, ""
+    name, rest = m.group(1).lower(), m.group(2)
+    if rest and not rest[0].isspace() and rest[0] not in "(\"":
+        return None, ""
+    if name in ("media", "container"):
+        if rest.strip() and _CSS_CONDITION.fullmatch(rest) and _css_text_ok(rest):
+            return name, "@" + name + " " + rest.strip()
+        return None, ""
+    if name == "supports":
+        if rest.strip() and _css_text_ok(rest):
+            return name, "@supports " + rest.strip()
+        return None, ""
+    if name in ("keyframes", "-webkit-keyframes"):
+        if _CSS_KEYFRAMES_NAME.fullmatch(rest):
+            return "keyframes", "@keyframes " + rest.strip()
+        return None, ""
+    if name == "font-face" and not rest.strip():
+        return "font-face", "@font-face"
+    return None, ""
+
+
+def _css_scope(selector: str, scope: Optional[str]) -> Optional[str]:
+    """A selector list with every complex selector placed under `scope` (no scope: unchanged)."""
+    parts = [p.strip() for p in _css_split(selector, ",")]
+    if any(not p for p in parts):
+        return None
+    if scope is None:
+        return ",".join(parts)
+    # A selector that opens with a combinator would hang off the scope itself (`.mr-d1 ~ .x` reaches the export
+    # chrome next to the mock); it is invalid at a sheet's top level anyway, so the rule goes.
+    if any(p[0] in ">+~" for p in parts):
+        return None
+    return ",".join(scope + " " + p for p in parts)
 
 
 def _css_block_end(css: str, start: int) -> Optional[int]:
@@ -305,52 +395,78 @@ def _css_block_end(css: str, start: int) -> Optional[int]:
     return None
 
 
-def _css_rules(css: str) -> Optional[str]:
+def _css_rules(css: str, scope: Optional[str] = None, ctx: str = "top") -> str:
+    """Rebuild a sheet rule by rule from allowlisted parts. A rule that fails a check is dropped on its own; the rest
+    of the sheet stays. Every emitted prelude and value is brace-free and quote-balanced, so a browser splits the
+    output into exactly these rules. ctx: "top"/"group" (style rules go under `scope`), "style" (nested in a style
+    rule that already is), "keyframes" (keyframe selectors only)."""
     out = []
     i = 0
     while i < len(css):
         open_at = css.find("{", i)
         if open_at < 0:
-            prelude = css[i:]
-            if not _css_prelude_ok(prelude):
-                return None
-            out.append(prelude)
-            break
-        prelude = css[i:open_at]
-        if not _css_prelude_ok(prelude):
-            return None
+            break      # trailing text without a block is dropped
         close_at = _css_block_end(css, open_at + 1)
         if close_at is None:
-            return None
+            break      # an unterminated block is dropped with everything after it
+        # Statements before the block (`@charset "x";`, `@import ...;`, `@layer a, b;`) are dropped.
+        prelude = _css_split(css[i:open_at], ";")[-1].strip()
         inner = css[open_at + 1:close_at]
-        out.append(prelude + "{")
-        if "{" in inner:
-            nested = _css_rules(inner)
-            if nested is None:
-                return None
-            out.append(nested)
-        else:
-            out.append(_css_declarations(inner) or "")
-        out.append("}")
         i = close_at + 1
+        if "<" in prelude or "<" in inner:
+            continue
+        if ctx == "keyframes":
+            if _CSS_KEYFRAME_SELECTOR.fullmatch(prelude) and "{" not in inner:
+                out.append(prelude + "{" + (_css_declarations(inner) or "") + "}")
+            continue
+        if prelude.startswith("@"):
+            kind, head = _css_at_rule(prelude)
+            if kind in _CSS_GROUP_RULES:
+                out.append(head + "{" + _css_rules(inner, scope, "style" if ctx == "style" else "group") + "}")
+            elif kind == "keyframes" and ctx != "style":
+                out.append(head + "{" + _css_rules(inner, None, "keyframes") + "}")
+            elif kind == "font-face" and ctx != "style" and "{" not in inner:
+                decls = _css_declarations(inner, font_face=True) or ""
+                if re.search(r"(?i)(?:^|;)src:", decls):
+                    out.append(head + "{" + decls + "}")
+            continue
+        if not prelude or not _css_text_ok(prelude):
+            continue
+        if ctx == "style" and scope and any("&" in p and len(_css_split(p, "&")) == 1
+                                            for p in _css_split(prelude, ",")):
+            continue      # `:not(&)`, `:is(&, x)`: an `&` only inside parentheses can match outside the scope
+        selector = _css_scope(prelude, None if ctx == "style" else scope)
+        if selector is None:
+            continue
+        if "{" in inner:
+            out.append(selector + "{" + _css_rules(inner, scope, "style") + "}")
+        else:
+            out.append(selector + "{" + (_css_declarations(inner) or "") + "}")
     return "".join(out)
 
 
-def _sanitize_css(text: str, *, sheet: bool) -> Optional[str]:
+_CSS_KEPT_AT = re.compile(r"(?i)@(?:media|container|supports|keyframes|font-face)\b")
+
+
+def _sanitize_css(text: str, *, sheet: bool, scope: Optional[str] = None) -> Optional[str]:
+    """A stylesheet (sheet=True) or a declaration list, rebuilt from allowlisted parts. In a sheet a bad rule drops
+    that rule only, and `scope` (a selector) is placed in front of every style rule."""
     css = _css_normalize(text)
-    if "\\" in css or "<" in css or ">" in css:
+    if "\\" in css or (not sheet and ("<" in css or ">" in css)):
         return None
     css = _css_strip_danger(_css_replace_urls(css))
     css = re.sub(r"@import\b[^;{}]*(?:\{[^{}]*\}|;|$)", "", css, flags=re.I | re.S)
-    out = _css_rules(css) if sheet else _css_declarations(css)
+    out = _css_rules(css, scope) if sheet else _css_declarations(css)
     if out is None:
         return None
     if sheet:
-        masked = _CSS_URL.sub(lambda m: "" if _css_safe_url(_css_url_payload(m)) else "\0", out)
+        # The last line of defence: whatever the rule walk kept must still pass the whole-sheet checks.
+        masked = _CSS_URL.sub(lambda m: "" if _css_safe_url(_css_url_payload(m))
+                              or _CSS_DATA_FONT.fullmatch(_css_url_payload(m)) else "\0", out)
         if "\0" in masked or "url(" in masked.lower() or "//" in masked:
             return None
-        masked = re.sub(r"(?i)@media\b", "", masked)
-        if "\\" in masked or "<" in masked or ">" in masked or "@" in masked:
+        masked = _CSS_KEPT_AT.sub("", masked)
+        if "\\" in masked or "<" in masked or "@" in masked:
             return None
     return out
 
@@ -371,6 +487,122 @@ class _Budget:
         return True
 
 
+MAX_DESIGN_CSS_BYTES = 2 * 1024 * 1024
+MAX_FONT_BYTES = 2 * 1024 * 1024
+FONT_MIMES = {"woff2": "font/woff2", "woff": "font/woff"}
+
+
+def _to_container(css: str) -> str:
+    """board.js toContainer(): a width-only @media becomes `@container mock`, so the app's CSS, written for a
+    viewport, lays out against the mock's box (.cq) instead."""
+    def repl(m: re.Match) -> str:
+        cond = re.sub(r"(?i)^(only\s+)?screen\s+and\s+", "", m.group(1).strip(), count=1)
+        if re.fullmatch(r"(?i)(\(\s*(min|max)-width\s*:\s*[\d.]+px\s*\)\s*(and\s*)?)+", cond):
+            return "@container mock " + cond + " {"
+        return m.group(0)
+    return re.sub(r"@media\s+([^{;]+)\{", repl, css)
+
+
+def _css_top_rules(css: str) -> List[str]:
+    """Split sanitizer output (brace-free preludes and values) into its top-level rules."""
+    out, depth, start = [], 0, 0
+    for i, ch in enumerate(css):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                out.append(css[start:i + 1])
+                start = i + 1
+    return out
+
+
+class _Designs:
+    """The design CSS of one export document. A profile's mock.css + the round's extra_css become one sheet scoped
+    under its own class (.mr-d1, .mr-d2, ...), so it cannot restyle the export chrome or another design's mocks; an
+    identical sheet or @font-face (same content) is emitted once."""
+
+    def __init__(self, budget: _Budget, fonts: bool = True) -> None:
+        self.budget = budget
+        self.fonts = fonts
+        self.scopes: Dict[str, str] = {}
+        self.sheets: List[str] = []
+        self.font_rules: Dict[str, None] = {}
+        self.font_uris: Dict[str, Optional[str]] = {}
+
+    def _text(self, rid: str, round_n: int, variant: str, rel: str) -> str:
+        try:
+            f = store.safe_variant_file(rid, str(round_n), variant, rel)
+            if f.stat().st_size > MAX_DESIGN_CSS_BYTES:
+                return ""
+            return f.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            return ""
+
+    def _font_uri(self, rid: str, round_n: int, variant: str, payload: str) -> Optional[str]:
+        path = _url_unquote(payload.split("#", 1)[0].split("?", 1)[0]).replace("\\", "/")
+        if not path or path.startswith("/") or re.match(r"(?i)^[a-z][a-z0-9+.-]*:", path):
+            return None
+        if any(p in ("", ".", "..") for p in path.split("/")):
+            return None
+        mime = FONT_MIMES.get(path.rsplit(".", 1)[-1].lower())
+        if mime is None:
+            return None
+        try:
+            f = store.safe_variant_file(rid, str(round_n), variant, "design/" + path)
+        except Exception:
+            return None
+        key = str(f)
+        if key not in self.font_uris:
+            uri = None
+            try:
+                if self.fonts and f.stat().st_size <= MAX_FONT_BYTES:
+                    data = f.read_bytes()
+                    if self.budget.take(len(data)):
+                        uri = f"data:{mime};base64," + base64.b64encode(data).decode("ascii")
+            except OSError:
+                uri = None
+            self.font_uris[key] = uri
+        return self.font_uris[key]
+
+    def add(self, rid: str, round_n: int, variant: str, design: Dict[str, Any], extra_css: str) -> str:
+        """The scope class for this design + extra_css, registering its sheet and fonts on first use."""
+        names = {k: design.get(k) for k in ("mock_css", "fonts_css")}
+        texts = {k: self._text(rid, round_n, variant, "design/" + v) if isinstance(v, str) and v else ""
+                 for k, v in names.items()}
+        source = texts["mock_css"] + "\n" + (extra_css if isinstance(extra_css, str) else "")
+        key = hashlib.sha256(source.encode("utf-8", "replace")).hexdigest()
+        cls = self.scopes.get(key)
+        if cls is None:
+            cls = self.scopes[key] = "mr-d%d" % (len(self.scopes) + 1)
+            self.sheets.append(_sanitize_css(_to_container(source), sheet=True, scope="." + cls) or "")
+        if texts["fonts_css"]:
+            def inline(m: re.Match) -> str:
+                uri = self._font_uri(rid, round_n, variant, _css_url_payload(m))
+                return 'url("' + uri + '")' if uri else 'url("")'
+            fonts = _sanitize_css(_CSS_URL.sub(inline, _css_normalize(texts["fonts_css"])), sheet=True,
+                                  scope="." + cls) or ""
+            for rule in _css_top_rules(fonts):
+                if rule.startswith("@font-face"):
+                    self.font_rules.setdefault(rule, None)
+                else:
+                    self.sheets.append(rule)
+        return cls
+
+    def css(self) -> str:
+        return "".join(self.font_rules) + "".join(self.sheets)
+
+
+def _design_theme(data: Dict[str, Any], design: Dict[str, Any]) -> Optional[str]:
+    """board.js designTheme() without the viewer's own toggle: the review's default_theme when the profile has it,
+    else the profile's default."""
+    themes = design.get("themes") if isinstance(design.get("themes"), dict) else {}
+    settings = data.get("settings") if isinstance(data.get("settings"), dict) else {}
+    want = settings.get("default_theme") or "project"
+    theme = want if want != "project" and want in themes else design.get("default_theme")
+    return theme if theme in ("dark", "light") else None
+
+
 @dataclass
 class _Options:
     review_id: str = ""
@@ -378,6 +610,19 @@ class _Options:
     variant: str = "a"
     image: Optional[Callable[[str], Optional[str]]] = None
     budget: _Budget = field(default_factory=_Budget)
+    designs: Optional[_Designs] = None
+    # (scope class, data-theme, designed): set while a decisions round with a design profile or extra_css renders.
+    design: Optional[Tuple[str, Optional[str], bool]] = None
+
+    def mock(self, markup: Any) -> str:
+        """A mock's box: the bare fragment, or the board's `.cq > .app[data-theme]` structure under its design."""
+        inner = _safe_fragment(str(markup or ""), self)
+        if self.design is None:
+            return '<div class="mr-mock">' + inner + "</div>"
+        cls, theme, designed = self.design
+        return ('<div class="mr-mock ' + ("mr-designed " if designed else "") + cls + '"><div class="cq">'
+                '<div class="app"' + (' data-theme="' + theme + '"' if theme else "") + ">" + inner
+                + "</div></div></div>")
 
     def image_uri(self, src: str) -> Optional[str]:
         value = (src or "").strip()
@@ -447,6 +692,8 @@ def _serialize(node: Any, opts: _Options) -> str:
     tag = node.tag
     if not tag:
         return "".join(_serialize(c, opts) for c in node.children)
+    if tag == "svg":
+        return _serialize_svg(node)
     if tag in DROP_SUBTREE:
         return ""
     if tag not in ALLOWED_TAGS:
@@ -464,25 +711,66 @@ def _serialize(node: Any, opts: _Options) -> str:
             if k in ("alt", "title", "width", "height", "class", "id"):
                 attrs.append((k, v))
         return "<img" + "".join(f' {k}="{_escape_attr(v)}"' for k, v in attrs) + ">"
+    # Every element keeps only allowlisted attributes, values escaped; an anchor keeps its text, never an href, and
+    # nothing keeps an event handler, src (bar the inlined img above), action or formaction.
     attrs = []
-    if tag == "a":
-        # An anchor keeps its text, never an href.
-        for k, v in node.attrs:
-            if k in ALLOWED_ATTRS and k not in ("class", "id", "style"):
-                attrs.append((k, v))
-    else:
-        for k, v in node.attrs:
-            if k not in ALLOWED_ATTRS:
+    for k, v in node.attrs:
+        if k not in ALLOWED_ATTRS and not _DATA_ARIA_ATTR.fullmatch(k):
+            continue
+        if k == "style":
+            v = _sanitize_css(str(v), sheet=False)
+            if not v:
                 continue
-            if k == "style":
-                v = _sanitize_css(str(v), sheet=False)
-                if not v:
-                    continue
-            attrs.append((k, v))
+        attrs.append((k, v))
     inner = "".join(_serialize(c, opts) for c in node.children)
     open_tag = "<" + tag + "".join(f' {k}="{_escape_attr(v)}"' for k, v in attrs)
     if tag in VOID_TAGS:
         return open_tag + ">"
+    return open_tag + ">" + inner + "</" + tag + ">"
+
+
+def _svg_attr(name: str, value: str) -> Optional[Tuple[str, str]]:
+    """One SVG attribute as (SVG spelling, value), or None. href/xlink:href only as a #fragment, url() only as
+    url(#fragment), style through the inline CSS allowlist, everything else a plain presentation/geometry value."""
+    if name in ("href", "xlink:href"):
+        value = value.strip()
+        return ("href", value) if _SVG_FRAGMENT.fullmatch(value) else None
+    if _DATA_ARIA_ATTR.fullmatch(name):
+        return name, value
+    canonical = SVG_ATTRS.get(name)
+    if canonical is None:
+        return None
+    if name == "style":
+        clean = _sanitize_css(value, sheet=False)
+        return (canonical, clean) if clean else None
+    rest = _SVG_URL_FRAGMENT.sub("", _css_normalize(value))
+    low = rest.lower()
+    if any(c in rest for c in "\\<>{};@") or "url(" in low or "//" in rest or _CSS_SCHEME.search(rest):
+        return None
+    if any(token in low for token in _CSS_DANGER):
+        return None
+    return canonical, value
+
+
+def _serialize_svg(node: Any) -> str:
+    """The inline SVG subset. An element outside it goes with its whole subtree (a link or switch only unwraps)."""
+    if isinstance(node, str):
+        return _escape_text(node)
+    if node.tag in SVG_UNWRAP:
+        return "".join(_serialize_svg(c) for c in node.children)
+    tag = SVG_TAGS.get(node.tag or "")
+    if tag is None:
+        return ""
+    attrs = []
+    for k, v in node.attrs:
+        kept = _svg_attr(k, v)
+        if kept is not None:
+            attrs.append(kept)
+    open_tag = "<" + tag + "".join(f' {k}="{_escape_attr(v)}"' for k, v in attrs)
+    inner = "".join(_serialize_svg(c) for c in node.children)
+    if node.tag in SVG_LEAF_TAGS:
+        # A shape has no content; anything the parser nested under an unclosed one follows it instead.
+        return open_tag + "/>" + inner
     return open_tag + ">" + inner + "</" + tag + ">"
 
 
@@ -749,7 +1037,7 @@ def _block(block: Dict[str, Any], opts: _Options) -> str:
                                                     for x in _list(block.get("items"))) + "</ul>"
                    if _list(block.get("items")) else ""))
         if block.get("html"):
-            body += '<div class="mr-mock">' + _safe_fragment(str(block.get("html")), opts) + "</div>"
+            body += opts.mock(block.get("html"))
         if tag:
             head = '<span class="mr-tag">' + _escape_text(tag) + "</span>" + head
     elif t == "decision":
@@ -762,11 +1050,10 @@ def _block(block: Dict[str, Any], opts: _Options) -> str:
             rec = '<span class="mr-pill">Recommended</span>' if opt.get("recommended") else ""
             opts_html.append('<div class="mr-option"><h3>' + _escape_text(opt.get("label") or "")
                              + "</h3>" + rec + _block_text(opt.get("text"))
-                             + '<div class="mr-mock">' + _safe_fragment(str(opt.get("html") or ""), opts)
-                             + "</div></div>")
+                             + opts.mock(opt.get("html")) + "</div>")
         body = today + intro + '<div class="mr-options">' + "".join(opts_html) + "</div>"
     elif t == "mock":
-        body = ('<div class="mr-mock">' + _safe_fragment(str(block.get("html") or ""), opts) + "</div>"
+        body = (opts.mock(block.get("html"))
                 + _block_text(block.get("text"))
                 + ('<p class="mr-caption">' + _escape_text(block.get("caption")) + "</p>"
                    if block.get("caption") else ""))
@@ -831,6 +1118,12 @@ def _render_round_content(data: Dict[str, Any], round_n: int, rnd: Dict[str, Any
         dec = _decisions_of(rid, round_n, rnd)
         if dec is None:
             return '<p class="mr-meta">This round could not be read.</p>'
+        design = rnd.get("design") if isinstance(rnd.get("design"), dict) else None
+        extra = dec.get("extra_css") if isinstance(dec.get("extra_css"), str) else ""
+        if opts.designs is not None and (design or extra.strip()):
+            # The board's mock box: the profile CSS (always in variant a, like board.js roundBase) + extra_css.
+            cls = opts.designs.add(rid, round_n, "a", design or {}, extra)
+            opts.design = (cls, _design_theme(data, design) if design else None, design is not None)
         intro = _block_text(dec.get("intro"))
         body = "".join(_block(b, opts) for b in _list(dec.get("blocks")) if isinstance(b, dict))
         status = dec.get("status") if isinstance(dec.get("status"), dict) else None
@@ -851,23 +1144,24 @@ _STYLE = """
 @media(prefers-color-scheme:dark){:root{--b:#0b0b0e;--s:#141418;--s2:#1c1c22;--l:#2a2a33;--t:#ededf2;
 --m:#a0a0ac;--a:#8585ff;--ai:#0b0b0e;--as:rgba(133,133,255,.16);--ok:#4ade80;--oks:rgba(74,222,128,.14);
 --wn:#fbbf24;--wns:rgba(251,191,36,.14)}}
-*{box-sizing:border-box}
+/* A design-profile mock (inside .cq) is styled by its own CSS alone, as in the board's shadow root. */
+:where(:not(.cq *)){box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
 body{margin:0 auto;max-width:960px;padding:32px 24px 48px;background:var(--b);color:var(--t);
 font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,"Helvetica Neue",sans-serif;
 overflow-wrap:anywhere}
-h1{font-size:20px;line-height:1.25;margin:0 0 4px;letter-spacing:-.01em}
-h2{font-size:16px;line-height:1.3;margin:20px 0 8px}
-h3{font-size:14px;margin:12px 0 4px}
-p{margin:6px 0}
-ul,ol{margin:8px 0;padding-left:20px}
-li{margin:4px 0}
-a{color:var(--a)}
-img{max-width:100%;height:auto}
-code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}
-pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--s2);border:1px solid var(--l);border-radius:var(--r);padding:12px}
-blockquote{margin:8px 0;padding:2px 12px;border-left:3px solid var(--l);color:var(--m)}
-hr{border:0;border-top:1px solid var(--l);margin:20px 0}
+h1:where(:not(.cq *)){font-size:20px;line-height:1.25;margin:0 0 4px;letter-spacing:-.01em}
+h2:where(:not(.cq *)){font-size:16px;line-height:1.3;margin:20px 0 8px}
+h3:where(:not(.cq *)){font-size:14px;margin:12px 0 4px}
+p:where(:not(.cq *)){margin:6px 0}
+ul:where(:not(.cq *)),ol:where(:not(.cq *)){margin:8px 0;padding-left:20px}
+li:where(:not(.cq *)){margin:4px 0}
+a:where(:not(.cq *)){color:var(--a)}
+img:where(:not(.cq *)){max-width:100%;height:auto}
+code:where(:not(.cq *)),pre:where(:not(.cq *)){font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}
+pre:where(:not(.cq *)){white-space:pre-wrap;overflow-wrap:anywhere;background:var(--s2);border:1px solid var(--l);border-radius:var(--r);padding:12px}
+blockquote:where(:not(.cq *)){margin:8px 0;padding:2px 12px;border-left:3px solid var(--l);color:var(--m)}
+hr:where(:not(.cq *)){border:0;border-top:1px solid var(--l);margin:20px 0}
 .mr-header{padding-bottom:16px;border-bottom:1px solid var(--l);margin-bottom:20px}
 .mr-meta,.mr-generated,.mr-caption,.mr-round-status,.mr-comment-meta,.mr-stance{color:var(--m);font-size:12px}
 .mr-brief{color:var(--m);font-size:13px;margin-top:8px}
@@ -901,9 +1195,15 @@ color:var(--a);font-size:12px;font-weight:600;vertical-align:middle}
 .mr-mock{border:1px solid var(--l);border-radius:var(--r);padding:12px;margin:12px 0;background:var(--s);overflow:hidden}
 /* A mock is a light design the board shows as authored: keep it light in a dark export, or its own light panels
    would carry the dark theme's light text. */
-.mr-mock{color-scheme:light;background:#fff;color:#17171c}
-.mr-mock a{color:#4f46e5}
-.mr-mock img{display:block}
+.mr-mock:not(.mr-designed){color-scheme:light;background:#fff;color:#17171c}
+.mr-mock:not(.mr-designed) a:where(:not(.cq *)){color:#4f46e5}
+.mr-mock:not(.mr-designed) img:where(:not(.cq *)){display:block}
+/* A design-profile mock is the board's box: .cq is the container its @media-turned-@container rules query and .app
+   carries the profile's data-theme; the profile's CSS paints it, so no padding or forced light background here. */
+.mr-mock .cq{container:mock/inline-size}
+.mr-designed{padding:0;background:transparent;color:inherit;overflow-wrap:normal}
+.mr-designed .app[data-theme=dark]{color-scheme:dark}
+.mr-designed .app[data-theme=light]{color-scheme:light}
 .mr-artifact{border:1px solid var(--l);border-radius:var(--r);margin:12px 0;background:var(--s2);overflow:hidden}
 .mr-artifact-page{padding:12px;background:var(--s);overflow:hidden}
 .mr-artifact figcaption{padding:8px 12px;border-top:1px solid var(--l);color:var(--m);font-size:12px}
@@ -939,8 +1239,9 @@ def export_filename(data: Dict[str, Any], round_n: int, ext: str) -> str:
 
 def build_export_html(data: Dict[str, Any], round_n: int, include_comments: bool, *,
                       threads: Optional[List[Dict[str, Any]]] = None, generated_at: Optional[str] = None,
-                      csp: str = EXPORT_CSP) -> str:
-    """The one static export document. Pure data in, HTML out; no listener and no script."""
+                      csp: str = EXPORT_CSP, fonts: bool = True) -> str:
+    """The one static export document. Pure data in, HTML out; no listener and no script. fonts=False leaves the
+    design profile's fonts out (each mock falls back to the next family in its stack)."""
     rnd = _round_of(data, int(round_n))
     rid = str(data.get("id") or "")
     kind = rnd.get("kind") or ("decisions" if rnd.get("decisions") else "variants")
@@ -950,8 +1251,9 @@ def build_export_html(data: Dict[str, Any], round_n: int, include_comments: bool
         if variants and variants[0].get("label"):
             label = str(variants[0]["label"])
     budget = _Budget()
+    designs = _Designs(budget, fonts)
     opts = _Options(review_id=rid, round_n=int(round_n), variant="a",
-                    image=_image_reader(rid, int(round_n), "a", budget), budget=budget)
+                    image=_image_reader(rid, int(round_n), "a", budget), budget=budget, designs=designs)
     # Every variant has its own image resolver; the base one covers decisions mocks (variant a).
     content_parts = []
     if kind == "decisions":
@@ -983,7 +1285,7 @@ def build_export_html(data: Dict[str, Any], round_n: int, include_comments: bool
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
             '<meta http-equiv="Content-Security-Policy" content="' + str(csp).replace('&', '&amp;').replace('"', '&quot;') + '">'
             '<meta name="referrer" content="no-referrer"><meta name="robots" content="noindex, nofollow">'
-            '<title>' + _escape_text(title) + " · mock review</title><style>" + _STYLE + "</style></head>"
+            '<title>' + _escape_text(title) + " · mock review</title><style>" + _STYLE + designs.css() + "</style></head>"
             '<body data-export-name="' + _escape_attr(name) + '" data-export-filename="'
             + _escape_attr(name + ".png") + '">'
             + header + '<main class="mr-body">' + content + "</main></body></html>")

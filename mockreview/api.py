@@ -685,6 +685,10 @@ def desk_view(review_id: str, round_n: Optional[int] = None) -> Dict[str, Any]:
     rnd = store.get_round(data, round_n)
     doc = export.build_export_html(data, rnd["n"], False).encode("utf-8")
     url = "data:text/html;charset=utf-8;base64," + base64.b64encode(doc).decode("ascii")
+    if len(url) > DESK_DATA_URL_LIMIT:
+        # Inlined fonts cost about 1.8 URL characters per byte: try once more without them before giving up.
+        doc = export.build_export_html(data, rnd["n"], False, fonts=False).encode("utf-8")
+        url = "data:text/html;charset=utf-8;base64," + base64.b64encode(doc).decode("ascii")
     too_large = len(url) > DESK_DATA_URL_LIMIT
     return {"review_id": review_id, "title": data.get("title"), "status": data.get("status"), "round": rnd["n"],
             "rounds": len(data["rounds"]), "board_url": desk_url(data), "bytes": len(doc),
