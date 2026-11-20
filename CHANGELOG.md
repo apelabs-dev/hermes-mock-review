@@ -3,6 +3,14 @@
 All notable changes to this project are listed here. The format follows Keep a Changelog, and the project follows
 semantic versioning.
 
+## [2.1.2](https://github.com/apelabs-dev/hermes-mock-review/compare/v2.1.1...v2.1.2) (2026-11-20)
+
+
+### Bug Fixes
+
+* a new pin's ghost marker survives a redraw while its note is open ([#46](https://github.com/apelabs-dev/hermes-mock-review/issues/46)) ([ff03966](https://github.com/apelabs-dev/hermes-mock-review/commit/ff03966589f80573b986a27ebbd379e0e6ef0792))
+* a second click in an artifact or prototype frame keeps the new pin's ghost ([#50](https://github.com/apelabs-dev/hermes-mock-review/issues/50)) ([e7988ea](https://github.com/apelabs-dev/hermes-mock-review/commit/e7988ea7a1bfeea0c6f2867f2bfbc08d40f0e9b1))
+
 ## [2.1.1](https://github.com/apelabs-dev/hermes-mock-review/compare/v2.1.0...v2.1.1) (2026-11-19)
 
 
