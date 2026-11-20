@@ -1111,7 +1111,8 @@ def test_browser_args_are_headless_unless_the_headed_switch_is_set(monkeypatch):
     default = bc.browser_args("/fake/chrome", "/tmp/profile", bc.headed_requested())
     expected = ["/fake/chrome", "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
                 "--disable-extensions", "--disable-dev-shm-usage", "--mute-audio", "--use-mock-keychain",
-                "--password-store=basic", "--remote-debugging-port=0", "--user-data-dir=/tmp/profile", "about:blank"]
+                "--password-store=basic", "--remote-debugging-port=0", "--disable-features=MacAppCodeSignClone",
+                "--user-data-dir=/tmp/profile", "about:blank"]
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         expected.insert(1, "--no-sandbox")
     assert default == expected

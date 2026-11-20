@@ -631,6 +631,10 @@ def browser_args(exe: str, profile: str, headed: bool) -> List[str]:
     args += ["--disable-gpu", "--no-first-run", "--no-default-browser-check",
              "--disable-extensions", "--disable-dev-shm-usage", "--mute-audio", "--use-mock-keychain",
              "--password-store=basic", "--remote-debugging-port=0",
+             # macOS Chrome clones its app bundle into the user temp dir at every launch and removes the clone only
+             # on a clean exit, so every killed test Chrome left ~1,300 files behind (35k clones on one machine).
+             # This feature switch makes Chrome skip the clone; it is ignored on other platforms.
+             "--disable-features=MacAppCodeSignClone",
              f"--user-data-dir={profile}", "about:blank"]
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         args.insert(1, "--no-sandbox")
