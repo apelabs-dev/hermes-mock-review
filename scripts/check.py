@@ -74,6 +74,11 @@ BROWSER_JOBS: List[Tuple[str, int]] = [
     ("tests/test_header_integration.py", 3),
     ("tests/test_export_browser.py", 3),
     ("tests/test_board_canvas.py", 3),
+    # one worker each; 215 s / 215 s, 148 s / 203 s and 68 s / 113 s serial on the macOS / Windows runner (browser
+    # tier). Undeclared they ran after every listed module, so the tier ended on them instead of starting by weight.
+    ("tests/test_header_hdr.py", 1),
+    ("tests/test_page_mode.py", 1),
+    ("tests/test_avatar_colors.py", 1),
     # one worker each: 112 s / 61 s serial on the macOS runner, 131-168 s / 79-119 s on Windows; declared so they
     # start by weight instead of joining the tail of the run
     ("tests/test_cux_anchors.py", 1),
