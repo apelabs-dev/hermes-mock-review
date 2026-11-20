@@ -8,6 +8,8 @@ on — on desktop the click is inside the sandboxed prototype frame, on a phone 
 which covers the frame; a focus move into the frame does the same at both widths.
 (c) The brand mark is the real SVG mark, never the text `mr`, on the sign-in and home pages, the board header and
 Settings, in both themes; the page's icon link answers 200.
+(d) The board header shows the reviewed project's icon (the round's design/icon.svg, labelled by the design) and not
+the mock-review mark; a round with no design icon keeps the mock-review mark.
 """
 
 import json
@@ -19,6 +21,7 @@ from conftest import http
 from mockreview import store, users
 from test_export_browser import (Page, assert_nothing_commented, chrome, metric_report,  # noqa: F401
                                  new_modern_review, paint, proto_state, settle, trusted_click)
+from test_store import _design
 
 pytestmark = pytest.mark.browser
 
@@ -401,6 +404,60 @@ def test_the_brand_mark_is_the_svg_mark_everywhere(env, server, tmp_path, chrome
             assert_icon(page, url, f"{name} at {width} ({theme})")
         finally:
             close_page(chrome, page)
+
+
+BAR_PROBE = (
+    "(function(){var i=document.querySelector('.dzbar .proj-icon'),m=document.querySelector('.dzbar .brand-mark');"
+    "var out={icon:null,mark:m?m.getAttribute('src'):null};"
+    "if(i){var r=i.getBoundingClientRect(),cs=getComputedStyle(i);"
+    "out.icon={tag:i.tagName,src:i.src,alt:i.getAttribute('alt'),loaded:i.complete&&i.naturalWidth>0,"
+    "w:r.width,h:r.height,display:cs.display,visibility:cs.visibility};}"
+    "return JSON.stringify(out)})()")
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_the_board_bar_shows_the_project_icon_not_the_mock_review_mark(env, server, tmp_path, chrome,  # noqa: F811
+                                                                      monkeypatch, width):
+    """A round with a design icon shows that icon in the bar, labelled by the design; the mock-review mark does not
+    show beside it. A round with no design icon still carries the mock-review mark."""
+    branded_dir = tmp_path / "branded"
+    branded_dir.mkdir()
+    design = _design(branded_dir)
+    (design / "icon.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 30"><rect width="30" height="30" fill="#090b13"/>'
+        '<rect x="7" y="12" width="4" height="12" fill="#6a91fc"/></svg>', encoding="utf-8")
+    branded = store.create_review("HDR project icon", "", ORIGIN, "tailscale",
+                                  store.parse_round_spec(prototype=str(write_proto(tmp_path)), design=str(design)),
+                                  wake=False)
+    plain = store.create_review("HDR no icon", "", ORIGIN, "tailscale",
+                                store.parse_round_spec(prototype=str(write_proto(tmp_path))), wake=False)
+    monkeypatch.setenv("MOCKREVIEW_LOOPBACK_OWNER", "true")
+
+    page = fresh_page(chrome, server + f"/r/{branded['id']}/", width, 800, "!!document.querySelector('.dzbar')")
+    try:
+        assert page.until("(function(){var i=document.querySelector('.dzbar .proj-icon');"
+                          "return !!i && i.complete && i.naturalWidth > 0})()"), \
+            f"{width}: the round's design icon never loaded in the board bar"
+        state = json.loads(page.js(BAR_PROBE))
+        icon = state["icon"]
+        assert icon, f"{width}: the board bar has no project icon: {state}"
+        assert icon["tag"] == "IMG" and icon["src"] == server + f"/r/{branded['id']}/rounds/1/a/design/icon.svg", \
+            f"{width}: the bar icon is not the round's design/<icon> file: {icon}"
+        assert icon["alt"] == "Proj", f"{width}: the bar icon alt is not the design label: {icon}"
+        assert icon["w"] > 0 and icon["h"] > 0 and icon["display"] != "none" and icon["visibility"] != "hidden", \
+            f"{width}: the bar icon is not visible: {icon}"
+        assert state["mark"] is None, f"{width}: the mock-review mark shows beside a branded round: {state}"
+    finally:
+        close_page(chrome, page)
+
+    page = fresh_page(chrome, server + f"/r/{plain['id']}/", width, 800, "!!document.querySelector('.dzbar')")
+    try:
+        state = json.loads(page.js(BAR_PROBE))
+        assert state["icon"] is None, f"{width}: a round without a design icon has a project icon: {state}"
+        assert state["mark"] and state["mark"].endswith("/_/favicon.svg"), \
+            f"{width}: a round without a design icon must keep the mock-review mark: {state}"
+    finally:
+        close_page(chrome, page)
 
 
 def write_proto(tmp_path):

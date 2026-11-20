@@ -4262,6 +4262,9 @@
   .dzbar .brand-mark {
     order: 0;
   }
+  .dzbar .proj-icon {
+    order: 0;
+  }
   .dzbar .pb-title {
     order: 1;
     min-width: 0;
