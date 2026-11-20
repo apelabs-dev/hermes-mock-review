@@ -211,3 +211,45 @@ def test_a_frame_opens_only_its_own_blocks_thread_and_never_marks_it_read(server
             break
         time.sleep(0.1)
     assert read[own["id"]] is False and read[other["id"]] is True
+
+
+# ---------------------------------------------------------------- a second click moves the new pin's ghost
+def frame_click(b, sid, x, y, cx, cy):
+    frame_eval(b, sid, "parent.postMessage({__mockreview:1,type:'click',x:%s,y:%s,cx:%d,cy:%d},'*');true"
+                       % (x, y, cx, cy))
+
+
+def assert_ghost_follows_second_click(b, sid):
+    b.press("#comment-toggle")
+    assert b.until("document.querySelector('#comment-toggle').getAttribute('aria-pressed') === 'true'")
+    assert wait_frame(b, sid, "(()=>{let s=window.__reviewStates;return s.length&&s[s.length-1].comment===true;})()"), \
+        last_state(b, sid)
+
+    frame_click(b, sid, 0.2, 0.2, 40, 40)
+    assert b.until("document.querySelectorAll('.popover').length === 1")
+    assert wait_frame(b, sid, "(()=>{let s=window.__reviewStates;return s.length&&"
+                              "s[s.length-1].pins.some(p=>p.ghost&&p.x===0.2);})()"), last_state(b, sid)
+
+    frame_click(b, sid, 0.6, 0.6, 120, 120)    # the first composer is still open
+    assert wait_frame(b, sid, "(()=>{let s=window.__reviewStates;return s.length&&"
+                              "s[s.length-1].pins.some(p=>p.ghost&&p.x===0.6);})()"), last_state(b, sid)
+    b.cdp.pump(0.5)                            # a late clear from the first composer would land by now
+    ghosts = [p for p in last_state(b, sid)["pins"] if p.get("ghost")]
+    assert [(p["x"], p["y"]) for p in ghosts] == [(0.6, 0.6)], last_state(b, sid)
+    assert b.js("document.querySelectorAll('.popover').length") == 1
+
+
+def test_a_second_click_keeps_the_new_artifact_ghost(server, artifact_review, chrome):
+    rid = artifact_review
+    b = Board(chrome, f"{server}/r/{rid}/", wait="!!document.querySelector('.art-frame')")
+    sid = frame_session(b, rid)
+    observe(b, sid)
+    assert_ghost_follows_second_click(b, sid)
+
+
+def test_a_second_click_keeps_the_new_prototype_ghost(server, live_review, chrome):
+    rid = live_review
+    b = Board(chrome, f"{server}/r/{rid}/")
+    sid = frame_session(b, rid)
+    observe(b, sid)
+    assert_ghost_follows_second_click(b, sid)
