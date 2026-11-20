@@ -318,7 +318,8 @@ and in its count (and as a warning and a job-summary line on GitHub Actions); a 
 In CI the four `tests (...)` checks are required. The Linux ones run both tiers. On macOS and Windows the browser tier
 runs as a separate `browser tier (...)` check that does not block a pull request: when it fails there, the check stays
 green and shows a warning. On main it fails like any other check, and a nightly run of the full matrix opens or
-updates a `nightly-ci` issue when anything fails.
+updates a `nightly-ci` issue when anything fails. A pull request that only touches the root Markdown files or `docs/`
+skips the browser tier; the non-browser tier, which holds the docs checks, still runs.
 
 The browser harness caps Chromes machine-wide for this OS user: `MOCKREVIEW_CHROMES` (default 3, never more than 4) is
 one run's budget, and slot files in `/tmp/mockreview-chrome-slots-<uid>` (POSIX; `%LOCALAPPDATA%\mockreview\chrome-slots`

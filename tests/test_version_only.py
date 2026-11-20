@@ -1,4 +1,4 @@
-"""scripts/version_only.py, the cheap CI path for release-please version-only pull requests."""
+"""scripts/version_only.py, the cheap CI paths for release-please version-only and docs-only pull requests."""
 
 import os
 import shutil
@@ -30,6 +30,9 @@ BASE = {
     "plugin.yaml": 'version: "1.0.0"\n',
     "pyproject.toml": 'version = "1.0.0"\n',
     "README.md": "# demo\n",
+    "docs/hosting.md": "# hosting\n",
+    "mockreview/board/vendor/README.md": "# vendor\n",
+    "skills/usage/SKILL.md": "# usage\n",
 }
 
 
@@ -107,6 +110,35 @@ def test_a_mixed_diff_needs_the_full_matrix(repo, monkeypatch, capsys):
     at_base(path, base)
     commit(path, {"plugin.yaml": 'version: "1.0.1"\n', "tests/test_new_feature.py": "def test_new():\n    pass\n"},
            "release plus a fix")
+    code, out, err = classify(monkeypatch, capsys, path, "--base", base)
+    assert (code, out) == (0, "full"), err
+
+
+@pytest.mark.parametrize("files", [
+    {"README.md": "# edited\n"},
+    {"AGENTS.md": "# agents\n", "docs/hosting.md": "# edited\n"},
+    {"docs/img/new.png": "png\n"},
+])
+@needs_git
+def test_root_markdown_and_the_docs_tree_are_docs_only(repo, monkeypatch, capsys, files):
+    path, base = repo
+    at_base(path, base)
+    commit(path, files, "docs")
+    code, out, err = classify(monkeypatch, capsys, path, "--base", base)
+    assert (code, out) == (0, "docs-only"), err
+
+
+@pytest.mark.parametrize("files", [
+    {"mockreview/board/vendor/README.md": "# edited\n"},
+    {"skills/usage/SKILL.md": "# edited\n"},
+    {"README.md": "# edited\n", "mockreview/board/board.js": "// edited\n"},
+])
+@needs_git
+def test_markdown_that_ships_with_the_plugin_or_a_docs_and_code_diff_needs_the_full_matrix(repo, monkeypatch, capsys,
+                                                                                             files):
+    path, base = repo
+    at_base(path, base)
+    commit(path, files, "not docs-only")
     code, out, err = classify(monkeypatch, capsys, path, "--base", base)
     assert (code, out) == (0, "full"), err
 

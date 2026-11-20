@@ -76,24 +76,30 @@ jobs:
           enable-cache: false
 
       # A Release Please pull request only rewrites the five files the action owns, so the six tests jobs still run
-      # (four of their names are required checks) but the heavy tiers can be skipped inside them. No fetch happens on a
-      # push or a manual run, and a failed fetch or script leaves tests=run: the fallback is always the full matrix.
-      # Only a release-please branch takes this path; any other pull request, even one that only edits plugin.yaml, runs
-      # every tier (the scope step is skipped, its empty output is not 'skip').
+      # (four of their names are required checks) but the heavy tiers can be skipped inside them. Only a release-please
+      # branch takes that path; any other pull request, even one that only edits plugin.yaml, runs every tier. A pull
+      # request that only touches the root Markdown files or docs/ skips the browser tier (no browser test reads them)
+      # and still runs the non-browser tier, which holds every docs check. No fetch happens on a push, the nightly run
+      # or a manual run, and a failed fetch or script leaves both outputs at run: the fallback is always the full matrix.
       - name: Scope the test tiers
         id: scope
-        if: ${{ github.event_name == 'pull_request' && startsWith(github.head_ref, 'release-please--') }}
+        if: ${{ github.event_name == 'pull_request' }}
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          RELEASE_BRANCH: ${{ startsWith(github.head_ref, 'release-please--') }}
         run: |
           echo "tests=run" >> "$GITHUB_OUTPUT"
+          echo "browser=run" >> "$GITHUB_OUTPUT"
           py=python3
           command -v python3 >/dev/null 2>&1 || py=python
           if git fetch --no-tags --depth=1 origin "$BASE_SHA"; then
             scope="$("$py" scripts/version_only.py --base "$BASE_SHA" || true)"
             scope="${scope%$'\r'}"
-            if [ "$scope" = "version-only" ]; then
+            if [ "$scope" = "version-only" ] && [ "$RELEASE_BRANCH" = "true" ]; then
               echo "tests=skip" >> "$GITHUB_OUTPUT"
+            elif [ "$scope" = "docs-only" ]; then
+              echo "browser=skip" >> "$GITHUB_OUTPUT"
+              echo "::notice title=Docs-only pull request::the browser tier is skipped; the non-browser tier runs"
             fi
           fi
 
@@ -124,7 +130,7 @@ jobs:
       # warning and a job-summary line) and does not fail the step.
       - name: Run the browser tier
         id: browser
-        if: ${{ !cancelled() && steps.scope.outputs.tests != 'skip' && matrix.part != 'nonbrowser' }}
+        if: ${{ !cancelled() && steps.scope.outputs.tests != 'skip' && steps.scope.outputs.browser != 'skip' && matrix.part != 'nonbrowser' }}
         continue-on-error: ${{ matrix.part == 'browser' && github.event_name == 'pull_request' }}
         env:
           CHECK_LOG_DIR: ${{ runner.temp }}/check-logs/browser
