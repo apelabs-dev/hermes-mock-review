@@ -60,8 +60,10 @@ boards for UI mockups and wakes the agent when the reviewer presses Send. User d
   commit after which the history sweep checks private tokens. `scripts/sse_probe.py`: the reproducible
   SSE-through-a-proxy evidence tool.
 - `tests/`: pytest suite.
-- `.github/workflows/ci.yml`: the test matrix (Linux at Python 3.11 and 3.14; macOS and Windows at 3.14), `hermes plugins
-  validate` through Hermes's own `plugin-validate` action, and the sweep over the tree and the history.
+- `.github/workflows/ci.yml`: the test matrix (Linux at Python 3.11 and 3.14; macOS and Windows at 3.14, where the
+  browser tier is a separate check that does not block a pull request), `hermes plugins validate` through Hermes's own
+  `plugin-validate` action, the sweep over the tree and the history, and a nightly run that opens a `nightly-ci` issue
+  on failure.
 
 ## Commands
 

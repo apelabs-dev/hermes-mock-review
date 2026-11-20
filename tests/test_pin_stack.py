@@ -204,7 +204,8 @@ def after_a_scroll(b):
     """Scroll a few pixels with a new pin's composer open and report the ghost and the composer. A scroll redraws the
     pin layers on the next frame (and re-measures for up to six more); that redraw used to drop the ghost while the
     composer stayed open, and the scroll in point_in could land it after a slow runner's click."""
-    b.js("window.scrollBy(0, 5)")
+    moved = b.js("(function(){var y=scrollY;scrollBy(0,y>=5?-5:5);return scrollY!==y})()")
+    assert moved, "the page did not scroll, so no redraw ran"
     time.sleep(.4)
     return json.loads(b.js(GHOST_AND_COMPOSER))
 
