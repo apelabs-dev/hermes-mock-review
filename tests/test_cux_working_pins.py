@@ -189,6 +189,15 @@ def test_editable_mention_with_pin_fix_off(working_review, server, chrome, mobil
     b.shows(exists(WORKING), "the active marker disappeared")
     motion = b.js(f"getComputedStyle({query(WORKING + ' .hermes-pin-indicator')}).animationName")
     assert (motion == "none") is mobile
+    dot = json.loads(b.js("JSON.stringify((function(){var p=%s,d=p.querySelector('.hermes-pin-indicator');"
+                          "var a=p.getBoundingClientRect(),r=d.getBoundingClientRect(),s=getComputedStyle(d);"
+                          "return {bg:s.backgroundColor,anim:s.animationName,dx:(r.left+r.width/2)-(a.left+a.width/2),"
+                          "dy:(r.top+r.height/2)-(a.top+a.height/2),w:r.width}})())" % query(WORKING)))
+    red = [int(c) for c in dot["bg"][dot["bg"].index("(") + 1:dot["bg"].index(")")].split(",")[:3]]
+    assert red[0] > 200 and red[1] < 130 and red[2] < 130, f"the working dot is not red: {dot}"   # --err per theme
+    assert dot["dx"] > 8 and abs(dot["dy"]) < 8, f"the working dot is not on the pin's right side: {dot}"
+    assert dot["w"] < 20, f"the working indicator is a ring, not a dot: {dot}"   # a 10 px dot, turned and pulsing
+    assert dot["anim"] == ("none" if mobile else "hermes-pin-pulse"), dot
     first = next(iter(pin_requests(rid)))
     api.patch_block(rid, "m1", "<p>Revised subtotal</p>", round_n=1, if_rev=0, request_ids=[first])
     b.shows(has_text(COUNT, "Hermes · 1 working"), "one patch cleared both overlapping requests")
