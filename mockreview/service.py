@@ -1313,6 +1313,29 @@ def check_stalled(now: Optional[float] = None) -> int:
     return sent
 
 
+def expire_pin_requests(now: Optional[float] = None) -> int:
+    """The pin-request half of `check_stalled`, for when stalled pings are off: time out working pin requests on
+    open wake-on reviews after `pin_timeout_minutes()`, so a request never shows working forever. Sends nothing.
+    Only the owner service runs it. Returns how many requests timed out."""
+    if owner.is_bound():
+        return 0
+    now = time.time() if now is None else now
+    minutes = pin_timeout_minutes()
+    expired = 0
+    for rid in store.list_ids():
+        try:
+            data = store.load(rid)
+        except (ReviewError, ValueError, OSError):
+            continue
+        if data.get("status") != "open" or data.get("wake") is False:
+            continue
+        try:
+            expired += _timeout_pin_requests(rid, now, minutes)
+        except (ReviewError, ValueError, OSError):
+            log.exception("pin fix timeout pass failed for %s", rid)
+    return expired
+
+
 def retry_pending(now: Optional[float] = None) -> int:
     """Retry every pending_notify submission that is due (wake first, ack right after it), and every pending ack
     whose wake already landed. Returns how many wakes became notified."""

@@ -1439,7 +1439,11 @@ class Worker(threading.Thread):
             if time.time() - self.last_stalled >= service.STALLED_SCAN_SECONDS:
                 self.last_stalled = time.time()
                 try:
-                    service.check_stalled()
+                    # Stalled pings off: still expire pin requests, but never run the ping watchdog.
+                    if settings.get("stale_after_minutes"):
+                        service.check_stalled()
+                    else:
+                        service.expire_pin_requests()
                 except Exception:
                     log.exception("stalled-notice pass failed")
             try:

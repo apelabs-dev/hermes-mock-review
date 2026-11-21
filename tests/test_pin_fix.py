@@ -220,6 +220,21 @@ def test_timeout_clears_indicator(pin_review, env, monkeypatch):
     assert service.pin_fix_status(data, req) == {"state": "failed", "detail": req["detail"]}
 
 
+def test_timeout_with_stalled_pings_off(pin_review, env, monkeypatch):
+    # The worker's pin-only pass (stalled pings off) times the request out the same way and sends no notice.
+    monkeypatch.setenv("MOCKREVIEW_PIN_FIX_WINDOW_SECONDS", "0")
+    monkeypatch.setenv("MOCKREVIEW_STALE_AFTER_MINUTES", "0")
+    rid = pin_review["id"]
+    res = service.request_pin_fix(rid, 1, pin("m1"), pin_review["token"])
+    assert res["status"] == "woken"
+    wakes = len(env["receiver"].wakes)
+    assert service.expire_pin_requests(now=time.time() + 14 * 60) == 0
+    assert service.expire_pin_requests(now=time.time() + (15 + 1) * 60) == 1
+    req = store.load(rid)["rounds"][0]["pin_requests"][res["request"]["id"]]
+    assert req["status"] == "timeout"
+    assert len(env["receiver"].wakes) == wakes
+
+
 def test_patch_block_marks_done(pin_review, env, monkeypatch):
     monkeypatch.setenv("MOCKREVIEW_PIN_FIX_WINDOW_SECONDS", "0")
     rid = pin_review["id"]
