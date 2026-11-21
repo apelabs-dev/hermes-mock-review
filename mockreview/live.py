@@ -62,9 +62,10 @@ KEEP_EVENTS = 500
 LOOP_WAIT = 0.5
 RECHECK_EVERY = 5.0  # seconds between access re-reads on a live stream
 _SENTINEL = object()
+PIN_REQUESTS = "pin.requests"
 
 THREAD_KINDS = frozenset({"thread.created", "thread.replied", "thread.status", "thread.deleted",
-                          "comment.edited", "comment.deleted", "mention", "typing"})
+                          "comment.edited", "comment.deleted", "mention", "typing", PIN_REQUESTS})
 
 
 def event_round(kind: str, data: Any) -> Optional[int]:
@@ -424,7 +425,7 @@ class Registry:
     # ---- the stream loop ----------------------------------------------
     def stream(self, handler: Any, sub: Subscription, hello: Dict[str, Any], replay: List[Dict[str, Any]],
                reset: bool = False, latest: int = 0, interval: Optional[float] = None,
-               announce: Optional[int] = None) -> None:
+               announce: Optional[int] = None, last: int = 0) -> None:
         """Write hello, the replay (or reset) and then live frames.
 
         Closure is checked at every emission point, not only on entry: a subscription closed during the handshake,
@@ -432,38 +433,50 @@ class Registry:
         unchanged: `floor` only moves forward, rows at or below it are dropped, and hidden rows advance it.
         """
         stream = sse.Stream(handler, interval=interval, output=sub.output)
+        floor = last
+
+        def emit(event_id: Optional[int], kind: str, data: Any) -> bool:
+            nonlocal floor
+            if sub.closed:
+                return False
+            if event_id is not None:
+                if event_id <= floor:
+                    return True
+                floor = event_id
+            visible = self._visible(sub, kind, data)
+            if sub.closed:
+                return False
+            return not visible or stream.write(json.dumps(data, ensure_ascii=False), event=kind, id=event_id)
+
+        def emit_rows(rows: Iterable[Any]) -> bool:
+            for row in rows:
+                try:
+                    data = json.loads(row["data"] or "{}")
+                except ValueError:
+                    data = {}
+                if not emit(int(row["id"]), row["kind"], data):
+                    return False
+            return True
+
+        def emit_reset(latest_id: int, revision: int) -> bool:
+            nonlocal floor
+            floor = latest_id
+            return not sub.closed and stream.write(json.dumps({"rev": revision}), event="reset")
+
+        def catch_up() -> bool:
+            needs_reset, rows, tip = self.replay(sub.review_id, floor)
+            return emit_reset(tip, 0) if needs_reset else emit_rows(rows)
+
         try:
             if sub.closed:
                 return
             if not stream.write(json.dumps(hello, ensure_ascii=False), event="hello"):
                 return
-            floor = 0
             if reset:
-                if sub.closed:
+                if not emit_reset(latest, latest if announce is None else announce):
                     return
-                announced = latest if announce is None else announce
-                stream.write(json.dumps({"rev": announced}, ensure_ascii=False), event="reset")
-                floor = int(latest or 0)
-            else:
-                for row in replay:
-                    if sub.closed:
-                        return
-                    try:
-                        data = json.loads(row["data"] or "{}")
-                    except ValueError:
-                        data = {}
-                    if sub.closed:
-                        return
-                    if not self._visible(sub, row["kind"], data):
-                        if sub.closed:
-                            return
-                        floor = max(floor, int(row["id"]))
-                        continue
-                    if sub.closed:
-                        return
-                    if not stream.write(json.dumps(data, ensure_ascii=False), event=row["kind"], id=row["id"]):
-                        return
-                    floor = max(floor, int(row["id"]))
+            elif not emit_rows(replay):
+                return
             if sub.closed:
                 return
             presence = self.presence(sub.review_id)
@@ -479,6 +492,10 @@ class Registry:
                     next_recheck = time.monotonic() + RECHECK_EVERY
                     if not sub.recheck():
                         break
+                    # A standalone server and Hermes can share a store. The other process writes the same
+                    # durable log but cannot enqueue into our registry. Pick up its writes on the existing tick.
+                    if self.latest(sub.review_id) != floor and not catch_up():
+                        break
                 item = None
                 try:
                     item = sub.queue.get(timeout=LOOP_WAIT)
@@ -488,17 +505,12 @@ class Registry:
                     break
                 if item is not None:
                     event_id, kind, data = item
-                    if event_id is not None:
-                        if floor and int(event_id) <= floor:
-                            continue      # already delivered by the replay window; the gap is exactly this overlap
-                        floor = max(floor, int(event_id))
-                    if sub.closed:
+                    if event_id is not None and event_id > floor + 1:
+                        # Fill any gap before advancing the cursor past a different process's earlier write.
+                        if not catch_up():
+                            break
+                    if not emit(event_id, kind, data):
                         break
-                    if self._visible(sub, kind, data):
-                        if sub.closed:
-                            break
-                        if not stream.write(json.dumps(data, ensure_ascii=False), event=kind, id=event_id):
-                            break
                 self.refresh(sub)
                 if not stream.tick():
                     break

@@ -603,8 +603,8 @@ def activity(review_id: str, principal: str = "", limit: int = 100,
     lim = max(1, min(int(limit), 500))
     scope = scope or _default_scope(review_id)
     restricted = scope.restricted
-    sql = "SELECT * FROM events WHERE review_id = ? ORDER BY id DESC" + ("" if restricted else " LIMIT ?")
-    args = (review_id,) if restricted else (review_id, lim)
+    sql = "SELECT * FROM events WHERE review_id = ? AND kind != ? ORDER BY id DESC" + ("" if restricted else " LIMIT ?")
+    args = (review_id, live.PIN_REQUESTS) if restricted else (review_id, live.PIN_REQUESTS, lim)
     rows = [dict(r) for r in conn.execute(sql, args).fetchall()]
     thread_rounds = _thread_rounds(review_id) if restricted else {}
     cursor = _reads_for(review_id, principal, conn).get("", 0.0)
@@ -631,12 +631,14 @@ def activity_unread(review_id: str, principal: str = "", scope: Optional[Scope] 
     cursor = _reads_for(review_id, principal).get("", 0.0)
     scope = scope or _default_scope(review_id)
     if not scope.restricted:
-        row = db.connect().execute("SELECT COUNT(*) AS n FROM events WHERE review_id = ? AND actor != ? AND at > ?",
-                                   (review_id, principal, cursor)).fetchone()
+        row = db.connect().execute(
+            "SELECT COUNT(*) AS n FROM events WHERE review_id = ? AND kind != ? AND actor != ? AND at > ?",
+            (review_id, live.PIN_REQUESTS, principal, cursor)).fetchone()
         return int(row["n"])
     thread_rounds = _thread_rounds(review_id)
     rows = [dict(r) for r in db.connect().execute(
-        "SELECT * FROM events WHERE review_id = ? AND actor != ? AND at > ?", (review_id, principal, cursor)).fetchall()]
+        "SELECT * FROM events WHERE review_id = ? AND kind != ? AND actor != ? AND at > ?",
+        (review_id, live.PIN_REQUESTS, principal, cursor)).fetchall()]
     return sum(1 for r in rows if sees_round(scope, _event_round(r, thread_rounds)))
 
 

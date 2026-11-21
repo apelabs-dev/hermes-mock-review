@@ -357,7 +357,7 @@ def _supersede_pin_fixes(review_id: str, n: int) -> None:
             prev["pin_fix"] = state
             changed = True
         if changed:
-            store.save(review_id, data)
+            store.save(review_id, data, pin_round=prev["n"])
 
 
 @_owned
@@ -517,7 +517,7 @@ def patch_block(review_id: str, block: str, html: str, option: Optional[str] = N
             history = current["history"] = []
         history.append({"at": now, "action": "patch_block", "block": block, "option": option, "rev": new_rev,
                         "request_ids": done, "prev_file": hist.relative_to(store.review_dir(review_id)).as_posix()})
-        store.save(review_id, data)
+        store.save(review_id, data, pin_round=n if done else None)
         result = {"ok": True, "review_id": review_id, "round": n, "block": block, "option": option,
                   "rev": new_rev, "done": done, "url": store.review_url(data)}
         if skipped:
@@ -737,7 +737,8 @@ def _close(review_id: str) -> Dict[str, Any]:
         data["status"] = "closed"
         data["closed_at"] = store.now_iso()
         _drop_pending_notices(data)
-        store.save(review_id, data)
+        current = data["rounds"][-1]
+        store.save(review_id, data, pin_round=current["n"] if current.get("pin_requests") else None)
     res["status"] = "closed"
     return res
 

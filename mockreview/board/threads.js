@@ -146,10 +146,80 @@ export function createThreads(opts) {
     return list.length ? list[0].text : '(deleted)';
   }
 
+  // ---- Hermes pin activity -------------------------------------------
+  var deadlineTimer = 0, elapsedTimer = 0;
+  function roundRequests() {
+    return Object.values(opts.pinRequests()).filter(function (q) {
+      return !q.thread_id || !S.hidden[q.thread_id];
+    });
+  }
+  function working(q) { return !!q && q.deadline * 1000 > Date.now(); }
+  function activityFor(thread, pin) {
+    var matches = roundRequests().filter(function (q) {
+      return q.thread_id ? q.thread_id === thread : !!pin && (q.pin_id || q.id) === pin.id &&
+        q.block === pin.block && (q.option || null) === (pin.option || null);
+    });
+    return matches.find(working) || matches[matches.length - 1];
+  }
+  function activityState(q) {
+    if (!q) return '';
+    if (working(q)) return 'working';
+    return q.status === 'failed' || q.deadline ? 'failed' : '';
+  }
+  function activityTextFor(q) {
+    return activityState(q) === 'working' ? 'Hermes is working on this…'
+      : q.timed_out || q.deadline ? 'Hermes couldn’t finish in time.' : 'Hermes couldn’t finish.';
+  }
+  function paintPin(btn, q) {
+    var state = activityState(q);
+    if ((btn.dataset.hermesState || '') === state) return btn;
+    var old = btn.querySelector('.hermes-pin-indicator');
+    if (old) old.remove();
+    if (state) {
+      btn.dataset.hermesState = state;
+      btn.appendChild(h('span', {class: 'hermes-pin-indicator', 'aria-hidden': 'true'},
+        state === 'failed' ? icon('x') : null));
+    } else delete btn.dataset.hermesState;
+    var label = btn.dataset.pinLabel || btn.getAttribute('aria-label');
+    btn.dataset.pinLabel = label;
+    btn.setAttribute('aria-label', state ? label + ' · ' + activityTextFor(q) : label);
+    return btn;
+  }
+  function statusRow(row, q, retry) {
+    var state = activityState(q);
+    var current = row.querySelector('.hermes-thread-status');
+    var key = state ? [q.id, state, retry, activityTextFor(q)].join('/') : '';
+    if (current && current.dataset.statusKey === key) return;
+    clearInterval(elapsedTimer);
+    if (current) current.remove();
+    if (!state) return;
+    var elapsed = state === 'working' ? h('time', {class: 'hermes-elapsed', 'aria-hidden': 'true'}) : null;
+    row.prepend(h('div', {class: 'hermes-thread-status', 'data-hermes-state': state, 'data-status-key': key},
+      h('span', {role: 'status', text: activityTextFor(q)}), elapsed,
+      state === 'failed' && retry ? h('span', {class: 'hermes-retry', text: 'Mention @Hermes again to retry.'}) : null));
+    if (!elapsed) return;
+    function tick() {
+      var seconds = Math.max(0, Math.floor((Date.now() - Date.parse(q.requested_at)) / 1000));
+      elapsed.textContent = Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0');
+    }
+    tick();
+    elapsedTimer = setInterval(tick, 1000);
+  }
+  function pinActivityChanged() {
+    clearTimeout(deadlineTimer);
+    var deadlines = roundRequests().filter(working).map(function (q) { return q.deadline * 1000; });
+    if (deadlines.length) deadlineTimer = setTimeout(pinActivityChanged, Math.max(0, Math.min.apply(null, deadlines) - Date.now()));
+    syncHeader();
+    repaintTyping();
+    if (S.overlay && S.overlay.kind === 'comments') S.overlay.paint();
+    opts.paintPinActivity();
+  }
+
   // ---- server state ---------------------------------------------------
   function refresh() {
     var view = opts.view(), before = S.rev;
     return request('threads?round=' + encodeURIComponent(view)).then(function (j) {
+      if (view !== opts.view()) return;
       var fresh = j.threads || [];
       if ((j.rev || 0) < S.rev) {
         var have = {};
@@ -195,15 +265,20 @@ export function createThreads(opts) {
     if (t) open(t);
   }
 
-  function setView(n) {
-    if (opts.view() === n && S.loaded) return;
+  function setView() {
+    pinActivityChanged();
     refresh();
   }
 
   function connect() {
     if (S.es || typeof EventSource === 'undefined') return;
     try { S.es = new EventSource('events'); } catch (e) { S.es = null; return; }
-    S.es.onopen = function () { S.failures = 0; chip(false); };
+    var opened = false;
+    S.es.onopen = function () {
+      S.failures = 0; chip(false);
+      if (opened) opts.refreshPinActivity();
+      opened = true;
+    };
     S.es.onerror = function () {
       S.failures++;
       if (S.failures >= 2) chip(true);
@@ -211,6 +286,7 @@ export function createThreads(opts) {
     S.es.addEventListener('hello', function (e) { onHello(e); });
     S.es.addEventListener('presence', function (e) { onPresence(e); });
     S.es.addEventListener('typing', function (e) { onTyping(e); });
+    S.es.addEventListener('pin.requests', function () { opts.refreshPinActivity(); });
     S.es.addEventListener('reset', function () { if (opts.reloadState) opts.reloadState(); else refresh(); });
     ['thread.created', 'thread.replied', 'thread.status', 'thread.deleted', 'comment.edited', 'comment.deleted',
       'mention', 'review.reset'].forEach(function (kind) {
@@ -306,6 +382,20 @@ export function createThreads(opts) {
 
   // ---- header ---------------------------------------------------------
   function countBadge(n) { return h('span', {class: 'badge', text: String(n || 0)}); }
+  function workingCount() {
+    var button = h('button', {class: 'btn hermes-working-count', type: 'button', 'aria-haspopup': 'dialog',
+      onclick: function () { openComments(true); }});
+    var slot = h('span', {class: 'hermes-count-slot'});
+    function paint() {
+      var count = roundRequests().filter(working).length;
+      if (!count) { button.remove(); return; }
+      button.textContent = 'Hermes · ' + count + ' working';
+      if (!button.isConnected) slot.appendChild(button);
+    }
+    paint();
+    S.headerPaints.push({nodes: [slot], paint: paint});
+    return slot;
+  }
   function syncHeader() {
     S.headerPaints = S.headerPaints.filter(function (p) { return p.nodes.some(function (n) { return n.isConnected; }); });
     S.headerPaints.forEach(function (p) { p.paint(); });
@@ -315,7 +405,7 @@ export function createThreads(opts) {
     var here = h('span', {class: 'there'});
     var commentsBadge = countBadge(0), activityBadge = countBadge(0);
     var commentsBtn = h('button', {class: 'tbtn tcomments', type: 'button', title: 'All comments on this review',
-      onclick: openComments}, icon('comments'), h('span', {text: 'Comments'}), commentsBadge);
+      onclick: function () { openComments(false); }}, icon('comments'), h('span', {text: 'Comments'}), commentsBadge);
     var activityBtn = h('button', {class: 'tbtn tactivity', type: 'button', title: 'Recent activity',
       onclick: openActivity}, icon('bell'), h('span', {text: 'Activity'}), activityBadge);
     var nodes = [avatars, here, commentsBtn, activityBtn];
@@ -369,17 +459,18 @@ export function createThreads(opts) {
     });
     return o;
   }
-  function threadRow(t) {
+  function threadRow(t, here) {
     var dot = t.unread ? h('span', {class: 'un', title: 'Unread'}) : null;
     var meta = h('span', {class: 'tmeta'},
       h('span', {text: (t.comments || []).length + ' comment' + ((t.comments || []).length === 1 ? '' : 's')}),
       h('span', {text: '· ' + ago(t.updated_at)}));
+    var badge = working(activityFor(t.id)) ? h('span', {class: 'badge ac', text: 'Working'}) : null;
     return h('button', {class: 'trow' + (t.activated ? ' act' : ''), type: 'button', onclick: function () {
       closeOverlay();
-      jump(t);
+      if (here) open(t); else jump(t);
     }}, h('span', {class: 'tnum', text: String(t.n)}), h('span', {class: 'tmain'},
       h('span', {class: 'tname'}, dot, h('span', {text: firstText(t)})),
-      h('span', {class: 'tsub', text: anchorLabel(t)})), meta);
+      h('span', {class: 'tsub', text: anchorLabel(t)})), badge, meta);
   }
   function anchorLabel(t) {
     var a = anchor(t), block = a.block || 'board';
@@ -387,27 +478,40 @@ export function createThreads(opts) {
       : a.on === 'board' ? 'Board' : block;
     return t.status === 'resolved' ? where + ' · Resolved' : where;
   }
-  function openComments() {
-    var o = overlay('comments', 'Comments');
+  function openComments(onlyWorking) {
+    closePopover();
+    var o = overlay('comments', onlyWorking ? 'Working comments' : 'Comments');
     var toggle = h('input', {type: 'checkbox'});
     toggle.checked = S.showResolved;
     toggle.addEventListener('change', function () { S.showResolved = toggle.checked; o.paint(); });
-    o.body.appendChild(h('div', {class: 'tfilter'},
+    if (!onlyWorking) o.body.appendChild(h('div', {class: 'tfilter'},
       h('label', {class: 'ttoggle'}, toggle, h('span', {class: 'tr'}), h('span', {text: 'Resolved'}))));
     var list = h('div', {class: 'tlist'});
     o.body.appendChild(list);
     o.paint = function () {
       var rows = S.threads.slice().sort(function (a, b) {
         return (b.activated - a.activated) || (b.updated_at - a.updated_at);
-      }).filter(function (t) { return S.showResolved || t.status !== 'resolved'; });
+      }).filter(function (t) { return onlyWorking ? working(activityFor(t.id)) : S.showResolved || t.status !== 'resolved'; });
+      var fixes = roundRequests().filter(function (q) {
+        return !q.thread_id && (onlyWorking ? working(q) : !!activityState(q) || q.status === 'done');
+      });
       list.textContent = '';
-      if (!rows.length) {
-        list.appendChild(h('p', {class: 'tempty', text: S.showResolved
+      if (!rows.length && !fixes.length) {
+        list.appendChild(h('p', {class: 'tempty', text: onlyWorking ? 'Hermes has no work on this round.' : S.showResolved
           ? 'No comments yet — press the comment button, then click anywhere on the board to add one.'
           : 'No open comments. Turn on "Resolved" to see the rest.'}));
         return;
       }
-      rows.forEach(function (t) { list.appendChild(threadRow(t)); });
+      rows.forEach(function (t) { list.appendChild(threadRow(t, onlyWorking || !!activityState(activityFor(t.id)))); });
+      fixes.forEach(function (q) {
+        var state = activityState(q);
+        list.appendChild(h('button', {class: 'trow', type: 'button', onclick: function () {
+          closeOverlay();
+          opts.openPinFix(q);
+        }}, h('span', {class: 'tmain'}, h('span', {class: 'tname', text: 'Pin fix'}),
+          h('span', {class: 'tsub', text: opts.blockLabel(q.block)})),
+          state === 'working' ? h('span', {class: 'badge ac', text: 'Working'}) : null));
+      });
     };
     o.paint();
   }
@@ -670,8 +774,10 @@ export function createThreads(opts) {
     closePopMenu();
     var p = S.pop;
     S.pop = null;
+    clearInterval(elapsedTimer);
     p.el.remove();
-    if (p.returnTo && p.returnTo.isConnected) p.returnTo.focus({ preventScroll: true });
+    var returnTo = p.returnTo && p.returnTo.isConnected ? p.returnTo : markerFor(p.id);
+    if (returnTo) returnTo.focus({ preventScroll: true });
     if (p.onClose) p.onClose();
   }
   function markerFor(id) {
@@ -683,6 +789,36 @@ export function createThreads(opts) {
     var a = anchor(t), target = a.target ? cleanTarget(a.target) : null;
     if (target && target.label) return 'on ' + target.label;
     return a.on === 'board' ? 'on the board' : anchorLabel(t);
+  }
+  function placePopover(el, box) {
+    var sheet = window.innerWidth < 640;
+    el.classList.toggle('sheet', sheet);
+    if (sheet) { el.setAttribute('aria-modal', 'true'); return; }
+    var w = el.offsetWidth, hh = el.offsetHeight;
+    var ax = box ? box.right : window.innerWidth / 2, ay = box ? box.top : window.innerHeight / 2;
+    var left = ax + 18;
+    if (left + w > window.innerWidth - 12) left = ax - w - 18;
+    el.style.left = Math.max(12, left) + 'px';
+    el.style.top = Math.max(12, Math.min(ay - 28, window.innerHeight - hh - 12)) + 'px';
+  }
+  function openFix(q, marker, box) {
+    closePopover();
+    var close = h('button', {class: 'btn btn-ghost tp-act tp-close', type: 'button',
+      title: 'Close', 'aria-label': 'Close', onclick: closePopover}, icon('x'));
+    var row = h('div', {class: 'tp-typing'});
+    var el = h('div', {class: 'popover tpop', role: 'dialog', 'aria-label': 'Pin fix'},
+      h('div', {class: 'tp-head'}, h('strong', {text: 'Pin fix'}), h('span', {class: 'spacer'}), close),
+      h('div', {class: 'tp-anchor', text: opts.blockLabel(q.block)}), row);
+    var p = S.pop = {el: el, returnTo: marker || document.activeElement, typing: function () {
+      var request = opts.pinRequests()[q.id];
+      statusRow(row, request, false);
+      if (!activityState(request) && request && request.status === 'done' && !row.firstChild)
+        row.appendChild(h('span', {class: 'tp-note', text: 'Pin fix completed.'}));
+    }};
+    document.body.appendChild(el);
+    p.typing();
+    placePopover(el, box || (marker && marker.getBoundingClientRect()));
+    close.focus({preventScroll: true});
   }
   function open(thread, extra) {
     var t = typeof thread === 'string' ? find(thread) : thread;
@@ -703,18 +839,7 @@ export function createThreads(opts) {
     if (!extra || extra.read !== false) markRead(t);
     var marker = markerFor(t.id);
     p.returnTo = marker;
-    var box = marker ? marker.getBoundingClientRect() : null;
-    var sheet = window.innerWidth < 640;
-    el.classList.toggle('sheet', sheet);
-    if (sheet) el.setAttribute('aria-modal', 'true');
-    if (!sheet) {
-      var w = el.offsetWidth, hh = el.offsetHeight;
-      var ax = box ? box.right : window.innerWidth / 2, ay = box ? box.top : window.innerHeight / 2;
-      var left = ax + 18;
-      if (left + w > window.innerWidth - 12) left = ax - w - 18;
-      el.style.left = Math.max(12, left) + 'px';
-      el.style.top = Math.min(Math.max(12, ay - 28), window.innerHeight - hh - 12) + 'px';
-    }
+    placePopover(el, marker ? marker.getBoundingClientRect() : extra.box);
     function renderPopBody() {
       closePopMenu();
       var prev = ta, keep = prev ? {
@@ -865,10 +990,11 @@ export function createThreads(opts) {
       }).catch(function (e) { opts.toast(e.message || 'Could not update', 'warn'); });
     }
     function renderTyping() {
-      if (!typingRow) return;
       var who = S.typing[p.id];
-      typingRow.textContent = '';
+      var old = typingRow.querySelector('.typing');
+      if (old) old.remove();
       if (who && who.until > Date.now()) typingRow.appendChild(h('span', {class: 'typing', text: who.name + ' is typing…'}));
+      statusRow(typingRow, activityFor(p.id), hermesAllowed() && p.thread.status !== 'resolved');
     }
     p.render = renderPopBody;
     p.typing = renderTyping;
@@ -1005,7 +1131,7 @@ export function createThreads(opts) {
       e.stopPropagation();
       open(t, {detached: !!detached});
     });
-    return b;
+    return paintPin(b, activityFor(t.id));
   }
   function row(t) {
     return h('li', {class: 'tpin-row'},
@@ -1081,16 +1207,20 @@ export function createThreads(opts) {
     if (S.menu && !S.menu.el.contains(e.target) && !(S.menu.btn && S.menu.btn.contains(e.target))) closePopMenu();
     if (S.menu && S.menu.el.contains(e.target)) return;
     if (!S.pop || S.pop.el.contains(e.target)) return;
-    if (e.target.closest && e.target.closest('[data-thread]')) return;
+    if (e.target.closest && e.target.closest('[data-thread], [data-pin-request]')) return;
     closePopover();
   });
   window.addEventListener('pagehide', function () {
     if (S.es) { S.es.close(); S.es = null; }
+    clearTimeout(deadlineTimer);
+    clearInterval(elapsedTimer);
   });
 
   return {
     boot: boot, setView: setView, refresh: refresh, close: closePopover,
-    headerActions: headerActions,
+    headerActions: headerActions, workingCount: workingCount,
+    roundRequests: roundRequests, working: working, activityFor: activityFor, activityState: activityState,
+    paintPin: paintPin, pinActivityChanged: pinActivityChanged, openFix: openFix, statusRow: statusRow,
     canvasEntries: canvasEntries, mockEntries: mockEntries, protoEntries: protoEntries, frameEntries: frameEntries,
     spot: spot, marker: marker, row: row,
     open: open, hidden: hidden, unread: function (id) { var t = find(id); return !!(t && t.unread); },

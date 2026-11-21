@@ -85,7 +85,7 @@ config_schema:
   pin_fix:
     type: bool
     default: false
-    description: "Let a reviewer ask Hermes to patch one block of the current round in place, from a pin or an @Hermes comment, instead of sending a new round. A review created through the tools turns this on when it wakes Hermes and off when it does not; an explicit value from the call, the environment or config wins, so a config-level true survives wake=false. Off: pins and comments are notes only. Env: MOCKREVIEW_PIN_FIX."
+    description: "Let reviewers request their own pin fixes to patch one block of the current round in place. With mention wakes on, @Hermes comments can still wake Hermes and patch supported blocks with pin_fix off. A review created through the tools turns this on when it wakes Hermes and off when it does not; an explicit value from the call, the environment or config wins, so a config-level true survives wake=false. Env: MOCKREVIEW_PIN_FIX."
   pin_fix_window_seconds:
     type: float
     default: 20.0

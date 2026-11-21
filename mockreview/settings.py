@@ -85,11 +85,11 @@ SPEC: List[Setting] = [
     Setting("interactive_elements", "bool", True, "Mocks carry working controls. On: build every control in a mock "
             "so it responds (a dropdown opens, a switch flips, a tab changes, a field takes text); the comment toggle "
             "is always one press away (C). Off: mocks are static pictures.", "feedback", review=True),
-    Setting("pin_fix", "bool", False, "Let a reviewer ask Hermes to patch one block of the current round in place, "
-            "from a pin or an @Hermes comment, instead of sending a new round. A review created through the tools "
+    Setting("pin_fix", "bool", False, "Let reviewers request their own pin fixes to patch one block of the current "
+            "round in place. With mention wakes on, @Hermes comments can still wake Hermes and patch supported "
+            "blocks with pin_fix off. A review created through the tools "
             "turns this on when it wakes Hermes and off when it does not; an explicit value from the call, the "
-            "environment or config wins, so a config-level true survives wake=false. Off: pins and comments are "
-            "notes only.",
+            "environment or config wins, so a config-level true survives wake=false.",
             "feedback", review=True),
     Setting("pin_fix_window_seconds", "float", 20.0, "Requests that arrive within this many seconds of each other "
             "share one wake-up.", "feedback", lo=0, hi=600, review=True),

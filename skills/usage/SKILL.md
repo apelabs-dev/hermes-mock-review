@@ -37,10 +37,10 @@ When a wake says `review.thread_mention`, a reviewer mentioned `@Hermes` in a co
 `mock_review_list_comments`. When the comment asks for a change, patch the block in place FIRST with
 `mock_review_patch_block`, using the round and the block's `if_rev` you read and passing `request_ids=[request_id]`;
 then answer in the same thread with `mock_review_reply`, passing the wake payload's `request_id` so the block's
-"working" chip closes. A question that needs no patch is answered without one: read, answer, resolve. Resolve the
-thread with `mock_review_resolve` when you are done (it closes the chip too). Do not start a new round unless the
-comment asks for one. Only an owner or reviewer on a wake-on board wakes you this way: a guest, an agent token and a
-wake-off board store the mention without waking anyone, so answer those in chat instead.
+live activity clears. The board shows the work on the pin, block, open thread, Comments list and header. Answer
+questions in the thread and resolve it with `mock_review_resolve` when you are done. Start a new round only if the
+comment asks for one. Mentions wake you from an owner or reviewer on a wake-on board. Guest mentions, agent mentions
+and wake-off boards store the comment without sending a wake, so answer those in chat instead.
 
 The next round asks only what is still open: blocks marked Change (set `revised` on them to a short string label such
 as `Revised`, not a flag), skipped or unanswered ones, and anything new. Approved blocks and answered questions go in
@@ -173,8 +173,9 @@ These look settings can be overridden per review by passing them to create or ad
 `tablet_width`. A review stores them, so changing the config later never changes an open review. Pass one only when
 the user asked for it.
 
-A review created with wake-up on turns `pin_fix` on (in-place block patches) unless create passes `pin_fix=false`; a
-wake-off board stores it off. Mention wakes and pin fixes share the `pin_fix_max_per_hour` and
+A review created with wake-up on enables reviewers' own pin fixes unless create passes `pin_fix=false`; a
+wake-off board defaults to off. With mention wakes on, `@Hermes` mentions can wake you and patch supported blocks
+with either `pin_fix` setting. Mention wakes and pin fixes share the `pin_fix_max_per_hour` and
 `pin_fix_max_per_round` budget.
 
 ## Rules

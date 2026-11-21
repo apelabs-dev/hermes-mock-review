@@ -494,6 +494,20 @@ figure.opt.picked .mock { outline: 2px solid var(--accent); }
 .mpin::before { content: ""; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px;
   margin: -22px 0 0 -22px; transform: rotate(45deg); }
 .mpin span { transform: rotate(45deg); }
+.mpin .hermes-pin-indicator { position: absolute; pointer-events: none; }
+.mpin[data-hermes-state="working"] .hermes-pin-indicator {
+  inset: -5px; border: 2px solid var(--surface); border-top-color: var(--pin);
+  border-right-color: var(--pin); border-radius: 50%; animation: hermes-pin-spin 1.4s linear infinite;
+}
+.mpin[data-hermes-state="failed"] .hermes-pin-indicator {
+  right: -5px; bottom: -5px; display: grid; place-items: center; width: 16px; height: 16px;
+  border: 1px solid var(--err); border-radius: 50%; background: var(--surface); color: var(--err);
+}
+.hermes-pin-indicator .ico { width: 12px; height: 12px; }
+@keyframes hermes-pin-spin { to { transform: rotate(1turn); } }
+@media (prefers-reduced-motion: reduce) {
+  .mpin[data-hermes-state="working"] .hermes-pin-indicator { animation: none; }
+}
 .mpin.ghost { opacity: .7; }
 .mpin.flash { animation: pinflash .9s ease; }
 @keyframes pinflash { 0%,100% { box-shadow: 0 2px 8px rgba(0,0,0,.35); } 40% { box-shadow: 0 0 0 10px var(--accent-soft); } }
@@ -814,6 +828,18 @@ select:focus {
 .cedit .link-btn { font-size: 12px; padding: 2px 4px; }
 .men { color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: 0 3px; font-weight: 600; }
 .tp-typing { min-height: 14px; }
+.hermes-thread-status {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin-bottom: 4px;
+  padding: 8px 12px; border-radius: var(--r); background: var(--surface-2); color: var(--text); font-size: 13px;
+}
+.hermes-thread-status[data-hermes-state="failed"] { color: color-mix(in srgb, var(--err) 80%, var(--text)); }
+.hermes-elapsed { margin-left: auto; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.hermes-retry { flex-basis: 100%; color: var(--muted); font-size: 12px; }
+.pin-fix-detail:empty { display: none; }
+.hermes-block-status {
+  display: inline-flex; width: fit-content; margin-block: 4px; padding: 4px 8px;
+  border-radius: 999px; color: var(--accent); background: var(--surface-2); font-size: 12px; font-weight: 600;
+}
 .typing { font-size: 12px; color: var(--muted); font-style: italic; }
 .tp-reply { display: grid; gap: 6px; border-top: 1px solid var(--line); padding-top: 8px; }
 .tp-input { min-height: 42px; resize: none; }
@@ -933,6 +959,11 @@ a { color: var(--accent); }
 .dzbar .spacer { order: 2; flex: 1 1 auto; min-width: 4px; }
 .dzbar .bar-actions { order: 3; display: flex; align-items: center; gap: 8px; flex: none; }
 .dzbar .bar-actions > * { flex: none; }
+.hermes-count-slot:empty { display: none; }
+.btn.hermes-working-count {
+  padding-inline: 8px; color: var(--accent); font-size: 12px; font-weight: 600; white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
 @media (max-width: 1279px) {
   body .dzbar { flex-wrap: nowrap; padding: 0 12px; column-gap: 8px; }
   .dzbar::after { display: none; }

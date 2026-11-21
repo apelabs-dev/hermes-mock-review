@@ -732,7 +732,8 @@ class Handler(BaseHTTPRequestHandler):
             ctype = mimetypes.guess_type(f.name)[0] or "application/octet-stream"
             if ctype.startswith("text/") or ctype in ("application/javascript", "image/svg+xml"):
                 ctype += "; charset=utf-8"
-            if store.variant_has_artifact(rid, rest[1], rest[2]):
+            artifact = store.variant_has_artifact(rid, rest[1], rest[2])
+            if artifact:
                 # An artifact's own round keeps the artifact policy, token or not.
                 csp = ARTIFACT_ROUND_CSP
             elif tokened:
@@ -752,8 +753,12 @@ class Handler(BaseHTTPRequestHandler):
             # review's files out of another review's prototype without breaking the board's own document. An expired
             # token still counts here, but it stays on the no-network branch above.
             corp = "cross-origin" if (same_review or render) else "same-origin"
-            return self._send_file(f, ctype, {"Content-Security-Policy": csp, "Cache-Control": "no-cache",
-                                              "Cross-Origin-Resource-Policy": corp})
+            headers = {"Content-Security-Policy": csp, "Cache-Control": "no-cache",
+                       "Cross-Origin-Resource-Policy": corp}
+            if (artifact and tokened and dest == "iframe" and len(rest) == 5 and rest[3] == "blocks"
+                    and ctype.startswith("text/html;") and not self.headers.get("Range")):
+                return self._send(200, store.artifact_board_page(f.read_bytes()), ctype, headers)
+            return self._send_file(f, ctype, headers)
         raise ReviewError("not found", 404)
 
     def _query_int(self, name: str, default: Optional[int] = None) -> Optional[int]:
@@ -838,7 +843,7 @@ class Handler(BaseHTTPRequestHandler):
             sub.close()
             live.REGISTRY.unsubscribe(sub)
             raise
-        live.REGISTRY.stream(self, sub, hello, rows, reset=reset, latest=latest, announce=rev)
+        live.REGISTRY.stream(self, sub, hello, rows, reset=reset, latest=latest, announce=rev, last=last)
         return None
 
     def _owner(self) -> None:
@@ -1431,16 +1436,16 @@ class Worker(threading.Thread):
 
     def _run(self) -> None:
         for _ in self._ticks():
-            try:
-                service.retry_pending()
-            except Exception:
-                log.exception("retry pass failed")
-            if settings.get("stale_after_minutes") and time.time() - self.last_stalled >= service.STALLED_SCAN_SECONDS:
+            if time.time() - self.last_stalled >= service.STALLED_SCAN_SECONDS:
                 self.last_stalled = time.time()
                 try:
                     service.check_stalled()
                 except Exception:
                     log.exception("stalled-notice pass failed")
+            try:
+                service.retry_pending()
+            except Exception:
+                log.exception("retry pass failed")
             try:
                 if time.time() - self.last_housekeeping >= settings.get("housekeeping_seconds"):
                     self.last_housekeeping = time.time()

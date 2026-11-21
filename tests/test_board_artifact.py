@@ -31,7 +31,8 @@ var calls = {pops: [], saves: 0, redraws: 0, toasts: 0, sent: 0};
 function isEditable() { return EDITABLE; }
 function canComment() { return EDITABLE && pinsOn(); }
 function pinVisible(p) { return !p.thread || !T.hidden(p.thread); }
-var T = {mockEntries: function () { return []; }, hidden: function () { return false; }};
+var T = {mockEntries: function () { return []; }, hidden: function () { return false; },
+  activityFor: function () {}, activityState: function () { return ''; }};
 function pinsOn() { return CFG.pins_enabled; }
 function cleanTarget(v) { return v && typeof v === 'object' && typeof v.path === 'string' ? v : null; }
 function notePop(o) { calls.pops.push(o); }
