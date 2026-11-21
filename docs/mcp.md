@@ -52,7 +52,7 @@ characters) skips the check of the mocks' colours and fonts against the profile 
 The CLI also accepts the `tailscale` and `lan` aliases. `allow_live_demo` permits a prototype round for this call when
 the `offer_live_demo` setting is off. The per-review look keys (`devices`, `default_device`, `default_theme`,
 `show_theme_toggle`, `pins_enabled`,
-`require_note_on_change`, `max_pins`, `mobile_width`, `tablet_width`) come from the same settings table as the plugin
+`require_note_on_change`, `max_pins`, `hide_resolved_pins`, `mobile_width`, `tablet_width`) come from the same settings table as the plugin
 and are stored in the review. The result carries `review_id`, `url`, `mode` and `round`, and `wake: false` for a board
 nobody is woken by.
 

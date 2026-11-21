@@ -137,7 +137,6 @@ export function createThreads(opts) {
     return null;
   }
   function openThreads() { return S.threads.filter(function (t) { return t.status !== 'resolved' && !S.hidden[t.id]; }); }
-  function hidden(id) { return !!S.hidden[id] || !!(find(id) && find(id).status === 'resolved'); }
   function mirrorSet() { return opts.mirrored ? opts.mirrored() : {}; }
   function unmirrored(t) { return !mirrorSet()[t.id]; }
   function anchor(t) { return (t && t.anchor) || {}; }
@@ -1228,7 +1227,7 @@ export function createThreads(opts) {
     paintPin: paintPin, pinActivityChanged: pinActivityChanged, openFix: openFix, statusRow: statusRow,
     canvasEntries: canvasEntries, mockEntries: mockEntries, protoEntries: protoEntries, frameEntries: frameEntries,
     spot: spot, marker: marker, row: row,
-    open: open, hidden: hidden,
+    open: open,
     gone: function (id) { return !!S.hidden[id]; },
     resolved: function (id) { var t = find(id); return !!(t && t.status === 'resolved'); },
     unread: function (id) { var t = find(id); return !!(t && t.unread); },
