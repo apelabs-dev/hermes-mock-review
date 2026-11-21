@@ -169,8 +169,8 @@ account), then give the link. 1.x users who opened boards on a phone must sign i
 Settings live in `plugins.entries.mock-review.settings` in the Hermes config. `/mockreview settings` and
 `hermes mockreview settings` show every value and where it came from (override, env, config.yaml or default).
 These look settings can be overridden per review by passing them to create or add_round: `devices`, `default_device`,
-`default_theme`, `show_theme_toggle`, `pins_enabled`, `require_note_on_change`, `max_pins`, `mobile_width`,
-`tablet_width`. A review stores them, so changing the config later never changes an open review. Pass one only when
+`default_theme`, `show_theme_toggle`, `pins_enabled`, `require_note_on_change`, `max_pins`, `hide_resolved_pins`,
+`mobile_width`, `tablet_width`. A review stores them, so changing the config later never changes an open review. Pass one only when
 the user asked for it.
 
 A review created with wake-up on enables reviewers' own pin fixes unless create passes `pin_fix=false`; a
