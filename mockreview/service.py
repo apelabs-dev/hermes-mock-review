@@ -235,7 +235,8 @@ MENTION_PERMANENT = ("HTTP 400", "HTTP 413", "HTTP 422")
 
 
 def _review_setting(data: Dict[str, Any], name: str) -> Any:
-    """A pin_fix* setting as stored in this review (an old review lacks it: the current default applies)."""
+    """A pin_fix* setting as stored in this review: its own value wins over every later config edit, and only a review
+    that lacks the key falls back to the current default (`settings.get`'s chain: env, config, default)."""
     return settings.get(name, (data.get("settings") or {}).get(name))
 
 
@@ -644,11 +645,11 @@ def _prune_thread_wakes(review_id: str, now: Optional[float] = None) -> bool:
 def _mention_request(data: Dict[str, Any], review_id: str, wake: Dict[str, Any]) -> Optional[str]:
     """Open (or reuse) the pin request that renders the thread's working chip, keyed to the comment.
 
-    Only a mention on the newest round, on a block that is editable HTML by the same rule `request_pin_fix` uses,
-    gets one. On a retry the request already stored under `mention:<comment id>` is reused, never duplicated.
+    Every delivered mention opens one, whatever `pin_fix` says: the chip reports a wake that already happened, and the
+    wake itself is not gated on that flag (the flag governs a reviewer's own pin fixes). Only a mention on the newest
+    round, on a block that is editable HTML by the same rule `request_pin_fix` uses, gets one. On a retry the request
+    already stored under `mention:<comment id>` is reused, never duplicated.
     """
-    if not _review_setting(data, "pin_fix"):
-        return None
     rounds = data.get("rounds") or []
     if not rounds:
         return None
