@@ -47,6 +47,7 @@ LOOK_PROPS: Dict[str, Any] = {
     "pins_enabled": {"type": "boolean"},
     "require_note_on_change": {"type": "boolean"},
     "max_pins": {"type": "integer"},
+    "hide_resolved_pins": {"type": "boolean", "description": "Hide a pin's marker once its thread is resolved."},
     "mobile_width": {"type": "integer"},
     "tablet_width": {"type": "integer"},
 }

@@ -1331,7 +1331,7 @@ import {paintAvatar} from './avatar.js';
 
   // ---- per-review settings (state.json → settings) ----
   var CFG_DEFAULT = { devices: ['desktop', 'mobile'], default_device: 'auto', default_theme: 'project', show_theme_toggle: true, layout: 'inline',
-    mobile_width: 390, tablet_width: 820, pins_enabled: true, require_note_on_change: false, max_pins: 40, footer_button: 'build', interactive_elements: false };   // defaults for reviews stored before a setting existed
+    mobile_width: 390, tablet_width: 820, pins_enabled: true, require_note_on_change: false, max_pins: 40, footer_button: 'build', interactive_elements: false, hide_resolved_pins: false };   // defaults for reviews stored before a setting existed
   var CFG = Object.assign({}, CFG_DEFAULT);
   var WKEY = { desktop: 'desktop', tablet: 'tablet', mobile: 'phone' };   // setting name → width key (pins keep 'phone')
   var WLABEL = { desktop: 'Desktop', tablet: 'Tablet', phone: 'Mobile' };
@@ -2385,7 +2385,8 @@ import {paintAvatar} from './avatar.js';
     if (m.outer.style.height !== hgt) m.outer.style.height = hgt;
     m.pins.style.setProperty('--k', String(1 / s));
   }
-  function pinVisible(p) { return !p.thread || !T.hidden(p.thread); }
+  // A deleted thread always takes its marker away; a resolved one only with hide_resolved_pins on.
+  function pinVisible(p) { return !p.thread || !(T.gone(p.thread) || (CFG.hide_resolved_pins && T.resolved(p.thread))); }
   function draftThreadIds() {
     var out = {};
     function add(list) { (list || []).forEach(function (p) { if (p.thread) out[p.thread] = true; }); }
@@ -3809,6 +3810,7 @@ import {paintAvatar} from './avatar.js';
     refreshPinActivity: function () { refreshPinActivity(); },
     reloadState: function () { refreshPinActivity(true); },
     mirrored: draftThreadIds,
+    hideResolved: function () { return !!CFG.hide_resolved_pins; },
     firstOption: function (block) {
       var v = viewed(), dec = v && v.decisions;
       var b = dec && (dec.blocks || []).filter(function (x) { return String(x.id) === String(block); })[0];

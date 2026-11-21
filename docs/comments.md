@@ -16,8 +16,9 @@ A thread is one anchored conversation:
   rather than inside a mock, plus `w` (the device width it was placed on). `target` is the element anchor the board
   writes (a path, a quote, a signature and the pin's offset inside the element) and is what makes a pin follow its
   element. `x` and `y` are the fallback position inside the surface, 0 to 1.
-- **Status.** `open` or `resolved`. A resolved thread is hidden on the board; replying to it is refused until it is
-  reopened.
+- **Status.** `open` or `resolved`. A resolved thread leaves the open list in Comments, but its pin keeps its marker
+  on the board and still opens the thread; set `hide_resolved_pins` to true to hide the marker instead. Replying to
+  a resolved thread is refused until it is reopened.
 - **Comments.** Plain text, in order, each with the author's actor key and the display name at the time of posting.
 - **Activation.** `activated` means someone with the `submit` capability mentioned `@Hermes` in it. An activating
   comment wakes Hermes once through the same wake route Send uses; the payload names the review, round, thread, comment
@@ -39,7 +40,8 @@ An `@Hermes` mention in a comment starts a Hermes session without anyone pressin
 - **In the chat.** The mention sends no ack message and no stalled ping; those belong to Send. The woken session reads
   the thread, answers it with `mock_review_reply` and can close it with `mock_review_resolve`. The reply appears in the
   thread on the board, not in the chat.
-- **On the board.** On the current round, an accepted request on an editable block adds a working ring to the pin,
+- **On the board.** On the current round, an accepted request on an editable block adds a pulsing red dot on the
+  pin's right side,
   one **Hermes is working…** chip to the block, an elapsed timer in the open thread and a **Working** badge in
   Comments. **Hermes · N working** in the header opens the working comments for that round. Reviewer pin fixes use
   the same indicator, including standalone pins. `pin_fix` controls reviewer pin fixes. Mentions can still wake

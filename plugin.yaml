@@ -73,6 +73,10 @@ config_schema:
     type: int
     default: 40
     description: "Most pins per round. Env: MOCKREVIEW_MAX_PINS."
+  hide_resolved_pins:
+    type: bool
+    default: false
+    description: "Hide a pin's marker once its thread is resolved (for example after Hermes answers and resolves it). Off: the marker stays on the board and opens the resolved thread. Env: MOCKREVIEW_HIDE_RESOLVED_PINS."
   footer_button:
     type: str
     default: "build"

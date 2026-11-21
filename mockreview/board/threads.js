@@ -1084,7 +1084,10 @@ export function createThreads(opts) {
     if (t._x !== undefined) { x = t._x; y = t._y; }
     return {x: x, y: y, detached: detached, doc: null};
   }
-  function eligible(t) { return t && t.status !== 'resolved' && !S.hidden[t.id] && unmirrored(t); }
+  // A resolved thread keeps its marker unless the review sets hide_resolved_pins.
+  function eligible(t) {
+    return t && (t.status !== 'resolved' || !(opts.hideResolved && opts.hideResolved())) && !S.hidden[t.id] && unmirrored(t);
+  }
   function canvasEntries() {
     var w = opts.width();
     return S.threads.filter(function (t) {
@@ -1225,7 +1228,10 @@ export function createThreads(opts) {
     paintPin: paintPin, pinActivityChanged: pinActivityChanged, openFix: openFix, statusRow: statusRow,
     canvasEntries: canvasEntries, mockEntries: mockEntries, protoEntries: protoEntries, frameEntries: frameEntries,
     spot: spot, marker: marker, row: row,
-    open: open, hidden: hidden, unread: function (id) { var t = find(id); return !!(t && t.unread); },
+    open: open, hidden: hidden,
+    gone: function (id) { return !!S.hidden[id]; },
+    resolved: function (id) { var t = find(id); return !!(t && t.status === 'resolved'); },
+    unread: function (id) { var t = find(id); return !!(t && t.unread); },
     create: create, editThreadFirst: editThreadFirst, deleteThreadFirst: deleteThreadFirst,
     mentionsFor: mentionsFor, attachMentions: attachMentions, composerBar: composerBar, meaningfulText: meaningfulText,
     counts: function () { return S.counts; }, threads: function () { return S.threads; }

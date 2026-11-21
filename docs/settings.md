@@ -27,6 +27,7 @@ Look settings and the first three feedback settings are copied into each review 
 - `pins_enabled` (bool, default `true`). Env: `MOCKREVIEW_PINS_ENABLED`. Let the reviewer drop pins on mocks.
 - `require_note_on_change` (bool, default `false`). Env: `MOCKREVIEW_REQUIRE_NOTE_ON_CHANGE`. Block Send until every Change mark has a note.
 - `max_pins` (int, default `40`, 1 to 80). Env: `MOCKREVIEW_MAX_PINS`. Most pins per round.
+- `hide_resolved_pins` (bool, default `false`). Env: `MOCKREVIEW_HIDE_RESOLVED_PINS`. Hide a pin's marker once its thread is resolved (for example after Hermes answers and resolves it). Off: the marker stays on the board and opens the resolved thread.
 - `footer_button` (str, default `build`, one of `send`, `build`). Env: `MOCKREVIEW_FOOTER_BUTTON`. The one button in the footer of a round that has a gate (every plan board): build or send. build: Build, locked until nothing is open or on Change, with the reason in its tooltip; a block on Change turns it into Send for that round's notes. send: Send only, and the board never offers Build. A round with no gate always has Send.
 - `interactive_elements` (bool, default `true`). Env: `MOCKREVIEW_INTERACTIVE_ELEMENTS`. Mocks carry working controls. On: build every control in a mock so it responds (a dropdown opens, a switch flips, a tab changes, a field takes text); the comment toggle is always one press away (C). Off: mocks are static pictures.
 - `pin_fix` (bool, default `false`). Env: `MOCKREVIEW_PIN_FIX`. Let reviewers request their own pin fixes to patch one block of the current round in place. With mention wakes on, @Hermes comments can still wake Hermes and patch supported blocks with pin_fix off. A review created through the tools turns this on when it wakes Hermes and off when it does not; an explicit value from the call, the environment or config wins, so a config-level true survives wake=false.
@@ -106,6 +107,7 @@ mock-review settings (config: Hermes ctx.get_config, read with Hermes)
   pins_enabled = true  (default)
   require_note_on_change = false  (default)
   max_pins = 40  (default)
+  hide_resolved_pins = false  (default)
   footer_button = build  (default)
   interactive_elements = true  (default)
   pin_fix = false  (default)
