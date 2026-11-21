@@ -8,11 +8,21 @@ cookies and CSRF are untouched).
 The tab is one unified package: `desktop/plugin.js` is the Desktop half, `dashboard/plugin_api.py` is the backend half
 (a thin adapter over `mockreview/api.py`) and `dashboard/manifest.json` registers it.
 
-Hermes mounts the backend half on the dashboard app. Desktop spawns a `hermes dashboard` backend rather than a gateway,
-so the backend half runs in that process, or in the plugin host under `plugins.isolation: host`. A gateway that serves
-the dashboard routes mounts it too, but it is not the usual host. The process is not always the one running the board
+Hermes mounts the backend half on the dashboard app, in the process that serves it, or in the plugin host under
+`plugins.isolation: host`. Desktop starts its backend with `hermes gateway ensure` (Hermes v0.23.2), so the gateway
+usually serves it; a standalone `hermes dashboard` mounts it too. The process is not always the one running the board
 server: hooks that only the board server installs, such as the live-stream closer, are installed there only when the
 board server runs in the same process (the gateway with `autostart` on, or `hermes mockreview serve`).
+
+## Waking a Desktop chat
+
+A board made in a Desktop chat wakes that chat on Send and on an `@Hermes` mention, like a board made in a messaging
+chat. Desktop has no webhook route, so the board server inside the gateway queues the wake prompt into the chat's own
+session instead. That needs the board server inside the gateway (`autostart`), the consent
+`plugins.entries.mock-review.allow_gateway_injection: true` (`hermes mockreview setup` asks for it) and a board made from
+the chat itself. A Desktop chat gets no ack or stalled ping, since the wake shows as a turn in the chat. Its board
+always keeps Send gated (loopback, no public URL, not public), because the woken session has all its tools. Details:
+[hosting](hosting.md#desktop-chats).
 
 ## The list
 

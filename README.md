@@ -53,16 +53,18 @@ Enable it if the installer did not: `hermes plugins enable mock-review`.
 
     hermes mockreview setup
 
-The wizard checks your Hermes version, works out which chat platform to wake you in, enables the webhook platform if you
-agree, creates the signing secret, adds a wake route and a notice route for that platform, picks the hosting mode, turns on
-autostart, validates the plugin and creates a test review. Add `--dry-run` to see the plan without changing anything, or
-`--yes` to accept the defaults without questions.
+The wizard checks your Hermes version, works out which chats to wake you in, enables the webhook platform if you agree,
+creates the signing secret, adds a wake route and a notice route for each messaging platform, asks to let Hermes Desktop
+chats be woken, picks the hosting mode, turns on autostart, validates the plugin and creates a test review. Add
+`--dry-run` to see the plan without changing anything, or `--yes` to accept the defaults without questions.
 
-Which chat platform: setup reads the platforms in the Hermes config. The webhook ingress, the Microsoft Graph ingress, the
-API server and the local CLI are not chats, so they never count. With one chat platform configured, setup uses it and says
-so. With several, it asks (Enter means all of them); under `--yes` or `--dry-run` it stops and asks you to choose with
-`--origin-platform NAME` (repeatable). With none, it stops the same way. Either stop happens before anything is changed.
-An explicit `--origin-platform` is always used as given.
+Which chats: setup reads the platforms in the Hermes config and sets up every messaging platform it finds, plus Hermes
+Desktop chats. The webhook ingress, the Microsoft Graph ingress, the API server and the agent-protocol adapters are not
+chats, so they never count. With several messaging platforms it asks on a terminal (Enter means all of them); under
+`--yes` or `--dry-run` it takes them all and says so. With none, it sets up Desktop chats only. `--origin-platform NAME`
+(repeatable; `local` is Desktop) narrows it to exactly what you name. A Desktop chat is woken inside its own session,
+which needs Hermes's `allow_gateway_injection` consent: setup asks for it (Enter means yes). See [which chats can be
+woken](docs/hosting.md#which-chats-can-be-woken).
 
 The first run usually ends with the test review marked `pending (board not running)`: the review is saved and loads by
 itself once the board runs, and setup prints no link until a board answers. The last lines of the output start with
