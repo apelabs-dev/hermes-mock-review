@@ -3,6 +3,13 @@
 All notable changes to this project are listed here. The format follows Keep a Changelog, and the project follows
 semantic versioning.
 
+## [2.2.0](https://github.com/apelabs-dev/hermes-mock-review/compare/v2.1.4...v2.2.0) (2026-11-21)
+
+
+### Features
+
+* **board:** show live which pins Hermes is working on ([#61](https://github.com/apelabs-dev/hermes-mock-review/issues/61)) ([daae691](https://github.com/apelabs-dev/hermes-mock-review/commit/daae691f119afc8ac20b488c9b8b89605c7ce4a5))
+
 ## [2.1.4](https://github.com/apelabs-dev/hermes-mock-review/compare/v2.1.3...v2.1.4) (2026-11-21)
 
 
