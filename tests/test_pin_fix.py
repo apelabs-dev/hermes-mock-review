@@ -394,6 +394,21 @@ def test_old_review_without_pin_fix_setting_unchanged(plain_review):
         service.request_pin_fix(rid, 1, pin("m1"), plain_review["token"])
 
 
+def test_the_reviews_own_pin_fix_wins_and_only_a_review_without_it_takes_the_default(review_factory, monkeypatch):
+    """`_review_setting` reads the review first: a stored value never changes under a later config edit, and only a
+    review that lacks the key falls back to the current default chain."""
+    monkeypatch.setenv("MOCKREVIEW_PIN_FIX", "true")
+    stored_off = review_factory({"pin_fix": False})
+    with pytest.raises(ReviewError, match="does not take pin fixes"):
+        service.request_pin_fix(stored_off["id"], 1, pin("m1"), stored_off["token"])
+    assert _round(stored_off["id"])["pin_requests"] == {}
+
+    old = review_factory()                      # a review from before the setting existed: no settings block at all
+    assert store.load(old["id"]).get("settings") is None
+    monkeypatch.setenv("MOCKREVIEW_PIN_FIX_WINDOW_SECONDS", "0")
+    assert service.request_pin_fix(old["id"], 1, pin("m1"), old["token"])["request"]["id"]
+
+
 def test_get_feedback_without_requests_unchanged(pin_review):
     rid = pin_review["id"]
     fb = {"marks": {"d1": {"status": "approve", "option": "a"}}}

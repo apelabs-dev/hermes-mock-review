@@ -407,6 +407,70 @@ def test_mention_opens_a_working_chip_and_a_plugin_resolve_closes_it(env, server
     assert store.public_state(store.load(rid))["rounds"][0]["pin_requests"][req["id"]]["status"] == "done"
 
 
+def test_a_pin_fix_off_board_still_shows_the_working_chip_and_patch_block_closes_it(env, server, tmp_path):
+    """The chip is the status of a wake that already happened: `pin_fix` gates a reviewer's pin fixes, not the wake."""
+    rid = board(tmp_path, look={"pin_fix": False})["id"]
+    code, _, out = post(server, rid, "@Hermes add icons to the hero cards", idem="c1")
+    assert code == 201, out
+    tick()
+
+    requests = pin_requests(rid)
+    assert len(requests) == 1
+    req = next(iter(requests.values()))
+    assert req["source"] == "mention" and req["status"] == "woken" and req["block"] == "m1"
+    state = store.public_state(store.load(rid))["rounds"][0]["pin_requests"]
+    assert state[req["id"]]["status"] == "working"
+    assert bodies(env)[0]["request_id"] == req["id"]
+
+    tools = plugin_tools()
+    patched = call_tool(tools, "mock_review_patch_block",
+                        {"review_id": rid, "block": "m1", "html": "<p>icons</p>", "round": 1,
+                         "if_rev": 0, "request_ids": [req["id"]]})
+    assert "error" not in patched, patched
+    assert pin_requests(rid)[req["id"]]["status"] == "done"
+    assert store.public_state(store.load(rid))["rounds"][0]["pin_requests"][req["id"]]["status"] == "done"
+
+
+def test_a_pin_fix_off_board_chip_closes_on_reply_and_on_resolve(env, server, tmp_path):
+    tools = plugin_tools()
+
+    replied = board(tmp_path, look={"pin_fix": False})["id"]
+    code, _, out = post(server, replied, "@Hermes is this right?", idem="c1")
+    assert code == 201, out
+    tid = json.loads(out)["thread"]["id"]
+    tick()
+    req = next(iter(pin_requests(replied).values()))
+    assert req["status"] == "woken"
+    done = call_tool(tools, "mock_review_reply", {"thread_id": tid, "text": "Yes."})
+    assert "error" not in done, done
+    assert pin_requests(replied)[req["id"]]["status"] == "done"
+
+    resolved = board(tmp_path, look={"pin_fix": False})["id"]
+    code, _, out = post(server, resolved, "@Hermes is this right?", idem="c1")
+    assert code == 201, out
+    tid = json.loads(out)["thread"]["id"]
+    tick()
+    req = next(iter(pin_requests(resolved).values()))
+    done = call_tool(tools, "mock_review_resolve", {"thread_id": tid, "request_id": req["id"]})
+    assert "error" not in done, done
+    assert pin_requests(resolved)[req["id"]]["status"] == "done"
+
+
+def test_a_pin_fix_off_board_still_caps_mentions_and_the_capped_one_opens_no_chip(env, server, tmp_path):
+    rid = board(tmp_path, look={"pin_fix": False, "pin_fix_max_per_round": 1})["id"]
+    code, _, out = post(server, rid, "@Hermes one", idem="a")
+    assert code == 201, out
+    tick()
+    assert len(pin_requests(rid)) == 1
+
+    code, _, out = post(server, rid, "@Hermes two", idem="b")
+    assert code == 201, out
+    assert json.loads(out)["wake"]["status"] == "capped"
+    tick()
+    assert len(pin_requests(rid)) == 1
+    assert len(env["receiver"].wakes) == 1
+
+
 def test_a_thread_with_no_block_anchor_wakes_but_has_no_chip(env, tmp_path):
     rid = board(tmp_path)["id"]
     owner = users.owner_user()
