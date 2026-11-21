@@ -381,3 +381,16 @@ def test_worker_runs_housekeeping(env, tmp_path, monkeypatch):
         w.stop_event.set()
         w.join(2)
     assert seen
+
+
+def test_hide_resolved_pins_is_off_by_default_and_stored_per_review(env, tmp_path):
+    """A resolved thread keeps its pin marker unless a review asks to hide it; the choice is frozen in the review."""
+    origin = {"platform": "discord", "chat_id": "test-chat"}
+    assert settings.BY_NAME["hide_resolved_pins"].default is False
+    assert "hide_resolved_pins" in settings.REVIEW_KEYS
+    res = api.create("Keep", origin, mode="local", wake=False, decisions=str(_decisions(tmp_path)))
+    assert res["settings"]["hide_resolved_pins"] is False
+    res = api.create("Hide", origin, mode="local", wake=False, decisions=str(_decisions(tmp_path)),
+                     hide_resolved_pins=True)
+    assert res["settings"]["hide_resolved_pins"] is True
+    assert store.load(res["review_id"])["settings"]["hide_resolved_pins"] is True

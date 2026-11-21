@@ -86,6 +86,18 @@ def thread_review(env, tmp_path):
     return data["id"]
 
 
+@pytest.fixture
+def hiding_review(env, tmp_path):
+    """A review with hide_resolved_pins on: a resolved thread's marker leaves the board."""
+    from mockreview import settings
+    path = tmp_path / "threads.json"
+    path.write_text(json.dumps(DECISIONS), encoding="utf-8")
+    data = store.create_review("Threads", "", ORIGIN, "local", store.parse_round_spec(decisions=str(path)),
+                               look=settings.review_settings({"hide_resolved_pins": True}), wake=False)
+    threads.reset_limits()
+    return data["id"]
+
+
 def open_board(chrome, server, rid):
     return Board(chrome, f"{server}/r/{rid}/", wait="!!(document.querySelector('.mock-host') && document.querySelector('.mock-host').shadowRoot && document.querySelector('.mock-host').shadowRoot.querySelector('#copy'))")
 
@@ -117,8 +129,8 @@ def server_threads(server, rid, member=None):
     return json.loads(body)
 
 
-def test_composer_pin_popover_resolve_reopen_and_reload(thread_review, server, chrome):
-    rid = thread_review
+def test_composer_pin_popover_resolve_reopen_and_reload(hiding_review, server, chrome):
+    rid = hiding_review
     b = open_board(chrome, server, rid)
     on(b)
     b.click(*point(b, "#copy"))
@@ -159,13 +171,45 @@ def test_composer_pin_popover_resolve_reopen_and_reload(thread_review, server, c
     assert len(server_threads(server, rid)["threads"][0]["comments"]) == 2
 
 
-def test_a_late_reply_frame_cannot_undo_a_newer_resolve(thread_review, server, chrome, monkeypatch):
+def test_a_pin_keeps_its_marker_after_hermes_answers_and_resolves(thread_review, server, chrome):
+    """hide_resolved_pins defaults to off: a thread Hermes answers and resolves keeps its dot, live and on reload."""
+    rid = thread_review
+    b = open_board(chrome, server, rid)
+    on(b)
+    b.click(*point(b, "#copy"))
+    save_pin(b, "@Hermes make this clearer")
+    tid = server_threads(server, rid)["threads"][0]["id"]
+
+    owner = users.owner_user()
+    threads.reply(rid, tid, f"user:{owner['id']}", "Hermes", "owner", "Done, the copy is shorter now.")
+    threads.set_status(rid, tid, "resolved", f"user:{owner['id']}")
+
+    b.press(".mpin[data-thread]")
+    assert b.until("!!document.querySelector('.tpop .tp-resolve') && "
+                   "document.querySelector('.tpop .tp-resolve').getAttribute('aria-label') === 'Reopen' && "
+                   "document.querySelector('.tpop').textContent.includes('the copy is shorter')", timeout=15), \
+        "the reply and the resolve never reached the board"
+    assert b.js("document.querySelectorAll('.mpin[data-thread]').length") == 1, "the resolved pin lost its marker"
+    b.press(".tp-close")
+    assert b.until("!document.querySelector('.tpop')")
+    assert b.js("document.querySelectorAll('.mpin[data-thread]').length") == 1, "the resolved pin lost its marker"
+
+    b.cdp.call("Page.navigate", {"url": b.js("location.href")}, session=b.sid)
+    assert b.until("!!(document.querySelector('.mock-host') && document.querySelector('.mock-host').shadowRoot && "
+                   "document.querySelector('.mock-host').shadowRoot.querySelector('#copy'))", timeout=60)
+    if b.js("document.querySelector('#comment-toggle').getAttribute('aria-pressed')") != "true":
+        on(b)   # thread markers from the server draw in comment mode
+    assert b.until("document.querySelectorAll('.mpin[data-thread]').length === 1", timeout=30), \
+        "the resolved pin lost its marker after a reload"
+
+
+def test_a_late_reply_frame_cannot_undo_a_newer_resolve(hiding_review, server, chrome, monkeypatch):
     """A reply frame that lands after a newer resolve must not downgrade the thread on screen (2026-11-17 flake).
 
     The capture holds the reply's own SSE frame, so the replay is deterministic: the reply HTTP response, then the
     resolve HTTP response and its live frame are all applied before the held reply snapshot is delivered.
     """
-    rid = thread_review
+    rid = hiding_review
     held = []
     real_publish = live.publish
 

@@ -16,8 +16,9 @@ A thread is one anchored conversation:
   rather than inside a mock, plus `w` (the device width it was placed on). `target` is the element anchor the board
   writes (a path, a quote, a signature and the pin's offset inside the element) and is what makes a pin follow its
   element. `x` and `y` are the fallback position inside the surface, 0 to 1.
-- **Status.** `open` or `resolved`. A resolved thread is hidden on the board; replying to it is refused until it is
-  reopened.
+- **Status.** `open` or `resolved`. A resolved thread leaves the open list in Comments, but its pin keeps its marker
+  on the board and still opens the thread; set `hide_resolved_pins` to true to hide the marker instead. Replying to
+  a resolved thread is refused until it is reopened.
 - **Comments.** Plain text, in order, each with the author's actor key and the display name at the time of posting.
 - **Activation.** `activated` means someone with the `submit` capability mentioned `@Hermes` in it. An activating
   comment wakes Hermes once through the same wake route Send uses; the payload names the review, round, thread, comment

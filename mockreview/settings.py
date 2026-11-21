@@ -77,6 +77,9 @@ SPEC: List[Setting] = [
     Setting("require_note_on_change", "bool", False, "Block Send until every Change mark has a note.",
             "feedback", review=True),
     Setting("max_pins", "int", 40, "Most pins per round.", "feedback", lo=1, hi=80, review=True),
+    Setting("hide_resolved_pins", "bool", False, "Hide a pin's marker once its thread is resolved (for example after "
+            "Hermes answers and resolves it). Off: the marker stays on the board and opens the resolved thread.",
+            "feedback", review=True),
     Setting("footer_button", "str", "build", "The one button in the footer of a round that has a gate (every plan "
             "board): build or send. build: Build, locked until nothing is open or on Change, with the reason in its "
             "tooltip; a block on Change turns it into Send for that round's notes. send: Send only, and the board "
