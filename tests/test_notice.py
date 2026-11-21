@@ -423,3 +423,21 @@ def test_worker_tick_skips_the_watchdog_when_off(env, monkeypatch):
         w.stop_event.set()
         w.join(5)
     assert not calls
+
+
+def test_worker_tick_still_expires_pin_requests_when_off(env, monkeypatch):
+    # Stalled pings off must not leave a pin showing "working" forever: the tick runs the pin-only pass instead.
+    from mockreview import server
+    monkeypatch.setenv("MOCKREVIEW_STALE_AFTER_MINUTES", "0")
+    stalled, expired = [], []
+    monkeypatch.setattr(service, "check_stalled", lambda *a, **k: stalled.append(1) or 0)
+    monkeypatch.setattr(service, "expire_pin_requests", lambda *a, **k: expired.append(1) or 0)
+    w = server.Worker(tick=0.02)
+    w.start()
+    try:
+        _time.sleep(0.3)
+    finally:
+        w.stop_event.set()
+        w.join(5)
+    assert not stalled
+    assert expired

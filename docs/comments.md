@@ -22,8 +22,8 @@ A thread is one anchored conversation:
 - **Activation.** `activated` means someone with the `submit` capability mentioned `@Hermes` in it. An activating
   comment wakes Hermes once through the same wake route Send uses; the payload names the review, round, thread, comment
   and block. The POST answers without waiting for the gateway: the worker tick delivers the wake, a burst inside the
-  spacing window becomes one wake carrying every mention, and the anchored block shows a working chip until the thread
-  is answered. Replaying the same `idem` is a duplicate and never wakes twice. A guest, an agent's token and a wake-off
+  spacing window becomes one wake carrying every mention, and a request on an editable block shows live Hermes
+  activity. Replaying the same `idem` is a duplicate and never wakes twice. A guest, an agent's token and a wake-off
   board never activate, so they never wake anyone.
 
 ## Waking Hermes from a thread
@@ -39,7 +39,15 @@ An `@Hermes` mention in a comment starts a Hermes session without anyone pressin
 - **In the chat.** The mention sends no ack message and no stalled ping; those belong to Send. The woken session reads
   the thread, answers it with `mock_review_reply` and can close it with `mock_review_resolve`. The reply appears in the
   thread on the board, not in the chat.
-- **On the board.** The anchored block shows a working chip from the mention until the thread is answered.
+- **On the board.** On the current round, an accepted request on an editable block adds a working ring to the pin,
+  one **Hermes is working…** chip to the block, an elapsed timer in the open thread and a **Working** badge in
+  Comments. **Hermes · N working** in the header opens the working comments for that round. Reviewer pin fixes use
+  the same indicator, including standalone pins. `pin_fix` controls reviewer pin fixes. Mentions can still wake
+  Hermes and patch supported blocks when that setting is off.
+- **Completion.** A patch, Hermes reply or Hermes resolve clears the working state on the requests it completes.
+  If delivery fails permanently or a request times out, the pin and thread show an error. A reviewer who can wake
+  Hermes from the thread can mention `@Hermes` again. The timeout follows `stale_after_minutes`, with a 15-minute
+  timeout when chat stalled pings are disabled.
 - **Limits.** One wake per comment, a burst inside `pin_fix_min_seconds` becomes one wake, and mentions share
   `pin_fix_max_per_hour` and `pin_fix_max_per_round` with pin fixes. When a board with `wake_toolsets` set is reachable
   beyond loopback, the wake is held, not sent.
@@ -226,10 +234,10 @@ feed has its own cursor, moved by `activity/read`. More shows the open-thread an
   check means the thread is resolved; the same slot becomes Reopen), More (Edit, Copy link and Delete for the root
   comment when you own it; Delete is last and in the danger colour, and the menu is Copy link alone on someone
   else's thread) and Close. The words live in each
-  button's `title` and `aria-label`; there is no status chip. Every own comment carries a `⋯` menu on row hover or focus
-  with Edit and Delete. The reply box keeps its own composer: Enter sends, Shift+Enter adds a newline, `@` completes
-  people with access plus Hermes, and a live update patches the open thread in place, so an unsent reply keeps its
-  text, caret and mentions.
+  button's `title` and `aria-label`. Hermes activity appears below the comments, alongside typing. Every own comment
+  carries a `⋯` menu on row hover or focus with Edit and Delete. In the reply composer, Enter sends, Shift+Enter
+  adds a newline and `@` completes people with access plus Hermes. Live updates patch the open thread in place,
+  so an unsent reply keeps its text, caret and mentions.
 - Copy link copies an absolute URL with `?thread=<id>`. Opening it starts the board and opens that thread's popover; the
   round hash keeps working as before, and a missing or foreign thread id is ignored.
 - The composer under a new pin and under a thread reply carries a **Send to Hermes** box, checked every time it opens.
@@ -247,15 +255,12 @@ feed has its own cursor, moved by `activity/read`. More shows the open-thread an
 - Live updates patch the page in place: no reload on a new comment, and a "Live: reconnecting" chip appears only after
   two failed reconnects.
 
-## What this release does not do
+## Hermes and external agent replies
 
-An owner's or reviewer's `@Hermes` mention wakes Hermes once per comment (the worker tick delivers it, and a burst is
-coalesced into one wake that names each mention); mentions of people notify nobody yet. A woken session answers through
-the plugin's own `mock_review_list_comments`, `mock_review_reply` and `mock_review_resolve` tools: they run in process
-as the install's owner and close the block's working chip. Those writes reach an open board live only when the board
-server runs in the same process, which is the gateway with `autostart: true` (off by default); with a standalone
-`hermes mockreview serve` the write is stored and appears on the board's next refetch or reconnect. Agents outside
-Hermes reach the same threads through the MCP comment tools (`list_comments`, `reply`, `resolve`) with a personal
-access token; when the board server runs for the same store those writes execute in the server, so an open board sees
-them live, and replies on either path never activate a thread, so an agent cannot wake another agent. There is no
-carriage of a thread into a new review, only into a later round of the same one.
+An owner's or reviewer's `@Hermes` mention wakes Hermes once per comment. The worker coalesces a burst into one wake
+that names each mention. Mentions of people do not send notifications. A woken session answers through the plugin's
+`mock_review_list_comments`, `mock_review_reply` and `mock_review_resolve` tools as the install's owner. The reply or
+resolve reaches the open board and clears the linked activity, including when `hermes mockreview serve` shares the
+store with Hermes. Agents outside Hermes can use the MCP comment tools (`list_comments`, `reply`, `resolve`) with a
+personal access token. Agent replies on either path cannot wake another agent. Threads carry into later rounds of
+the same review.

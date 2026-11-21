@@ -329,7 +329,8 @@ def request_pin_fix(review_id: str, round_n: Any, pin: Any, token: Any, idem: An
             raise ReviewError(f"this review takes at most {per_hour} pin fix requests an hour (pin_fix_max_per_hour)",
                               429)
         used = set(requests)
-        pid = pin.get("id") if isinstance(pin.get("id"), str) and store.PIN_ID_RE.fullmatch(pin["id"]) else None
+        pin_id = pin.get("id") if isinstance(pin.get("id"), str) and store.PIN_ID_RE.fullmatch(pin["id"]) else None
+        pid = pin_id
         if not pid or pid in used:
             pid = store.new_pin_id()
             while pid in used:
@@ -339,10 +340,18 @@ def request_pin_fix(review_id: str, round_n: Any, pin: Any, token: Any, idem: An
                "rev": int((current.get("blocks_rev") or {}).get(ref, 0) or 0),
                "status": "queued", "idem": idem_key, "idem_owner": requester,
                "requested_at": store.now_iso(), "wake_seq": 0, "done_at": None, "detail": ""}
+        if pin_id:
+            req["pin_id"] = pin_id
+        try:
+            x, y = feedback._num(pin.get("x")), feedback._num(pin.get("y"))
+        except OverflowError:
+            x = y = None
+        if x is not None and y is not None:
+            req["position"] = {"x": min(max(x, 0.0), 1.0), "y": min(max(y, 0.0), 1.0)}
         if data.get("wake") is False or no_wake_reason:
             req["quiet"] = True   # stored and visible, but the coalesce must never carry it into a wake
         requests[pid] = req
-        store.save(review_id, data)
+        store.save(review_id, data, pin_round=current["n"])
     notified, detail = False, ""
     if data.get("wake") is False:
         detail = "this board has wake off: the request is stored, nobody is notified"
@@ -450,7 +459,7 @@ def flush_pin_fixes(review_id: str, now: Optional[float] = None) -> "tuple[bool,
             wake.update(status="failed", sending_until=0.0, last_error=e.message, next_attempt=0.0)
             _stamp_wake(data, state, now)
             r["pin_fix"] = state
-            store.save(review_id, data)
+            store.save(review_id, data, pin_round=r["n"])
             return False, e.message
         held = wakeguard.review_exposure(data)
         if held:   # create/add-round refuse this; the setting or host may have changed since
@@ -462,7 +471,7 @@ def flush_pin_fixes(review_id: str, now: Optional[float] = None) -> "tuple[bool,
             wake.update(status="failed", sending_until=0.0, last_error=detail, next_attempt=0.0)
             _stamp_wake(data, state, now)
             r["pin_fix"] = state
-            store.save(review_id, data)
+            store.save(review_id, data, pin_round=r["n"])
             log.warning("mock-review: pin fix wake for %s round %s held: %s", review_id, r["n"], held)
             return False, detail
     try:
@@ -480,11 +489,13 @@ def flush_pin_fixes(review_id: str, now: Optional[float] = None) -> "tuple[bool,
             return ok, msg    # superseded while we were sending (a newer round or a newer wake owns the outcome)
         wake["sending_until"] = 0.0
         wake["attempts"] = int(wake.get("attempts") or 0) + 1
+        changed = False
         if ok:
             for i in ids:
                 q = requests.get(i)
                 if q and q.get("status") == "queued":
                     q.update(status="woken", detail="")
+                    changed = True
             wake.update(status="notified", notified_at=store.now_iso(), last_error=None, next_attempt=0.0)
             log.info("pin fix wake delivered for %s round %s (%s)", review_id, r["n"], msg)
         elif msg.startswith(("HTTP 400", "HTTP 413", "HTTP 422")):
@@ -492,13 +503,14 @@ def flush_pin_fixes(review_id: str, now: Optional[float] = None) -> "tuple[bool,
                 q = requests.get(i)
                 if q and q.get("status") == "queued":
                     q.update(status="failed", detail=msg)
+                    changed = True
             wake.update(status="failed", last_error=msg, next_attempt=0.0)
         else:
             wake.update(status="pending_notify", last_error=msg, next_attempt=now + config.retry_seconds())
             log.error("pin fix wake failed for %s round %s, will retry: %s", review_id, r["n"], msg)
         _stamp_wake(data, state, now)
         r["pin_fix"] = state
-        store.save(review_id, data)
+        store.save(review_id, data, pin_round=r["n"] if changed else None)
     return ok, msg
 
 
@@ -510,6 +522,34 @@ def pin_fix_status(data: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, A
     state = {"queued": "queued", "woken": "working", "done": "done",
              "failed": "failed", "timeout": "failed"}.get((request or {}).get("status"), "queued")
     return {"state": state, "detail": (request or {}).get("detail") or ""}
+
+
+def pin_timeout_minutes() -> float:
+    # Turning off the chat's stalled pings still leaves pin requests with a finite lifetime.
+    return settings.get("stale_after_minutes") or 15.0
+
+
+def _mention_attempt_at(wake: Dict[str, Any]) -> Optional[float]:
+    first = wake.get("first_attempt_at")
+    if isinstance(first, (int, float)):
+        return first
+    # Older records only have the attempt count, outcome and send lease. Keep their previous clock if the
+    # first attempt is unknown, using the lease to recover an attempt that was interrupted before recording an outcome.
+    if wake.get("attempts"):
+        return _parse_iso(wake.get("at"))
+    lease = wake.get("sending_until")
+    return lease - SEND_LEASE_SECONDS if isinstance(lease, (int, float)) and lease > 0 else None
+
+
+def pin_request_deadline(data: Dict[str, Any], request: Dict[str, Any], minutes: float) -> Optional[float]:
+    if request.get("source") == "mention":
+        wake = (data.get("thread_wakes") or {}).get(request.get("comment_id")) or {}
+        started = _mention_attempt_at(wake)
+        if started is None and request.get("status") == "woken":
+            started = _parse_iso(request.get("requested_at"))
+    else:
+        started = _parse_iso(request.get("requested_at"))
+    return None if started is None else started + minutes * 60.0
 
 
 def _mention_wakes(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -643,13 +683,7 @@ def _prune_thread_wakes(review_id: str, now: Optional[float] = None) -> bool:
 
 
 def _mention_request(data: Dict[str, Any], review_id: str, wake: Dict[str, Any]) -> Optional[str]:
-    """Open (or reuse) the pin request that renders the thread's working chip, keyed to the comment.
-
-    Every delivered mention opens one, whatever `pin_fix` says: the chip reports a wake that already happened, and the
-    wake itself is not gated on that flag (the flag governs a reviewer's own pin fixes). Only a mention on the newest
-    round, on a block that is editable HTML by the same rule `request_pin_fix` uses, gets one. On a retry the request
-    already stored under `mention:<comment id>` is reused, never duplicated.
-    """
+    """Open one activity request per accepted mention on an editable block of the newest round."""
     rounds = data.get("rounds") or []
     if not rounds:
         return None
@@ -685,7 +719,7 @@ def _mention_request(data: Dict[str, Any], review_id: str, wake: Dict[str, Any])
         "id": pid, "block": block, "option": option,
         "rev": int((current.get("blocks_rev") or {}).get(block, 0) or 0),
         "text": feedback.clean_line(wake.get("text"), 2000),
-        "status": "queued", "requested_at": store.now_iso(), "wake_seq": 0,
+        "status": "queued", "requested_at": wake.get("at") or store.now_iso(), "wake_seq": 0,
         "done_at": None, "detail": "",
         "source": "mention", "thread_id": wake.get("thread_id"), "comment_id": wake.get("comment_id"),
         "idem": idem, "idem_owner": "mention",
@@ -693,28 +727,29 @@ def _mention_request(data: Dict[str, Any], review_id: str, wake: Dict[str, Any])
     return pid
 
 
-def _set_mention_request(data: Dict[str, Any], request_id: Optional[str], status: str, detail: str = "") -> None:
-    """Mirror one mention wake's outcome onto its chip request; a terminal request is left alone."""
+def _set_mention_request(data: Dict[str, Any], request_id: Optional[str], status: str, detail: str = "") -> bool:
+    """Mirror a wake outcome onto its pin request and report whether the status changed."""
     if not request_id:
-        return
+        return False
     for r in data.get("rounds") or []:
         q = (r.get("pin_requests") or {}).get(request_id)
         if not isinstance(q, dict):
             continue
         if q.get("status") in PIN_TERMINAL:
-            return
+            return False
         q.update(status=status, detail=detail)
         if status == "done":
             q["done_at"] = store.now_iso()
-        return
+        return True
+    return False
 
 
 def close_mention_requests(review_id: str, thread_id: Optional[str],
                            request_id: Optional[str] = None) -> int:
     """Close the mention chip requests a reply or a resolve answered.
 
-    Every open mention request on that thread in the newest round closes, and so does the `request_id` the wake payload
-    named even when its thread differs. Returns how many closed.
+    Thread matches in the newest round close once delivered. An explicit `request_id` can also close a queued request
+    or a request from another thread. Returns how many closed.
     """
     with store.locked(review_id):
         data = store.load(review_id)
@@ -726,11 +761,13 @@ def close_mention_requests(review_id: str, thread_id: Optional[str],
         for q in (current.get("pin_requests") or {}).values():
             if not isinstance(q, dict) or q.get("source") != "mention" or q.get("status") in PIN_TERMINAL:
                 continue
-            if q.get("id") == request_id or (thread_id and q.get("thread_id") == thread_id):
+            exact = request_id and q.get("id") == request_id
+            thread_match = thread_id and q.get("thread_id") == thread_id and q.get("status") != "queued"
+            if exact or thread_match:
                 q.update(status="done", done_at=now, detail="answered in the thread")
                 closed += 1
         if closed:
-            store.save(review_id, data)
+            store.save(review_id, data, pin_round=current["n"])
         return closed
 
 
@@ -830,8 +867,9 @@ def wake_thread_mention(review_id: str, thread: Dict[str, Any], comment_id: str)
                 "last_error": None, "request_id": None,
                 "delivery_id": f"mockreview-{review_id}-m-{comment_id}"}
         wakes[comment_id] = wake
+        wake["request_id"] = _mention_request(data, review_id, wake)
         _mark_wake_seen(data, comment_id)
-        store.save(review_id, data)
+        store.save(review_id, data, pin_round=round_n if wake["request_id"] else None)
     return {"status": "pending_notify", "notified": False,
             "detail": "queued: the worker tick delivers it", "delivery_id": wake["delivery_id"]}
 
@@ -840,13 +878,13 @@ def _deliver_thread_wakes(review_id: str, comment_ids: "list[str]",
                           now: Optional[float] = None) -> "tuple[bool, str]":
     """POST one mention wake covering every pending comment in `comment_ids` and record the outcome.
 
-    The chip's pin request is opened (or reused) here, before the send. One send means one delivery id and one stamp.
+    A wake queued by an older version may still need its pin request opened here. One send means one delivery id
+    and one stamp.
     A permanent failure, a held board or a closed review fails the covered records and their requests; a transient
     failure leaves them pending for the retry.
     """
     if owner.is_bound():
         return False, "not the owner service: only the board server delivers wake-ups"
-    now = time.time() if now is None else now
     with store.locked(review_id):
         data = store.load(review_id)
         wakes = data.get("thread_wakes") or {}
@@ -868,39 +906,51 @@ def _deliver_thread_wakes(review_id: str, comment_ids: "list[str]",
             _bounded_thread_wakes(data)
             store.save(review_id, data)
             return False, "this board has wake off"
-        if any(float(w.get("sending_until") or 0) > now for w in picked):
+        checked_at = time.time() if now is None else now
+        if any(float(w.get("sending_until") or 0) > checked_at for w in picked):
             return False, "a send for this mention wake is already in flight"
+        pin_changed = False
+        for w in picked:
+            if not w.get("request_id"):
+                w["request_id"] = _mention_request(data, review_id, w)
+                pin_changed = pin_changed or bool(w["request_id"])
+        newest = data["rounds"][-1]
+        round_n = newest["n"]
         held = wakeguard.review_exposure(data)
         if held:   # create/add-round refuse this; the setting or host may have changed since
             detail = f"held, not woken: {held}"
             for w in picked:
                 w.update(status="failed", sending_until=0.0, last_error=detail, next_attempt=0.0)
-                _set_mention_request(data, w.get("request_id"), "failed", detail)
+                pin_changed = _set_mention_request(data, w.get("request_id"), "failed", detail) or pin_changed
             _bounded_thread_wakes(data)
-            store.save(review_id, data)
+            store.save(review_id, data, pin_round=round_n if pin_changed else None)
             log.warning("mock-review: mention wake for %s comments %s held: %s",
                         review_id, ", ".join(comment_ids), held)
             return False, detail
-        for w in picked:
-            if not w.get("request_id"):
-                w["request_id"] = _mention_request(data, review_id, w)
         try:
             payload = _mention_payload(data, picked)
         except ReviewError as e:
             for w in picked:
                 w.update(status="failed", sending_until=0.0, last_error=e.message, next_attempt=0.0)
-                _set_mention_request(data, w.get("request_id"), "failed", e.message)
+                pin_changed = _set_mention_request(data, w.get("request_id"), "failed", e.message) or pin_changed
             _bounded_thread_wakes(data)
-            store.save(review_id, data)
+            store.save(review_id, data, pin_round=round_n if pin_changed else None)
             return False, e.message
         delivery_id = f"mockreview-{review_id}-m-{picked[0]['comment_id']}"
+        requests = newest.get("pin_requests") or {}
+        now = time.time() if now is None else now
         for w in picked:
+            if "first_attempt_at" not in w:
+                previous = _mention_attempt_at(w)
+                w["first_attempt_at"] = now if previous is None else previous
+                q = requests.get(w.get("request_id")) or {}
+                pin_changed = pin_changed or (previous is None and q.get("status") == "queued")
             w["sending_until"] = now + SEND_LEASE_SECONDS
-        state = data["rounds"][-1].get("pin_fix")
+        state = newest.get("pin_fix")
         if not isinstance(state, dict):
-            state = data["rounds"][-1]["pin_fix"] = {}
+            state = newest["pin_fix"] = {}
         _stamp_wake(data, state, now)
-        store.save(review_id, data)
+        store.save(review_id, data, pin_round=round_n if pin_changed else None)
     try:
         ok, msg = notify.send(payload, delivery_id)
     except Exception as e:
@@ -917,23 +967,24 @@ def _deliver_thread_wakes(review_id: str, comment_ids: "list[str]",
             w["sending_until"] = 0.0
             w["attempts"] = int(w.get("attempts") or 0) + 1
             w["delivery_id"] = delivery_id
+        changed = False
         if ok:
             for w in current:
                 w.update(status="notified", notified_at=store.now_iso(), last_error=None, next_attempt=0.0)
-                _set_mention_request(data, w.get("request_id"), "woken")
+                changed = _set_mention_request(data, w.get("request_id"), "woken") or changed
             log.info("mention wake delivered for %s comments %s (%s)",
                      review_id, ", ".join(comment_ids), msg)
         elif msg.startswith(MENTION_PERMANENT):
             for w in current:
                 w.update(status="failed", last_error=msg, next_attempt=0.0)
-                _set_mention_request(data, w.get("request_id"), "failed", msg)
+                changed = _set_mention_request(data, w.get("request_id"), "failed", msg) or changed
         else:
             for w in current:
                 w.update(status="pending_notify", last_error=msg, next_attempt=now + config.retry_seconds())
             log.error("mention wake failed for %s comments %s, will retry: %s",
                       review_id, ", ".join(comment_ids), msg)
         _bounded_thread_wakes(data)
-        store.save(review_id, data)
+        store.save(review_id, data, pin_round=round_n if changed else None)
     return ok, msg
 
 
@@ -951,7 +1002,7 @@ def retry_thread_wakes(review_id: str, now: Optional[float] = None) -> int:
     """
     if owner.is_bound():
         return 0
-    now = time.time() if now is None else now
+    due_at = time.time() if now is None else now
     try:
         data = store.load(review_id)
     except (ReviewError, ValueError, OSError):
@@ -959,17 +1010,17 @@ def retry_thread_wakes(review_id: str, now: Optional[float] = None) -> int:
     if data.get("status") != "open" or data.get("wake") is False:
         return 0
     try:
-        _prune_thread_wakes(review_id, now)
+        _prune_thread_wakes(review_id, due_at)
     except (ReviewError, ValueError, OSError):
         log.warning("mention wake prune failed for %s", review_id)
-    due = _due_mention_wakes(data, now)
+    due = _due_mention_wakes(data, due_at)
     if not due:
         return 0
     state = data["rounds"][-1].get("pin_fix")
     state = state if isinstance(state, dict) else {}
     last = _last_wake_at(data, state)
     min_seconds = float(_review_setting(data, "pin_fix_min_seconds"))
-    if now - last < min_seconds:
+    if due_at - last < min_seconds:
         with store.locked(review_id):
             data = store.load(review_id)
             wakes = data.get("thread_wakes") or {}
@@ -987,25 +1038,34 @@ def retry_thread_wakes(review_id: str, now: Optional[float] = None) -> int:
 
 
 def _timeout_pin_requests(review_id: str, now: float, minutes: float) -> int:
-    """Mark every non-terminal pin fix on the newest round older than `minutes` as timed out; one save."""
+    """Expire the newest round's activity and stop retries for expired asks."""
     with store.locked(review_id):
         data = store.load(review_id)
         if data.get("status") != "open":
             return 0
         r = data["rounds"][-1]
-        n = 0
-        for q in (r.get("pin_requests") or {}).values():
+        expired = set()
+        for pid, q in (r.get("pin_requests") or {}).items():
             if q.get("status") in PIN_TERMINAL:
                 continue
             if q.get("quiet"):   # never sent (a guest's pin fix): it waits for the owner to wake Hermes
                 continue
-            ts = _parse_iso(q.get("requested_at"))
-            if ts is not None and now - ts > minutes * 60.0:
+            deadline = pin_request_deadline(data, q, minutes)
+            if deadline is not None and now >= deadline:
                 q.update(status="timeout", detail=f"no patch within {minutes:g} min")
-                n += 1
-        if n:
-            store.save(review_id, data)
-        return n
+                expired.add(q.get("id") or pid)
+        if expired:
+            for w in (data.get("thread_wakes") or {}).values():
+                if w.get("status") == "pending_notify" and w.get("request_id") in expired:
+                    w.update(status="failed", last_error="pin request timed out", next_attempt=0.0, sending_until=0.0)
+            wake = (r.get("pin_fix") or {}).get("wake") or {}
+            requests = r["pin_requests"]
+            if wake.get("status") == "pending_notify" and not any(
+                    (requests.get(pid) or {}).get("status") == "queued" for pid in (wake.get("requests") or [])):
+                wake.update(status="failed", last_error="pin request timed out", next_attempt=0.0, sending_until=0.0)
+            _bounded_thread_wakes(data, now)
+            store.save(review_id, data, pin_round=r["n"])
+        return len(expired)
 
 
 def notify_round(review_id: str, round_n: int, url: Optional[str] = None) -> "tuple[bool, str]":
@@ -1245,10 +1305,11 @@ def check_stalled(now: Optional[float] = None) -> int:
     """Watchdog: POST exactly one stalled ping per submission whose round is the newest, still open, and past
     stale_after_minutes with no newer round. Only the owner service runs it (never a bound CLI call). Skips wake-off
     and closed reviews before doing any work. Returns how many pings were delivered."""
-    if not settings.get("stale_after_minutes") or owner.is_bound():
+    if owner.is_bound():
         return 0
     now = time.time() if now is None else now
     minutes = settings.get("stale_after_minutes")
+    pin_minutes = minutes or pin_timeout_minutes()
     sent = 0
     for rid in store.list_ids():
         try:
@@ -1258,9 +1319,11 @@ def check_stalled(now: Optional[float] = None) -> int:
         if data.get("status") != "open" or data.get("wake") is False:
             continue
         try:
-            _timeout_pin_requests(rid, now, minutes)
+            _timeout_pin_requests(rid, now, pin_minutes)
         except (ReviewError, ValueError, OSError):
             log.exception("pin fix timeout pass failed for %s", rid)
+        if not minutes:
+            continue
         r = data["rounds"][-1]
         sub = r.get("submission")
         if not sub or not r.get("feedback"):
@@ -1278,10 +1341,33 @@ def check_stalled(now: Optional[float] = None) -> int:
     return sent
 
 
+def expire_pin_requests(now: Optional[float] = None) -> int:
+    """The pin-request half of `check_stalled`, for when stalled pings are off: time out working pin requests on
+    open wake-on reviews after `pin_timeout_minutes()`, so a request never shows working forever. Sends nothing.
+    Only the owner service runs it. Returns how many requests timed out."""
+    if owner.is_bound():
+        return 0
+    now = time.time() if now is None else now
+    minutes = pin_timeout_minutes()
+    expired = 0
+    for rid in store.list_ids():
+        try:
+            data = store.load(rid)
+        except (ReviewError, ValueError, OSError):
+            continue
+        if data.get("status") != "open" or data.get("wake") is False:
+            continue
+        try:
+            expired += _timeout_pin_requests(rid, now, minutes)
+        except (ReviewError, ValueError, OSError):
+            log.exception("pin fix timeout pass failed for %s", rid)
+    return expired
+
+
 def retry_pending(now: Optional[float] = None) -> int:
     """Retry every pending_notify submission that is due (wake first, ack right after it), and every pending ack
     whose wake already landed. Returns how many wakes became notified."""
-    now = time.time() if now is None else now
+    scan_at = time.time() if now is None else now
     done = 0
     for rid in store.list_ids():
         try:
@@ -1292,16 +1378,16 @@ def retry_pending(now: Optional[float] = None) -> int:
             sub = r.get("submission") or {}
             if sub.get("guest"):   # a share-link guest's stored record is never delivered
                 continue
-            if sub.get("status") == "pending_notify" and sub.get("next_attempt", 0) <= now:
+            if sub.get("status") == "pending_notify" and sub.get("next_attempt", 0) <= scan_at:
                 (ok, _), _ack = deliver_submission(rid, r["n"])
                 if ok:
                     done += 1
             elif sub.get("status") == "notified":
                 notice = sub.get("notice") or {}
-                if notice.get("status") == "pending_notify" and notice.get("next_attempt", 0) <= now:
+                if notice.get("status") == "pending_notify" and notice.get("next_attempt", 0) <= scan_at:
                     notify_notice(rid, r["n"])
         try:
-            flush_pin_fixes(rid, now)   # a due pin fix wake retries on the worker tick (every 5 s)
+            flush_pin_fixes(rid, scan_at)   # a due pin fix wake retries on the worker tick (every 5 s)
         except Exception:
             log.exception("pin fix flush failed for %s", rid)
         try:

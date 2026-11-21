@@ -2394,6 +2394,44 @@
   .mpin span {
     transform: rotate(45deg);
   }
+  .mpin .hermes-pin-indicator {
+    position: absolute;
+    pointer-events: none;
+  }
+  .mpin[data-hermes-state="working"] .hermes-pin-indicator {
+    inset: -5px;
+    border: 2px solid var(--surface);
+    border-top-color: var(--pin);
+    border-right-color: var(--pin);
+    border-radius: 50%;
+    animation: hermes-pin-spin 1.4s linear infinite;
+  }
+  .mpin[data-hermes-state="failed"] .hermes-pin-indicator {
+    right: -5px;
+    bottom: -5px;
+    display: grid;
+    place-items: center;
+    width: 16px;
+    height: 16px;
+    border: 1px solid var(--err);
+    border-radius: 50%;
+    background: var(--surface);
+    color: var(--err);
+  }
+  .hermes-pin-indicator .ico {
+    width: 12px;
+    height: 12px;
+  }
+  @keyframes hermes-pin-spin {
+    to {
+      transform: rotate(1turn);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .mpin[data-hermes-state="working"] .hermes-pin-indicator {
+      animation: none;
+    }
+  }
   .mpin.ghost {
     opacity: .7;
   }
@@ -3807,6 +3845,49 @@
   .tp-typing {
     min-height: 14px;
   }
+  .hermes-thread-status {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 8px;
+    margin-bottom: 4px;
+    padding: 8px 12px;
+    border-radius: var(--r);
+    background: var(--surface-2);
+    color: var(--text);
+    font-size: 13px;
+  }
+  .hermes-thread-status[data-hermes-state="failed"] {
+    color: var(--err);
+    @supports (color: color-mix(in lab, red, red)) {
+      color: color-mix(in srgb, var(--err) 80%, var(--text));
+    }
+  }
+  .hermes-elapsed {
+    margin-left: auto;
+    color: var(--muted);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  .hermes-retry {
+    flex-basis: 100%;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .pin-fix-detail:empty {
+    display: none;
+  }
+  .hermes-block-status {
+    display: inline-flex;
+    width: fit-content;
+    margin-block: 4px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    color: var(--accent);
+    background: var(--surface-2);
+    font-size: 12px;
+    font-weight: 600;
+  }
   .typing {
     font-size: 12px;
     color: var(--muted);
@@ -4304,6 +4385,17 @@
   }
   .dzbar .bar-actions > * {
     flex: none;
+  }
+  .hermes-count-slot:empty {
+    display: none;
+  }
+  .btn.hermes-working-count {
+    padding-inline: 8px;
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
   }
   @media (max-width: 1279px) {
     body .dzbar {

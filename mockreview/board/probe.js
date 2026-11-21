@@ -174,7 +174,11 @@ import {LIVE, anchorFor, cleanTarget, surface, installAPI} from './anchors.js';
     'background:#5b5bf0;color:#fff;border:2px solid #fff;font:700 12px/24px -apple-system,system-ui,sans-serif;text-align:center;' +
     'box-shadow:0 2px 8px rgba(0,0,0,.35);cursor:pointer;pointer-events:auto;transition:transform .15s}' +
     '.p:hover{transform:scale(1.12)}.p.g{background:#5b5bf0;animation:mrp 1s ease-in-out infinite}' +
-    '.p.det{background:#5b5bf0;opacity:.55}.p.f{animation:mrf .7s ease-out 2}@keyframes mrp{50%{transform:scale(1.15)}}@keyframes mrf{50%{transform:scale(1.5)}}';
+    '.p.det{background:#5b5bf0;opacity:.55}.p.f{animation:mrf .7s ease-out 2}@keyframes mrp{50%{transform:scale(1.15)}}@keyframes mrf{50%{transform:scale(1.5)}}' +
+    '.p .hermes-pin-indicator{position:absolute;pointer-events:none;box-sizing:border-box;border-radius:50%}' +
+    '.p.h-working .hermes-pin-indicator{inset:-5px;border:2px solid #fff;border-top-color:#5b5bf0;border-right-color:#5b5bf0;animation:mrspin 1.4s linear infinite}' +
+    '.p.h-failed .hermes-pin-indicator{right:-5px;bottom:-5px;width:16px;height:16px;background:#fff;border:1px solid #dc2626;color:#dc2626;line-height:14px}' +
+    '@keyframes mrspin{to{transform:rotate(1turn)}}@media(prefers-reduced-motion:reduce){.p.h-working .hermes-pin-indicator{animation:none}}';
 
   function ensureHost() {
     if (host && host.isConnected) return;
@@ -195,6 +199,25 @@ import {LIVE, anchorFor, cleanTarget, surface, installAPI} from './anchors.js';
       b.className = 'p' + (p.ghost ? ' g' : '') + (p.detached ? ' det' : '');
       if (p.detached) b.title = 'Element removed';
       b.textContent = String(p.n);
+      if (p.hermes) {
+        b.classList.add('h-' + p.hermes);
+        b.setAttribute('aria-label', 'Pin ' + p.n + (p.hermes === 'working' ? ' · Hermes is working' : ' · Hermes couldn’t finish'));
+        var indicator = document.createElement('span');
+        indicator.className = 'hermes-pin-indicator';
+        indicator.setAttribute('aria-hidden', 'true');
+        if (p.hermes === 'failed') {
+          var ns = 'http://www.w3.org/2000/svg';
+          var cross = document.createElementNS(ns, 'svg'), path = document.createElementNS(ns, 'path');
+          cross.setAttribute('width', '12');
+          cross.setAttribute('height', '12');
+          cross.setAttribute('viewBox', '0 0 12 12');
+          path.setAttribute('d', 'M3 3 9 9 M9 3 3 9');
+          path.setAttribute('stroke', 'currentColor');
+          cross.appendChild(path);
+          indicator.appendChild(cross);
+        }
+        b.appendChild(indicator);
+      }
       var z = Math.round(28 * k);
       b.style.width = z + 'px'; b.style.height = z + 'px'; b.style.marginTop = (-z) + 'px';
       b.style.borderRadius = (z / 2) + 'px ' + (z / 2) + 'px ' + (z / 2) + 'px ' + Math.round(3 * k) + 'px';
@@ -255,7 +278,9 @@ import {LIVE, anchorFor, cleanTarget, surface, installAPI} from './anchors.js';
       k = 1 / num(d.scale, 0.2, 1);
       document.documentElement.classList.toggle('mr-comment', comment);
       pins = (Array.isArray(d.pins) ? d.pins : []).slice(0, 60).map(function (p) {
-        return { i: num(p.i, -1, 99) | 0, n: num(p.n, 0, 99) | 0, x: num(p.x, 0, 1), y: num(p.y, 0, 1), ghost: !!p.ghost, thread: typeof p.thread === 'string' ? p.thread : '', detached: !!p.detached, ...(cleanTarget(p.target) ? {target: cleanTarget(p.target)} : {}) };
+        return { i: num(p.i, -1, 99) | 0, n: num(p.n, 0, 99) | 0, x: num(p.x, 0, 1), y: num(p.y, 0, 1), ghost: !!p.ghost, thread: typeof p.thread === 'string' ? p.thread : '', detached: !!p.detached,
+          hermes: p.hermes === 'working' || p.hermes === 'failed' ? p.hermes : '',
+          ...(cleanTarget(p.target) ? {target: cleanTarget(p.target)} : {}) };
       });
       draw(); if (anchors) anchors.schedule();
     } else if (d.cmd === 'focus') {

@@ -9,6 +9,9 @@ delivered mention also opens a pin request on the anchored block, which is the b
 
 import json
 import sqlite3
+import time
+
+import pytest
 
 from authkit import signed_in, token_of
 from conftest import http, load_plugin
@@ -194,6 +197,63 @@ def test_a_transient_failure_stays_pending_and_the_next_tick_delivers_it_once(en
     assert len(env["receiver"].wakes) == 2                 # terminal: never sent twice
 
 
+@pytest.mark.parametrize("expire", [service.check_stalled, service.expire_pin_requests])
+def test_a_spacing_queued_mention_waits_for_its_own_deadline(env, server, tmp_path, monkeypatch, expire):
+    monkeypatch.setenv("MOCKREVIEW_STALE_AFTER_MINUTES", "0" if expire is service.expire_pin_requests else "15")
+    rid = board(tmp_path, look={"pin_fix_min_seconds": 1800})["id"]
+    code, _, out = post(server, rid, "@Hermes first", idem="first")
+    assert code == 201, out
+    tid = json.loads(out)["thread"]["id"]
+    start = time.time()
+    assert service.retry_thread_wakes(rid, now=start) == 1
+    code, _, out = post(server, rid, "@Hermes second", idem="second", thread_id=tid)
+    assert code == 200, out
+    first, second = wake_records(rid).values()
+    second_id = second["request_id"]
+    assert service.retry_thread_wakes(rid, now=start + 1) == 0
+    assert wake_records(rid)[second["comment_id"]]["next_attempt"] == start + 1800
+
+    expire(now=start + 16 * 60)
+    assert wake_records(rid)[second["comment_id"]]["status"] == "pending_notify"
+    assert pin_requests(rid)[first["request_id"]]["status"] == "timeout"
+    queued = store.public_state(store.load(rid))["rounds"][0]["pin_requests"][second_id]
+    assert queued["status"] == "queued" and queued["deadline"] is None
+    assert len(bodies(env)) == 1
+
+    sent = start + 1800
+    assert service.retry_thread_wakes(rid, now=sent) == 1
+    assert [body["request_id"] for body in bodies(env)] == [first["request_id"], second_id]
+    shown = store.public_state(store.load(rid))["rounds"][0]["pin_requests"][second_id]
+    assert shown["status"] == "working" and shown["deadline"] == sent + 900
+    expire(now=shown["deadline"] - 1)
+    assert pin_requests(rid)[second_id]["status"] == "woken"
+    expire(now=shown["deadline"])
+    assert pin_requests(rid)[second_id]["status"] == "timeout"
+
+
+def test_a_retryable_mention_keeps_its_first_attempt_deadline(env, server, tmp_path, monkeypatch):
+    monkeypatch.setenv("MOCKREVIEW_STALE_AFTER_MINUTES", "0")
+    rid = board(tmp_path)["id"]
+    code, _, out = post(server, rid, "@Hermes please retry")
+    assert code == 201, out
+    request_id = next(iter(pin_requests(rid)))
+    start = time.time() + 300  # distinguish the enqueue time from the first attempt
+    env["receiver"].status = 502
+    assert service.retry_thread_wakes(rid, now=start) == 0
+    assert service.retry_thread_wakes(rid, now=start + 60) == 0
+    record = next(iter(wake_records(rid).values()))
+    assert record["status"] == "pending_notify" and record["attempts"] == 2
+
+    shown = store.public_state(store.load(rid))["rounds"][0]["pin_requests"][request_id]
+    assert shown["deadline"] == start + 900
+    assert service.expire_pin_requests(now=shown["deadline"] - 1) == 0
+    assert service.expire_pin_requests(now=shown["deadline"]) == 1
+    assert pin_requests(rid)[request_id]["status"] == "timeout"
+    assert next(iter(wake_records(rid).values()))["last_error"] == "pin request timed out"
+    assert service.retry_thread_wakes(rid, now=start + 901) == 0
+    assert len(bodies(env)) == 2
+
+
 def test_a_burst_of_mentions_is_one_wake_carrying_every_entry(env, server, tmp_path):
     rid = board(tmp_path)["id"]
     thread_ids = []
@@ -372,6 +432,40 @@ def test_patch_then_reply_leaves_the_chip_done_with_the_patch_detail(env, server
     assert replied["closed"] == 0
     final = pin_requests(rid)[req["id"]]
     assert final["status"] == "done" and final["detail"] == done["detail"]
+
+
+def test_reply_closes_delivered_mentions_but_leaves_a_queued_mention(env, server, tmp_path):
+    rid = board(tmp_path, look={"pin_fix_min_seconds": 1800})["id"]
+    code, _, out = post(server, rid, "@Hermes first", idem="first")
+    assert code == 201, out
+    tid = json.loads(out)["thread"]["id"]
+    start = time.time()
+    assert service.retry_thread_wakes(rid, now=start) == 1
+    code, _, out = post(server, rid, "@Hermes second", idem="second", thread_id=tid)
+    assert code == 200, out
+    assert service.retry_thread_wakes(rid, now=start + 1) == 0
+    first, second = pin_requests(rid)
+
+    result = call_tool(plugin_tools(), "mock_review_reply",
+                       {"thread_id": tid, "text": "The first request is answered.", "request_id": first})
+    assert result["closed"] == 1
+    assert pin_requests(rid)[second]["status"] == "queued"
+    assert service.retry_thread_wakes(rid, now=start + 1800) == 1
+    assert {pid: q["status"] for pid, q in pin_requests(rid).items()} == {first: "done", second: "woken"}
+
+
+def test_an_exact_request_id_can_close_a_queued_mention(env, server, tmp_path):
+    rid = board(tmp_path)["id"]
+    code, _, out = post(server, rid, "@Hermes please confirm")
+    assert code == 201, out
+    tid = json.loads(out)["thread"]["id"]
+    request_id = next(iter(pin_requests(rid)))
+    assert service.close_mention_requests(rid, None, request_id) == 1
+    done = pin_requests(rid)[request_id]
+    assert done["status"] == "done"
+    assert service.retry_thread_wakes(rid) == 1
+    assert pin_requests(rid)[request_id] == done
+    assert service.close_mention_requests(rid, tid, request_id) == 0
 
 
 def test_mention_opens_a_working_chip_and_a_plugin_reply_closes_it(env, server, tmp_path):

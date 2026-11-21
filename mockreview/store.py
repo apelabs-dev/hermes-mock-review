@@ -173,9 +173,13 @@ def atomic_write(path: Path, text: str, lock: bool = False) -> None:
         raise
 
 
-def save(review_id: str, data: Dict[str, Any]) -> None:
+def save(review_id: str, data: Dict[str, Any], *, pin_round: Optional[int] = None) -> None:
     data["updated_at"] = now_iso()
     atomic_write(review_dir(review_id) / "review.json", json.dumps(data, indent=2, ensure_ascii=False), lock=True)
+
+    if pin_round is not None:  # the review lock orders invalidations after their corresponding saves
+        from . import live
+        live.publish(review_id, live.PIN_REQUESTS, "", "", {"round": pin_round})
 
 
 def list_ids() -> List[str]:
@@ -1004,15 +1008,28 @@ def _copy_assets(src_dir: Path, dest_dir: Path, used: int = 0) -> None:
             shutil.copyfile(f, target)
 
 
+def _artifact_header() -> str:
+    csp = ARTIFACT_CSP.replace("&", "&amp;").replace('"', "&quot;")
+    return '<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="' + csp + '">'
+
+
 def artifact_page(html: str) -> str:
     """The served file of an artifact: the CSP meta first (nothing runs before it), then the probe, then the page.
     The page's own doctype is dropped (ours leads, so the page is never in quirks mode); its <html>/<head> tags merge
     into the document the parser has already opened. The probe sits at the top so `window.mockreview` exists before the
     page's own scripts run."""
     html = re.sub(r"\A\ufeff?\s*<!doctype[^>]*>", "", html, count=1, flags=re.I)
-    csp = ARTIFACT_CSP.replace("&", "&amp;").replace('"', "&quot;")
-    return ('<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="' + csp + '">'
-            + _probe() + html)
+    return _artifact_header() + _probe() + html
+
+
+def artifact_board_page(body: bytes) -> bytes:
+    """Use the current board probe for a previously installed artifact without rewriting its file."""
+    header = _artifact_header().encode()
+    probe = _probe().encode()
+    if body.startswith(header + probe) or not body.startswith(header + f"<script>/*{PROBE_MARKER}*/\n".encode()):
+        return body
+    end = body.find(b"</script>", len(header))
+    return body if end < 0 else header + probe + body[end + len(b"</script>"):]
 
 
 def _stored_decisions(dec: Dict[str, Any], vdir: Path, used: int = 0) -> Tuple[Dict[str, Any], int]:
@@ -1230,18 +1247,29 @@ def review_url(data: Dict[str, Any], public_base: Optional[str] = None) -> str:
 
 
 def public_state(data: Dict[str, Any]) -> Dict[str, Any]:
-    """What the board sees. No thread id, no filesystem paths; pin-fix history stays for the agent."""
+    """What the board sees. No filesystem paths or raw pin requests."""
     from . import service   # service imports this module at load time
     rounds = []
+    minutes = service.pin_timeout_minutes()
     for r in data["rounds"]:
         sub = r.get("submission") or None
         pin_requests = {}
         for pid, q in (r.get("pin_requests") or {}).items():
             status = service.pin_fix_status(data, q)
+            active = (r is data["rounds"][-1] and data["status"] == "open"
+                      and data.get("wake") is not False and not q.get("quiet"))
+            deadline = (service.pin_request_deadline(data, q, minutes)
+                        if active and status["state"] in ("queued", "working") else None)
             pin_requests[q.get("id") or pid] = {
                 "id": q.get("id") or pid, "block": q.get("block"), "option": q.get("option"),
-                "status": status["state"], "requested_at": q.get("requested_at"),
-                "done_at": q.get("done_at"), "rev": q.get("rev"), "detail": status["detail"],
+                "status": status["state"], "requested_at": q.get("requested_at"), "deadline": deadline,
+                "awaiting_delivery": (active and q.get("source") == "mention"
+                                      and status["state"] == "queued" and deadline is None),
+                "done_at": q.get("done_at"), "rev": q.get("rev"),
+                "thread_id": q.get("thread_id"), "pin_id": q.get("pin_id"),
+                "position": q.get("position"),
+                "detail": "" if status["state"] == "failed" else status["detail"],
+                "timed_out": q.get("status") == "timeout",
             }
         rounds.append({
             "n": r["n"],

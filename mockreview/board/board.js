@@ -408,10 +408,18 @@ import {paintAvatar} from './avatar.js';
 
   applyTheme();
 
+  var serverClockOffset = null;
+  function serverNow() {
+    return serverClockOffset === null ? Date.now() : serverClockOffset + performance.now();
+  }
+
   function fetchState() {
     return fetch('state.json', { cache: 'no-store', credentials: 'same-origin' }).then(function (res) {
-      if (!res.ok) throw new Error('state.json → HTTP ' + res.status);
+      if (!res.ok) throw Object.assign(new Error('state.json → HTTP ' + res.status), {status: res.status});
       return res.json();
+    }).then(function (st) {
+      serverClockOffset = Number.isFinite(st.now) ? st.now * 1000 - performance.now() : null;
+      return st;
     });
   }
 
@@ -425,6 +433,7 @@ import {paintAvatar} from './avatar.js';
   function boot() {
     fetchState().then(function (st) {
       applyState(st);
+      applyPinSnapshot(st);
       loadCfg(st);
       S.width = initialWidth();
       var want = parseInt((location.hash.match(/round-(\d+)/) || [])[1], 10);
@@ -433,6 +442,7 @@ import {paintAvatar} from './avatar.js';
       loadDraft();
       render();
       T.boot(st.me);
+      T.pinActivityChanged();
       maybePollForNotify();
       maybeWatchForRound();
     }).catch(function (e) {
@@ -671,7 +681,7 @@ import {paintAvatar} from './avatar.js';
     return h('header', { class: 'top' },
       h('div', { class: 'top-row' },
         h('div', { class: 'brand' }, brandMark(), h('span', { class: 'brand-name', text: 'Mock review' })),
-        h('div', { class: 'top-actions' }, shareButton(), avatarControl(), moreButton()),
+        h('div', { class: 'top-actions' }, T.workingCount(), shareButton(), avatarControl(), moreButton()),
         h('span', { class: 'header-tools', 'aria-hidden': 'true' }, T.headerActions())),
       h('div', { class: 'title-wrap' },
         h('h1', { class: 'title', title: st.title, text: st.title }),
@@ -1543,7 +1553,7 @@ import {paintAvatar} from './avatar.js';
       projectIcon(r),
       h('div', { class: 'pb-title' }, h('strong', { class: 'pb-name', title: st.title, text: st.title }), h('span', { class: 'pb-sub', text: subline })),
       h('span', { class: 'spacer' }),
-      h('div', { class: 'bar-actions' }, commentToggle(), widthSeg, shareButton(), avatarControl(), moreButton()),
+      h('div', { class: 'bar-actions' }, T.workingCount(), commentToggle(), widthSeg, shareButton(), avatarControl(), moreButton()),
       h('span', { class: 'header-tools', 'aria-hidden': 'true' }, T.headerActions()));
     barRO = watchSticky(bar, '--barh', barRO);
     return bar;
@@ -1653,6 +1663,7 @@ import {paintAvatar} from './avatar.js';
       if (seq !== renderSeq) return;
       main.textContent = '';
       append(main, r.kind === 'prototype' ? renderProto(r) : renderDoc(r, a));
+      paintHermesBlocks();
       lastNarrow = narrow(); lastCompact = window.innerWidth <= 600;
     }).catch(function (e) {
       if (seq !== renderSeq) return;
@@ -2150,11 +2161,15 @@ import {paintAvatar} from './avatar.js';
   }
   function pushArtifact(f) {
     var out = [];
-    S.draft.pins.forEach(function (p, i) { if (p.block === f.b.id && p.w === f.device && pinVisible(p)) out.push({ i: i, n: i + 1, x: p.x, y: p.y }); });
+    S.draft.pins.forEach(function (p, i) {
+      if (p.block !== f.b.id || p.w !== f.device || !pinVisible(p)) return;
+      out.push({i: i, n: i + 1, x: p.x, y: p.y, hermes: T.activityState(T.activityFor(p.thread, p))});
+    });
     if (f.ghost) out.push({ i: -1, n: S.draft.pins.length + 1, x: f.ghost.x, y: f.ghost.y, ghost: true });
     T.mockEntries(f.b.id, null).forEach(function (t, j) {
       var a = t.anchor || {};
       out.push({ i: 60 + j, n: t.n, x: a.x || 0, y: a.y || 0, thread: t.id, detached: !!t.detached,
+        hermes: T.activityState(T.activityFor(t.id)),
         ...(a.target ? {target: cleanTarget(a.target)} : {}) });
     });
     try { f.iframe.contentWindow.postMessage({ __mockreview: 1, cmd: 'state', comment: canComment() && S.commentMode, scale: 1, pins: pinsOn() ? out : [] }, '*'); } catch (e) {}
@@ -2266,7 +2281,12 @@ import {paintAvatar} from './avatar.js';
       }
       var p = S.draft.pins[i];
       if (!p || p.block !== b.id || p.w !== f.device) return;
-      notePop({ title: 'Pin ' + (i + 1) + ' · ' + pinWhat(b, null), where: wlabel(p.w) + ' · ~' + pct(p.x) + ', ' + pct(p.y),
+      var x = rc.left + num(d.cx, 0, 4000), y = rc.top + num(d.cy, 0, 4000);
+      if (p.thread && !p.thread.startsWith('tmp:')) {
+        T.open(p.thread, {read: false, box: {right: x, top: y}});
+        return;
+      }
+      notePop({ pin: p, title: 'Pin ' + (i + 1) + ' · ' + pinWhat(b, null), where: wlabel(p.w) + ' · ~' + pct(p.x) + ', ' + pct(p.y),
         anchor: { x: rc.left + num(d.cx, 0, 4000), y: rc.top + num(d.cy, 0, 4000) }, text: p.text,
         onSave: function (text) { p.text = text; if (p.thread) T.editThreadFirst(p.thread, text).catch(function () {}); saveDraft(); redrawPins(b.id); },
         onDelete: function () { if (p.thread) T.deleteThreadFirst(p.thread).catch(function () {}); S.draft.pins.splice(i, 1); saveDraft(); MOCKS.forEach(drawPins); redrawPins(b.id); } });
@@ -2383,11 +2403,12 @@ import {paintAvatar} from './avatar.js';
       if (p.block !== m.b.id || p.option !== m.o.id || p.w !== S.width || !pinVisible(p)) return;
       var box = m.inner.getBoundingClientRect();
       var spot = p.detached && p.target ? {left: ((p.target.doc.x - scrollX - box.left) / m.scale) + 'px', top: ((p.target.doc.y - scrollY - box.top) / m.scale) + 'px'} : {left: (p.x * 100) + '%', top: (p.y * 100) + '%'};
-      m.pins.appendChild(h('button', { class: 'mpin' + (p.detached ? ' det' : '') + (p.thread && T.unread(p.thread) ? ' un' : ''), style: spot, title: p.detached ? 'Element removed' : p.text, 'aria-label': 'Pin ' + (i + 1) + ': ' + (p.detached ? 'Element removed · ' : '') + p.text, ...(p.thread && String(p.thread).indexOf('tmp:') !== 0 ? {'data-thread': p.thread} : {}),
-        onclick: function (e) { e.stopPropagation(); if (p.thread && String(p.thread).indexOf('tmp:') !== 0) { T.open(p.thread, {detached: p.detached}); } else editPin(m, i, e); } }, h('span', { text: String(i + 1) })));
+      var button = h('button', { class: 'mpin' + (p.detached ? ' det' : '') + (p.thread && T.unread(p.thread) ? ' un' : ''), style: spot, title: p.detached ? 'Element removed' : p.text, 'aria-label': 'Pin ' + (i + 1) + ': ' + (p.detached ? 'Element removed · ' : '') + p.text, 'data-pin-id': p.id, ...(p.thread && String(p.thread).indexOf('tmp:') !== 0 ? {'data-thread': p.thread} : {}),
+        onclick: function (e) { e.stopPropagation(); if (p.thread && String(p.thread).indexOf('tmp:') !== 0) { T.open(p.thread, {detached: p.detached}); } else editPin(m, i, e); } }, h('span', { text: String(i + 1) }));
+      m.pins.appendChild(T.paintPin(button, T.activityFor(p.thread, p)));
     });
-    if (!S.commentMode) return;
     T.mockEntries(m.b.id, m.o.id).forEach(function (t) {
+      if (!S.commentMode && !T.activityState(T.activityFor(t.id))) return;
       var box = m.inner.getBoundingClientRect(), s = T.spot(t, m.root, box);
       var style = s.doc
         ? {left: ((s.doc.x - scrollX - box.left) / m.scale) + 'px', top: ((s.doc.y - scrollY - box.top) / m.scale) + 'px'}
@@ -2449,6 +2470,108 @@ import {paintAvatar} from './avatar.js';
       pushAll();
     }
     updateSendbar();
+  }
+
+  var pinRounds = {}, pinRefreshTimer = 0, pinRefreshing = false, pinDirty = false, pinReset = false;
+  function pinRequests() { return pinRounds[S.view] || {}; }
+  function applyPinSnapshot(st) {
+    pinRounds = Object.fromEntries(st.rounds.map(function (r) { return [r.n, r.pin_requests || {}]; }));
+  }
+  function refreshPinActivity(reset) {
+    pinDirty = true;
+    pinReset = pinReset || reset;
+    if (pinRefreshing || pinRefreshTimer) return;
+    // A burst can publish queued, delivered and answered before the browser has painted any of them.
+    pinRefreshTimer = setTimeout(function () {
+      var reload = pinReset;
+      pinRefreshTimer = 0;
+      pinReset = pinDirty = false;
+      pinRefreshing = true;
+      fetchState().then(function (st) {
+        applyPinSnapshot(st);
+        if (reload || st.current_round !== R().current_round || st.status !== R().status) {
+          applyState(st);
+          if (!st.rounds.some(function (r) { return r.n === S.view; })) switchRound(st.current_round);
+          else keepPlace(render);
+          if (reload) T.refresh();
+        }
+        T.pinActivityChanged();
+      }).catch(function (e) {
+        if (e.status === 403 || e.status === 404) { pinRounds = {}; T.pinActivityChanged(); }
+      }).finally(function () {
+        pinRefreshing = false;
+        if (pinDirty) refreshPinActivity();
+      });
+    }, 40);
+  }
+  function blockLabel(id) {
+    var sec = canvasSectionFor({block: id});
+    return sec && sec.getAttribute('data-mr-title') || id;
+  }
+  function openPinFix(q) {
+    var btn = Array.from(app.querySelectorAll('.mpin[data-pin-request], .mpin[data-pin-id]')).find(function (el) {
+      return el.dataset.pinRequest === q.id || el.dataset.pinId === (q.pin_id || q.id);
+    });
+    if (btn) btn.scrollIntoView({block: 'nearest'});
+    T.openFix(q, btn);
+  }
+  function paintHermesBlocks() {
+    if (!DOC || !DOC.el.isConnected || DOC.r.n !== S.view) return;
+    var byBlock = new Map();
+    T.roundRequests().forEach(function (q) {
+      if (!byBlock.has(q.block)) byBlock.set(q.block, []);
+      byBlock.get(q.block).push(q);
+    });
+    DOC.el.querySelectorAll('[data-mr-ref]').forEach(function (sec) {
+      var block = sec.getAttribute('data-mr-ref'), requests = byBlock.get(block) || [];
+      var heading = sec.querySelector(':scope > .ihead');
+      var chipHost = heading || sec;
+      var chip = chipHost.querySelector(':scope > .hermes-block-status');
+      if (!requests.some(T.working)) {
+        if (chip) chip.remove();
+      } else if (!chip) {
+        chip = h('span', {class: 'hermes-block-status', role: 'status', text: 'Hermes is working…'});
+        if (heading) heading.appendChild(chip); else sec.prepend(chip);
+      }
+      var fixes = requests.filter(function (q) {
+        return pinsOn() && !q.thread_id && (T.activityState(q) || q.status === 'done') && !S.draft.pins.some(function (p) {
+          return p.id === (q.pin_id || q.id) && p.block === block && (p.option || null) === (q.option || null) &&
+            p.w === S.width && pinVisible(p);
+        });
+      });
+      var layer = sec.querySelector(':scope > .hermes-fix-layer');
+      if (!fixes.length) { if (layer) layer.remove(); return; }
+      if (!layer) layer = sec.appendChild(h('div', {class: 'pin-layer hermes-fix-layer'}));
+      var previous = new Map(Array.from(layer.children, function (el) { return [el.dataset.pinRequest, el]; }));
+      fixes.forEach(function (q, i) {
+        var button = previous.get(q.id);
+        if (!button) {
+          button = layer.appendChild(h('button', {class: 'mpin', type: 'button', 'data-pin-request': q.id,
+            'aria-label': 'Pin fix · ' + blockLabel(block), title: 'Pin fix',
+            onclick: function (e) { e.stopPropagation(); T.openFix(q, button); }}, h('span')));
+        }
+        previous.delete(q.id);
+        var spot = q.position || {x: Math.min(.85, .5 + i * .06), y: .5};
+        button.style.left = (spot.x * 100) + '%';
+        button.style.top = (spot.y * 100) + '%';
+        button.firstElementChild.textContent = String(i + 1);
+        T.paintPin(button, q);
+      });
+      previous.forEach(function (el) { el.remove(); });
+    });
+  }
+  function paintPinActivity() {
+    var from = document.activeElement;
+    var focus = from && from.matches('.mpin') && (from.dataset.thread || from.dataset.pinId || from.dataset.pinRequest);
+    redrawThreadSurfaces();
+    paintHermesBlocks();
+    if (pop && pop.paintActivity) pop.paintActivity();
+    if (focus && !from.isConnected) {
+      var marker = Array.from(app.querySelectorAll('.mpin')).find(function (el) {
+        return (el.dataset.thread || el.dataset.pinId || el.dataset.pinRequest) === focus;
+      });
+      if (marker) marker.focus({preventScroll: true});
+    }
   }
 
   // ---- pins on the canvas: every rendered section, not only mocks ----
@@ -2680,14 +2803,16 @@ import {paintAvatar} from './avatar.js';
       } else {
         style = { left: (p.x * 100) + '%', top: (p.y * 100) + '%' };
       }
-      c.layer.appendChild(h('button', {
+      var button = h('button', {
         class: 'mpin' + (it.detached ? ' det' : '') + (p.thread && T.unread(p.thread) ? ' un' : ''), style: style,
         title: it.detached ? 'Element removed' : p.text,
         'aria-label': 'Pin ' + (it.i + 1) + ': ' + (it.detached ? 'Element removed · ' : '') + p.text,
         'data-mr-pin': String(it.i),
+        'data-pin-id': p.id,
         ...(p.thread && String(p.thread).indexOf('tmp:') !== 0 ? {'data-thread': p.thread} : {}),
         onclick: function (e) { e.stopPropagation(); if (p.thread && String(p.thread).indexOf('tmp:') !== 0) T.open(p.thread, {detached: it.detached}); else editCanvasPin(it.i, e); }
-      }, h('span', { text: String(it.i + 1) })));
+      }, h('span', { text: String(it.i + 1) }));
+      c.layer.appendChild(T.paintPin(button, T.activityFor(p.thread, p)));
     });
     items.forEach(function (it) {
       var p = it.p;
@@ -2696,8 +2821,9 @@ import {paintAvatar} from './avatar.js';
         h('span', { class: 'pin-body' }, h('span', { class: 'pin-where', text: (p.option ? p.option.toUpperCase() + ' · ' : '') + wlabel(p.w) }),
           h('span', { class: 'pin-text', text: p.text })))));
     });
-    if (S.commentMode && DOC && DOC.el) {
+    if (DOC && DOC.el) {
       T.canvasEntries().forEach(function (t) {
+        if (!S.commentMode && !T.activityState(T.activityFor(t.id))) return;
         var sec = canvasSectionFor({block: t.anchor.block});
         if (!sec) return;
         var box = canvasBox(sec);
@@ -2727,7 +2853,7 @@ import {paintAvatar} from './avatar.js';
     var p = S.draft.pins[i]; if (!p) return;
     var sec = canvasSectionFor(p);
     var title = sec ? (Element.prototype.getAttribute.call(sec, 'data-mr-title') || p.block) : p.block;
-    notePop({ title: 'Pin ' + (i + 1) + ' · ' + title,
+    notePop({ pin: p, title: 'Pin ' + (i + 1) + ' · ' + title,
       where: p.detached ? 'Element removed' : p.target ? 'on ' + p.target.label : wlabel(p.w) + ' · ~' + pct(p.x) + ', ' + pct(p.y),
       detached: p.detached, anchor: { x: e.clientX, y: e.clientY }, text: p.text,
       onSave: function (text) { p.text = text; if (p.thread) T.editThreadFirst(p.thread, text).catch(function () {}); saveDraft(); redrawCanvasPins(); },
@@ -2883,7 +3009,7 @@ import {paintAvatar} from './avatar.js';
   function pinWhat(b, oid) { return (b.tag || b.id.toUpperCase()) + (oid ? ' · ' + oid.toUpperCase() : ''); }
   function editPin(m, i, e) {
     var p = S.draft.pins[i];
-    notePop({ title: 'Pin ' + (i + 1) + ' · ' + pinWhat(m.b, p.option), where: p.detached ? 'Element removed' : p.target ? 'on ' + p.target.label : wlabel(p.w) + ' · ~' + pct(p.x) + ', ' + pct(p.y),
+    notePop({ pin: p, title: 'Pin ' + (i + 1) + ' · ' + pinWhat(m.b, p.option), where: p.detached ? 'Element removed' : p.target ? 'on ' + p.target.label : wlabel(p.w) + ' · ~' + pct(p.x) + ', ' + pct(p.y),
       detached: p.detached, anchor: { x: e.clientX, y: e.clientY }, text: p.text,
       onSave: function (text) { p.text = text; if (p.thread) T.editThreadFirst(p.thread, text).catch(function () {}); saveDraft(); redrawPins(p.block); },
       onDelete: function () { if (p.thread) T.deleteThreadFirst(p.thread).catch(function () {}); S.draft.pins.splice(i, 1); saveDraft(); MOCKS.forEach(drawPins); redrawPins(p.block); } });
@@ -2931,6 +3057,7 @@ import {paintAvatar} from './avatar.js';
             h('button', { class: 'btn btn-primary', onclick: save, text: o.isNew ? 'Add pin' : 'Save' }))
         : h('div', { class: 'pop-actions' }, h('span', { class: 'spacer' }), h('button', { class: 'btn btn-ghost', onclick: closePopover, text: 'Close' }));
     }
+    var activity = o.pin ? h('div', {class: 'tp-typing pin-fix-detail'}) : null;
     var el = h('div', { class: 'popover', role: 'dialog', 'aria-label': o.title },
       h('div', { class: 'pop-head' }, h('span', { class: 'pin pin-static' }, icon('pin')),
         h('div', { class: 'pop-head-copy' }, h('strong', { text: o.title }), h('span', { class: 'pop-where', text: o.where })),
@@ -2938,10 +3065,17 @@ import {paintAvatar} from './avatar.js';
         h('button', { class: 'btn btn-ghost icon-btn pop-close', type: 'button', 'aria-label': 'Close', title: 'Close',
           onclick: closePopover }, icon('close'))),
       o.detached ? h('div', {class: 'detached-state'}, h('span', {class: 'st warn', text: 'Element removed'}), h('div', {class: 'faint', text: 'Stays here and re-attaches if the element comes back.'})) : null,
-      chipWrap, body, actions);
+      chipWrap, activity, body, actions);
     if (ta) ta.addEventListener('keydown', function (e) { if (e.defaultPrevented) return; if (e.key === 'Enter' && (e.metaKey || e.ctrlKey || !e.shiftKey)) { e.preventDefault(); save(); } });
     document.body.appendChild(el);
-    pop = { el: el, f: null, onClose: o.onClose };
+    pop = { el: el, f: null, onClose: function () {
+      if (activity) T.statusRow(activity);
+      if (o.onClose) o.onClose();
+    } };
+    if (activity) {
+      pop.paintActivity = function () { T.statusRow(activity, T.activityFor(o.pin.thread, o.pin)); };
+      pop.paintActivity();
+    }
     var sheet = window.innerWidth < 640;
     el.classList.toggle('sheet', sheet);
     if (!sheet) {
@@ -3268,7 +3402,7 @@ import {paintAvatar} from './avatar.js';
     history.replaceState(null, '', n === R().current_round ? location.pathname : '#round-' + n);
     T.close();
     loadDraft(); render(); window.scrollTo({ top: 0 });
-    T.setView(n);
+    T.setView();
   }
   function startAmend() { S.amending = true; S.error = null; loadDraft(); render(); }
   function cancelAmend() { S.amending = false; S.error = null; lsDel(key('amend')); loadDraft(); render(); }
@@ -3670,9 +3804,10 @@ import {paintAvatar} from './avatar.js';
     toast: toast,
     canSendToHermes: function () { return !!R() && R().wake !== false; },
     setView: function (n) { if (R() && S.view !== n) switchRound(n); },
-    reloadState: function () {
-      return fetchState().then(function (st) { applyState(st); render(); T.refresh(); }).catch(function () {});
-    },
+    pinRequests: pinRequests, pinNow: serverNow, paintPinActivity: paintPinActivity,
+    blockLabel: blockLabel, openPinFix: openPinFix,
+    refreshPinActivity: function () { refreshPinActivity(); },
+    reloadState: function () { refreshPinActivity(true); },
     mirrored: draftThreadIds,
     firstOption: function (block) {
       var v = viewed(), dec = v && v.decisions;
