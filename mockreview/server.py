@@ -685,6 +685,7 @@ class Handler(BaseHTTPRequestHandler):
                 binding = ""
             state["frame_tokens"] = {str(rnd["n"]): frames.mint(rid, int(rnd["n"]), binding)
                                      for rnd in state["rounds"]}
+            state["now"] = time.time()
             return self._json(200, state, self._csrf_cookie(who))
         if rest == ["api", "threads"]:
             return self._threads_get(rid, who, decision)
@@ -833,7 +834,7 @@ class Handler(BaseHTTPRequestHandler):
         except live.TooManyStreams:
             self.close_connection = True
             return self._json(429, {"ok": False, "error": "too many live connections"})
-        reset, rows, latest = live.replay(rid, last)
+        reset, rows, tip = live.replay(rid, last)
         rev = threads.rev(rid, scope)
         hello = {"actor": who.actor, "me": auth.describe(who, decision), "rev": rev,
                  "presence": live.presence(rid)}
@@ -843,7 +844,7 @@ class Handler(BaseHTTPRequestHandler):
             sub.close()
             live.REGISTRY.unsubscribe(sub)
             raise
-        live.REGISTRY.stream(self, sub, hello, rows, reset=reset, latest=latest, announce=rev, last=last)
+        live.REGISTRY.stream(self, sub, hello, rows, reset=reset, tip=tip, announce=rev, last=last)
         return None
 
     def _owner(self) -> None:

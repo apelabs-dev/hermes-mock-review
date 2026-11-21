@@ -1258,11 +1258,13 @@ def public_state(data: Dict[str, Any]) -> Dict[str, Any]:
             status = service.pin_fix_status(data, q)
             active = (r is data["rounds"][-1] and data["status"] == "open"
                       and data.get("wake") is not False and not q.get("quiet"))
-            deadline = (service.pin_request_deadline(q, minutes)
+            deadline = (service.pin_request_deadline(data, q, minutes)
                         if active and status["state"] in ("queued", "working") else None)
             pin_requests[q.get("id") or pid] = {
                 "id": q.get("id") or pid, "block": q.get("block"), "option": q.get("option"),
                 "status": status["state"], "requested_at": q.get("requested_at"), "deadline": deadline,
+                "awaiting_delivery": (active and q.get("source") == "mention"
+                                      and status["state"] == "queued" and deadline is None),
                 "done_at": q.get("done_at"), "rev": q.get("rev"),
                 "thread_id": q.get("thread_id"), "pin_id": q.get("pin_id"),
                 "position": q.get("position"),

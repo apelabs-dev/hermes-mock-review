@@ -12,7 +12,7 @@ import pytest
 
 from authkit import account, loopback_owner_off, peer, signed_in, token_of  # noqa: F401
 from conftest import http
-from mockreview import db, live, threads, users
+from mockreview import db, live, store, threads, users
 
 
 @pytest.fixture(autouse=True)
@@ -218,7 +218,7 @@ def test_a_slow_consumer_is_closed_without_blocking_the_publisher(env, review):
     sub = live.REGISTRY.subscribe(rid, "user:1", "Owner", "user", owner=True)
     try:
         while not sub.queue.full():
-            sub.queue.put_nowait((0, "presence", {}))
+            sub.queue.put_nowait((None, "presence", {}, 0))
         start = time.monotonic()
         live.publish(rid, "thread.status", "", "system", {"ok": True})
         assert time.monotonic() - start < 1.0
@@ -348,6 +348,69 @@ def test_replay_live_handoff_delivers_a_persisted_event_once(server, review, mon
         assert later == 2
         nxt = s.until("thread.status", timeout=4)
         assert nxt is not None and int(nxt["id"]) == 2, nxt   # the queued copy of id 1 would arrive here first
+    finally:
+        s.close()
+
+
+@pytest.mark.parametrize("handshake", ["replay", "resume", "reset"])
+def test_other_reviews_and_filtered_events_need_no_catch_up(server, review, variants, monkeypatch, handshake):
+    rid = review["id"]
+    specs = [store.parse_variant_spec(v) for v in variants]
+    other = store.create_review("Other review", "", review["origin"], "local", specs)["id"]
+    store.add_round(rid, specs)
+    guest = users.join_as_guest(users.resolve_share_token(token_of(users.share(
+        "local", rid, guest_role="viewer", round="1")["path"])))
+    baseline = live.publish(rid, live.PIN_REQUESTS, "", "", {"round": 1})
+    replays = []
+    replay = live.REGISTRY.replay
+
+    def observe(review_id, last):
+        replays.append(last)
+        return replay(review_id, last)
+
+    monkeypatch.setattr(live.REGISTRY, "replay", observe)
+    monkeypatch.setattr(live, "RECHECK_EVERY", 60)
+    last = {"replay": 0, "resume": baseline, "reset": baseline + 999}[handshake]
+    headers = dict(signed_in(guest, False), **{"Last-Event-ID": str(last)})
+    s = Stream(server, f"/r/{rid}/events", headers)
+    try:
+        assert s.until("hello") is not None
+        if handshake == "replay":
+            assert int(s.until(live.PIN_REQUESTS)["id"]) == baseline
+        elif handshake == "reset":
+            assert s.until("reset") is not None
+        hidden = live.publish(rid, live.PIN_REQUESTS, "", "", {"round": 2})
+        unrelated = live.publish(other, live.PIN_REQUESTS, "", "", {"round": 1})
+        visible = live.publish(rid, live.PIN_REQUESTS, "", "", {"round": 1})
+        assert baseline < hidden < unrelated < visible
+        assert int(s.until(live.PIN_REQUESTS)["id"]) == visible
+        assert replays == [last]
+    finally:
+        s.close()
+
+
+def test_a_same_review_gap_recovers_a_write_missing_from_the_bus(server, review, monkeypatch):
+    rid = review["id"]
+    replays = []
+    replay = live.REGISTRY.replay
+
+    def observe(review_id, last):
+        replays.append(last)
+        return replay(review_id, last)
+
+    monkeypatch.setattr(live.REGISTRY, "replay", observe)
+    monkeypatch.setattr(live, "RECHECK_EVERY", 60)
+    s = Stream(server, f"/r/{rid}/events")
+    try:
+        assert s.until("hello") is not None
+        first = live.publish(rid, live.PIN_REQUESTS, "", "", {"round": 1})
+        assert int(s.until(live.PIN_REQUESTS)["id"]) == first
+        missing = live.Registry().publish(rid, live.PIN_REQUESTS, "", "", {"round": 1})
+        following = live.publish(rid, live.PIN_REQUESTS, "", "", {"round": 1})
+        assert [int(s.until(live.PIN_REQUESTS)["id"]) for _ in range(2)] == [missing, following]
+        last = live.publish(rid, live.PIN_REQUESTS, "", "", {"round": 1})
+        assert int(s.until(live.PIN_REQUESTS)["id"]) == last
+        assert replays == [0, first]
     finally:
         s.close()
 

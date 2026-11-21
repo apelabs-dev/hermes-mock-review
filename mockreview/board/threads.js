@@ -153,7 +153,7 @@ export function createThreads(opts) {
       return !q.thread_id || !S.hidden[q.thread_id];
     });
   }
-  function working(q) { return !!q && q.deadline * 1000 > Date.now(); }
+  function working(q) { return !!q && (q.awaiting_delivery || q.deadline * 1000 > opts.pinNow()); }
   function activityFor(thread, pin) {
     var matches = roundRequests().filter(function (q) {
       return q.thread_id ? q.thread_id === thread : !!pin && (q.pin_id || q.id) === pin.id &&
@@ -199,7 +199,7 @@ export function createThreads(opts) {
       state === 'failed' && retry ? h('span', {class: 'hermes-retry', text: 'Mention @Hermes again to retry.'}) : null));
     if (!elapsed) return;
     function tick() {
-      var seconds = Math.max(0, Math.floor((Date.now() - Date.parse(q.requested_at)) / 1000));
+      var seconds = Math.max(0, Math.floor((opts.pinNow() - Date.parse(q.requested_at)) / 1000));
       elapsed.textContent = Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0');
     }
     tick();
@@ -207,8 +207,10 @@ export function createThreads(opts) {
   }
   function pinActivityChanged() {
     clearTimeout(deadlineTimer);
-    var deadlines = roundRequests().filter(working).map(function (q) { return q.deadline * 1000; });
-    if (deadlines.length) deadlineTimer = setTimeout(pinActivityChanged, Math.max(0, Math.min.apply(null, deadlines) - Date.now()));
+    var now = opts.pinNow();
+    var deadlines = roundRequests().map(function (q) { return q.deadline * 1000; })
+      .filter(function (deadline) { return deadline > now; });
+    if (deadlines.length) deadlineTimer = setTimeout(pinActivityChanged, Math.min.apply(null, deadlines) - now);
     syncHeader();
     repaintTyping();
     if (S.overlay && S.overlay.kind === 'comments') S.overlay.paint();

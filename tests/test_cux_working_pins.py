@@ -57,7 +57,7 @@ def has_text(selector, text):
 
 
 class WorkingBoard(Board):
-    def __init__(self, chrome, server, review, mobile, member=None, artifact=False):
+    def __init__(self, chrome, server, review, mobile, member=None, artifact=False, init_script=""):
         self.cdp = chrome
         size = {"width": 390, "height": 844} if mobile else {"width": 1440, "height": 900}
         self.width = size["width"]
@@ -78,7 +78,7 @@ class WorkingBoard(Board):
             for key, value in (("mr_session", member["session"]), ("mr_csrf", member["csrf"])):
                 chrome.call("Network.setCookie", {"name": key, "value": value, "url": server, "path": "/"},
                             session=self.sid)
-        chrome.call("Page.addScriptToEvaluateOnNewDocument", {"source": RECORDER}, session=self.sid)
+        chrome.call("Page.addScriptToEvaluateOnNewDocument", {"source": RECORDER + init_script}, session=self.sid)
         chrome.call("Page.navigate", {"url": f"{server}/r/{review['id']}/"}, session=self.sid)
         surface = exists(".art-frame") if artifact else "!!document.querySelector('.mock-host')?.shadowRoot?.querySelector('#copy')"
         assert self.until(f"window.boardHello && boardEvents.readyState === 1 && {surface}", timeout=30)
@@ -230,6 +230,47 @@ def test_reviewer_pin_fix_without_a_thread(working_review, server, chrome, mobil
     b.shows(has_text(STATUS, "Hermes couldn’t finish"), "the pin fix did not show failure in its detail")
     assert not b.js(has_text(STATUS, "retry"))
     b.same_document(instance)
+
+
+def test_working_activity_uses_the_server_clock(working_review, server, chrome):
+    review = working_review()
+    rid = review["id"]
+    tid = mention(server, rid)
+    b = WorkingBoard(chrome, server, review, mobile=False, init_script="""
+        const wallNow = Date.now.bind(Date);
+        const monotonicNow = performance.now.bind(performance);
+        window.advanceMs = 0;
+        Date.now = () => wallNow() + 2 * 3600000 + advanceMs;
+        performance.now = () => monotonicNow() + advanceMs;
+        const realTimeout = window.setTimeout;
+        window.setTimeout = function(callback, delay, ...args) {
+          if (callback.name === 'pinActivityChanged') window.pinDeadline = {callback, delay};
+          return realTimeout(callback, delay, ...args);
+        };
+    """)
+    on(b, b.width)
+    b.shows(exists(f'{WORKING}[data-thread="{tid}"]'), "a fast device clock hid the queued working pin")
+    assert b.js(has_text(COUNT, "Hermes · 1 working"))
+    assert b.js(has_text(CHIP, "Hermes is working…"))
+    assert b.js("window.pinDeadline === undefined"), "a never-attempted mention scheduled an expiry"
+    b.press(COUNT)
+    b.shows(has_text(".tpanel .trow", "Working"), "the working pin was absent from Comments")
+    b.press(".tpanel .trow")
+    b.shows(has_text(STATUS, "Hermes is working on this…"), "the thread omitted its working status")
+    assert b.js(f"{query(TIMER)}.textContent.startsWith('0:')")
+
+    before = time.time()
+    assert service.retry_thread_wakes(rid) == 1
+    b.shows("window.pinDeadline?.delay > 800000", "delivery did not schedule expiry in server time")
+    code, _, body = http("GET", f"{server}/r/{rid}/state.json")
+    assert code == 200 and before <= json.loads(body)["now"] <= time.time()
+    assert b.js(has_text(STATUS, "Hermes is working on this…"))
+    b.js("window.getsBeforeExpiry = boardGets.length; advanceMs = pinDeadline.delay + 1000; pinDeadline.callback()")
+    b.shows(exists(FAILED), "the deadline callback did not expire the pin")
+    assert not b.js(exists(COUNT))
+    assert not b.js(exists(CHIP))
+    assert b.js(has_text(STATUS, "Hermes couldn’t finish in time."))
+    assert b.js("boardGets.length === getsBeforeExpiry"), "local expiry made a network request"
 
 
 @pytest.mark.parametrize("completion", ["reply", "patch", "resolve"])

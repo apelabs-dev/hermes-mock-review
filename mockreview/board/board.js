@@ -408,10 +408,18 @@ import {paintAvatar} from './avatar.js';
 
   applyTheme();
 
+  var serverClockOffset = null;
+  function serverNow() {
+    return serverClockOffset === null ? Date.now() : serverClockOffset + performance.now();
+  }
+
   function fetchState() {
     return fetch('state.json', { cache: 'no-store', credentials: 'same-origin' }).then(function (res) {
       if (!res.ok) throw Object.assign(new Error('state.json → HTTP ' + res.status), {status: res.status});
       return res.json();
+    }).then(function (st) {
+      serverClockOffset = Number.isFinite(st.now) ? st.now * 1000 - performance.now() : null;
+      return st;
     });
   }
 
@@ -3796,7 +3804,8 @@ import {paintAvatar} from './avatar.js';
     toast: toast,
     canSendToHermes: function () { return !!R() && R().wake !== false; },
     setView: function (n) { if (R() && S.view !== n) switchRound(n); },
-    pinRequests: pinRequests, paintPinActivity: paintPinActivity, blockLabel: blockLabel, openPinFix: openPinFix,
+    pinRequests: pinRequests, pinNow: serverNow, paintPinActivity: paintPinActivity,
+    blockLabel: blockLabel, openPinFix: openPinFix,
     refreshPinActivity: function () { refreshPinActivity(); },
     reloadState: function () { refreshPinActivity(true); },
     mirrored: draftThreadIds,

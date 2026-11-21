@@ -93,7 +93,10 @@ class TooManyStreams(Exception):
 
 
 class Subscription:
-    """One open SSE response. `queue` carries (id or None, kind, data) tuples and one sentinel at close."""
+    """One open SSE response. `queue` carries (id, kind, data, seq) tuples and one sentinel at close.
+
+    Ephemeral frames carry None for id and zero for seq.
+    """
 
     def __init__(self, review_id: str, actor: str, name: str, kind: str, session_hash: str = "",
                  guest_generation: Optional[int] = None, owner: bool = False,
@@ -303,7 +306,7 @@ class Registry:
             people = self._people(review_id)
         return {"people": people, "count": len(people)}
 
-    def _presence_frame(self, review_id: str) -> Optional[Tuple[None, str, Dict[str, Any]]]:
+    def _presence_frame(self, review_id: str) -> Optional[Tuple[None, str, Dict[str, Any], int]]:
         with self._lock:
             people = self._people(review_id)
             subs = self._live_subs(review_id)
@@ -313,7 +316,7 @@ class Registry:
             for s in subs:
                 s.last_presence = now
             payload = {"people": people, "count": len(people)}
-        return (None, "presence", payload)
+        return (None, "presence", payload, 0)
 
     def _broadcast_presence(self, review_id: str, force: bool = True) -> None:
         if not force:
@@ -377,11 +380,11 @@ class Registry:
                 conn.execute("DELETE FROM events WHERE review_id = ? AND id NOT IN "
                              "(SELECT id FROM events WHERE review_id = ? ORDER BY id DESC LIMIT ?)",
                              (review_id, review_id, KEEP_EVENTS))
-            self._fanout(review_id, (event_id, kind, data))
+            self._fanout(review_id, (event_id, kind, data, seq))
         return event_id
 
     def publish_ephemeral(self, review_id: str, kind: str, data: Dict[str, Any]) -> None:
-        self._fanout(review_id, (None, kind, data))
+        self._fanout(review_id, (None, kind, data, 0))
 
     def _offer(self, sub: Subscription, item: Any) -> None:
         if sub.closed:
@@ -402,16 +405,16 @@ class Registry:
         row = db.connect().execute("SELECT MAX(id) AS id FROM events WHERE review_id = ?", (review_id,)).fetchone()
         return int(row["id"] or 0)
 
-    def replay(self, review_id: str, last: int) -> Tuple[bool, List[Dict[str, Any]], int]:
-        """(needs_reset, rows to replay, latest id). A cursor older than the retained window means refetch."""
+    def replay(self, review_id: str, last: int) -> Tuple[bool, List[Dict[str, Any]], Tuple[int, int]]:
+        """(needs_reset, rows to replay, tip as (global id, review seq)). An older cursor means refetch."""
         rows = [dict(r) for r in db.connect().execute(
             "SELECT id, seq, kind, data FROM events WHERE review_id = ? ORDER BY id", (review_id,)).fetchall()]
-        latest = int(rows[-1]["id"]) if rows else 0
-        if last and (latest == 0 or last > latest):
-            return True, [], latest
+        tip = (int(rows[-1]["id"]), int(rows[-1]["seq"])) if rows else (0, 0)
+        if last and last > tip[0]:
+            return True, [], tip
         if rows and int(rows[0]["seq"]) > 1 and last and last < int(rows[0]["id"]):
-            return True, [], latest
-        return False, [r for r in rows if int(r["id"]) > last], latest
+            return True, [], tip
+        return False, [r for r in rows if int(r["id"]) > last], tip
 
     def _visible(self, sub: Subscription, kind: str, data: Any) -> bool:
         allow = sub.allow_round
@@ -424,25 +427,28 @@ class Registry:
 
     # ---- the stream loop ----------------------------------------------
     def stream(self, handler: Any, sub: Subscription, hello: Dict[str, Any], replay: List[Dict[str, Any]],
-               reset: bool = False, latest: int = 0, interval: Optional[float] = None,
+               reset: bool = False, tip: Tuple[int, int] = (0, 0), interval: Optional[float] = None,
                announce: Optional[int] = None, last: int = 0) -> None:
         """Write hello, the replay (or reset) and then live frames.
 
         Closure is checked at every emission point, not only on entry: a subscription closed during the handshake,
         during a visibility evaluation or after a frame was dequeued writes nothing. The cursor/floor semantics are
-        unchanged: `floor` only moves forward, rows at or below it are dropped, and hidden rows advance it.
+        unchanged: `floor` tracks the global replay id. The per-review sequence detects missed publications.
+        Hidden rows advance both cursors.
         """
         stream = sse.Stream(handler, interval=interval, output=sub.output)
         floor = last
+        floor_seq = tip[1] if last == tip[0] else 0
 
-        def emit(event_id: Optional[int], kind: str, data: Any) -> bool:
-            nonlocal floor
+        def emit(event_id: Optional[int], kind: str, data: Any, seq: int) -> bool:
+            nonlocal floor, floor_seq
             if sub.closed:
                 return False
             if event_id is not None:
                 if event_id <= floor:
                     return True
                 floor = event_id
+                floor_seq = seq
             visible = self._visible(sub, kind, data)
             if sub.closed:
                 return False
@@ -454,13 +460,13 @@ class Registry:
                     data = json.loads(row["data"] or "{}")
                 except ValueError:
                     data = {}
-                if not emit(int(row["id"]), row["kind"], data):
+                if not emit(int(row["id"]), row["kind"], data, int(row["seq"])):
                     return False
             return True
 
-        def emit_reset(latest_id: int, revision: int) -> bool:
-            nonlocal floor
-            floor = latest_id
+        def emit_reset(new_tip: Tuple[int, int], revision: int) -> bool:
+            nonlocal floor, floor_seq
+            floor, floor_seq = new_tip
             return not sub.closed and stream.write(json.dumps({"rev": revision}), event="reset")
 
         def catch_up() -> bool:
@@ -473,7 +479,7 @@ class Registry:
             if not stream.write(json.dumps(hello, ensure_ascii=False), event="hello"):
                 return
             if reset:
-                if not emit_reset(latest, latest if announce is None else announce):
+                if not emit_reset(tip, tip[0] if announce is None else announce):
                     return
             elif not emit_rows(replay):
                 return
@@ -504,12 +510,12 @@ class Registry:
                 if sub.closed or item is _SENTINEL:
                     break
                 if item is not None:
-                    event_id, kind, data = item
-                    if event_id is not None and event_id > floor + 1:
+                    event_id, kind, data, seq = item
+                    if seq > floor_seq + 1:
                         # Fill any gap before advancing the cursor past a different process's earlier write.
                         if not catch_up():
                             break
-                    if not emit(event_id, kind, data):
+                    if not emit(event_id, kind, data, seq):
                         break
                 self.refresh(sub)
                 if not stream.tick():
@@ -602,7 +608,7 @@ def latest(review_id: str) -> int:
     return REGISTRY.latest(review_id)
 
 
-def replay(review_id: str, last: int) -> Tuple[bool, List[Dict[str, Any]], int]:
+def replay(review_id: str, last: int) -> Tuple[bool, List[Dict[str, Any]], Tuple[int, int]]:
     return REGISTRY.replay(review_id, last)
 
 
