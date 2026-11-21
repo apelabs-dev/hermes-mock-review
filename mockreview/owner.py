@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
-from . import config, notify, runtime, settings, store
+from . import config, notify, runtime, sessionwake, settings, store
 from .store import ReviewError
 
 SERVICE = "mock-review"
@@ -81,10 +81,11 @@ def _same(a: Any, b: Any) -> bool:
 # ---------------------------------------------------------------- server side
 
 def wake_status() -> Dict[str, Any]:
-    """Report signing readiness only; route creation and delivery are checked by setup."""
+    """Report signing readiness (route creation and delivery are checked by setup), and under `session` whether this
+    process can wake a Desktop chat (sessionwake.py)."""
     secret, err = notify.load_secret()
     return {"route": config.route_name(), "ready": bool(secret), "secret": "set" if secret else "not-set",
-            "error": err or None, "url": config.webhook_url()}
+            "error": err or None, "url": config.webhook_url(), "session": sessionwake.status_dict()}
 
 
 def describe() -> Dict[str, Any]:
@@ -161,7 +162,17 @@ class Context:
             out["note"] = self.why
         return out
 
-    def require_wake(self) -> None:
+    def require_wake(self, platform: Optional[str] = None) -> None:
+        if platform == "local":
+            # A Desktop chat is woken inside its session by the board server in the gateway, with no route or secret.
+            # A server that reports no `session` predates Desktop wakes: not ready.
+            session = self.wake.get("session")
+            session = session if isinstance(session, dict) else {}
+            if not session.get("ready"):
+                why = session.get("error") or "the board server predates Desktop wakes; upgrade it, restart the gateway"
+                raise OwnerError(f"cannot wake this Desktop chat: {why}. Or, for a board nobody has to be woken by, "
+                                 "pass wake=false / --no-wake.", 409)
+            return
         if not self.wake.get("ready"):
             raise OwnerError(
                 "no wake route: Send would store feedback but never wake Hermes. "

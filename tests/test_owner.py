@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from conftest import FEEDBACK, ROOT, SECRET, Receiver, http, load_plugin, python_child_env
-from mockreview import api, cli, config, notify, owner, service, settings, store
+from mockreview import api, cli, config, notify, owner, service, sessionwake, settings, store
 from mockreview.store import ReviewError
 import test_store
 
@@ -481,7 +481,9 @@ def test_owner_endpoint_is_loopback_only_and_has_no_secrets(server, env):
     code, _, body = http("GET", f"{server}/api/owner")
     info = json.loads(body)
     assert code == 200 and info["service"] == "mock-review" and info["wake"] == {
-        "route": "mock-review", "ready": True, "secret": "set", "error": None, "url": env["receiver"].url}
+        "route": "mock-review", "ready": True, "secret": "set", "error": None, "url": env["receiver"].url,
+        # a standalone server cannot wake a Desktop chat, and says why
+        "session": {"ready": False, "error": sessionwake.NOT_IN_GATEWAY}}
     assert SECRET not in body.decode()
     for h in ("X-Forwarded-For", "Tailscale-User-Login", "X-Forwarded-Host"):    # what tailscale serve adds
         code, _, _ = http("GET", f"{server}/api/owner", headers={h: "100.64.0.9"})

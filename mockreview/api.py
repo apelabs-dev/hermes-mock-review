@@ -17,7 +17,8 @@ import time
 import urllib.request
 from typing import Any, Dict, List, Optional
 
-from . import brand, bundle, config, export, feedback, owner, service, settings, store, targets, users, wakeguard
+from . import (brand, bundle, config, export, feedback, owner, platforms, service, settings, store, targets, users,
+               wakeguard)
 from .store import ReviewError
 
 log = logging.getLogger("mockreview.api")
@@ -101,13 +102,15 @@ def _brand_args(design: Optional[str], project: Any, no_design: Any, off_brand: 
     return brand.clean_project(project), bool(no_design), reason
 
 
-def check_wake_toolsets(mode: str, wake: bool) -> None:
+def check_wake_toolsets(mode: str, wake: bool, origin: Optional[Dict[str, Any]] = None) -> None:
     """Refuse a board that wakes Hermes while wake_toolsets grants the woken session tools and the way to its Send button
     is not gated: any board while the server listens beyond loopback. Every board of a platform wakes the same route, so
-    its toolsets apply to that text too. See wakeguard."""
-    reason = wakeguard.exposure(mode, wake)
+    its toolsets apply to that text too. A board that wakes a Desktop chat (`origin`) is held to the same gate always:
+    that chat's own session, with all its tools, is the one woken. See wakeguard."""
+    session = platforms.is_session(origin)
+    reason = wakeguard.exposure(mode, wake, session)
     if reason:
-        raise ReviewError(wakeguard.message(reason), 409)
+        raise ReviewError(wakeguard.message(reason, session), 409)
 
 
 def _owned(fn):
@@ -156,12 +159,15 @@ def create(title: str, origin: Optional[Dict[str, str]] = None, brief: str = "",
         stored["pin_fix"] = want_wake
     check_wake_toolsets(mode, want_wake)
     origin = store.normalize_origin(origin, wake=want_wake)
+    if want_wake:
+        platforms.require_wakeable(origin)     # a chat no route and no session can reach is refused here, not at Send
+        check_wake_toolsets(mode, want_wake, origin)
     spec = _spec(decisions, prototype, design, allow_live_demo)
     ctx = owner.resolve()
     if want_wake:
-        ctx.require_wake()
+        ctx.require_wake(origin.get("platform"))
     with owner.bound(ctx):
-        check_wake_toolsets(mode, want_wake)   # again once bound: the descriptor is the server's, not this store's
+        check_wake_toolsets(mode, want_wake, origin)   # again once bound: the descriptor is the server's
         spec, extra = _brand_round(spec, project, no_design, reason)
         data = store.create_review(title, brief, origin, mode, spec, look=stored, wake=want_wake)
         if not owner.confirm_visible(data["id"], ctx):
@@ -301,9 +307,9 @@ def add_round(review_id: str, decisions: Optional[str] = None, prototype: Option
     ctx = owner.resolve_soft()
     with owner.bound(ctx):
         existing = store.load(review_id)
-        check_wake_toolsets(existing["mode"], existing.get("wake", True) is not False)
+        check_wake_toolsets(existing["mode"], existing.get("wake", True) is not False, existing.get("origin"))
         if settings.get("wake_required") and existing.get("wake", True) is not False:
-            ctx.require_wake()
+            ctx.require_wake((existing.get("origin") or {}).get("platform"))
         new_look = None
         if any(v is not None for v in look.values()):
             base = existing.get("settings")

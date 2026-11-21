@@ -113,7 +113,8 @@ def test_tool_errors_are_json_never_raised(env, plugin, tmp_path, variants):
     out = json.loads(t["mock_review_create"]({"title": "x", "wake": False, "prototype": page,
                                               "allow_live_demo": True}))
     assert out.get("round") == 1, out
-    assert "explicit origin_platform and origin_chat_id" in json.loads(t["mock_review_create"]({"title": "x"}))["error"]
+    err = json.loads(t["mock_review_create"]({"title": "x"}))["error"]   # no calling chat and no origin_*: refused
+    assert "calling chat could not be read" in err and "never guess" in err
     assert "error" in json.loads(t["mock_review_feedback"]({"review_id": "nope-000000"}))
     assert "devices" in json.loads(t["mock_review_create"]({"title": "x", "wake": False,
                                                             "decisions": str(_decisions(tmp_path)),

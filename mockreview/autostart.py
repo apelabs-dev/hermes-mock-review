@@ -22,7 +22,7 @@ import logging
 import threading
 from typing import Any, Optional
 
-from . import config, owner, secrets, server, settings
+from . import config, owner, secrets, server, sessionwake, settings
 
 log = logging.getLogger("mockreview.autostart")
 
@@ -161,14 +161,19 @@ def stop_running(timeout: float = 5.0) -> None:
     if board is not None:
         board.stop(timeout)
         owner.mark_owner_process(False)
+        sessionwake.detach()
         log.info("mock-review board server stopped")
 
 
-def gateway_factory(native: Any = None, adapter: Any = None) -> str:
+def gateway_factory(native: Any = None, adapter: Any = None, ctx: Any = None) -> str:
     """ctx.register_platform_handler("webhook", ...) target: (native, adapter) are ignored, the adapter is never
-    touched. Runs at webhook connect time in the gateway; never raises into it."""
+    touched. Runs at webhook connect time in the gateway; never raises into it. `ctx` is the plugin context: while
+    this process's own board serves, it is how the board wakes a Desktop chat (sessionwake.py)."""
     try:
-        return ensure_started("gateway webhook connect")
+        status = ensure_started("gateway webhook connect")
+        if ctx is not None and running() is not None:
+            sessionwake.attach(ctx)
+        return status
     except Exception:   # pragma: no cover - ensure_started already catches everything
         log.exception("mock-review autostart failed")
         return ERROR
