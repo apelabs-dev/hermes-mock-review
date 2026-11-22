@@ -553,6 +553,41 @@ def test_the_owners_mention_in_the_same_tick_is_still_sent(env, server, tmp_path
     assert statuses == {"guest": "failed", "user": "notified"}
 
 
+# ---------------------------------------------------------------- 8. a stored record is never delivered
+
+
+def test_a_funnel_amendment_stored_after_a_failed_send_is_never_delivered(env, review, funnel, monkeypatch):
+    rid, token = review["id"], review["token"]
+    attempts = []
+
+    def failing(payload, delivery_id, url=None):
+        attempts.append(delivery_id)
+        return False, "HTTP 502"
+
+    monkeypatch.setattr(service.notify, "send", failing)
+    first = service.submit(rid, 1, FEEDBACK, token)
+    assert first["status"] == "pending_notify", first
+    sub = store.load(rid)["rounds"][0]["submission"]
+    assert (sub["seq"], sub["status"]) == (1, "pending_notify"), sub
+
+    amended = service.submit(rid, 1, FEEDBACK, token, amend=True, no_wake_reason=wakeguard.FUNNEL_NO_WAKE)
+    assert amended["status"] == "stored" and amended["amended"] is True, amended
+    sub = store.load(rid)["rounds"][0]["submission"]
+    assert (sub["seq"], sub["status"]) == (2, "stored"), sub
+
+    def delivered(payload, delivery_id, url=None):
+        attempts.append(delivery_id)
+        return True, "ok"
+
+    monkeypatch.setattr(service.notify, "send", delivered)
+    wake, _ack = service.deliver_submission(rid, 1)
+    assert wake == (False, wakeguard.FUNNEL_NO_WAKE), wake
+    assert service.retry_pending() == 0
+    assert attempts == [f"mockreview-{rid}-r1-s1"], attempts
+    sub = store.load(rid)["rounds"][0]["submission"]
+    assert (sub["seq"], sub["status"]) == (2, "stored"), sub
+
+
 def test_a_mention_queued_by_an_older_version_counts_as_the_owners_only_for_an_account_author(env, server, tmp_path,
                                                                                                monkeypatch):
     rid = mention_board(tmp_path)["id"]

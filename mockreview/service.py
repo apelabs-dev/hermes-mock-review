@@ -1130,6 +1130,8 @@ def notify_round(review_id: str, round_n: int, url: Optional[str] = None) -> "tu
             return False, GUEST_NEVER_DELIVERED
         if sub.get("status") == "notified":
             return True, "already notified"
+        if sub.get("status") != "pending_notify":   # stored by the request gate (or wake off): never woken
+            return False, sub.get("stored_detail") or "nothing pending to send"
         held = wakeguard.review_exposure(data)
         if held:   # create/add-round refuse this; the setting or host may have changed since
             sub.update(last_error=f"held, not woken: {held}", next_attempt=time.time() + config.retry_seconds())
