@@ -10,7 +10,7 @@ import sqlite3
 import time
 from typing import Any, Dict, Optional
 
-from . import (config, feedback, notify, owner, platforms, sessionwake, settings, store, targets, threads,
+from . import (config, feedback, notify, owner, platforms, sessionwake, settings, store, targets, threads, users,
                wakeguard)
 from .store import ReviewError
 
@@ -20,6 +20,10 @@ log = logging.getLogger("mockreview.service")
 # more (api/submit is the owner's alone, wakeguard.request_gate); `submit(guest=True)` keeps the guard.
 GUEST_NO_WAKE = "a share-link guest never wakes Hermes: what you sent is saved for the owner"
 GUEST_NEVER_DELIVERED = "a share-link guest's feedback is never delivered to Hermes"
+# A record queued before the `by_owner` marker existed has no proof it came from the owner. Only its author's current
+# admin role can prove that now; anything else is saved for the owner to send again.
+LEGACY_QUEUED_NO_WAKE = ("queued before this update by a reviewer who is not an admin: not sent; the owner can send "
+                         "it again")
 
 
 class AlreadySubmitted(ReviewError):
@@ -156,6 +160,7 @@ def submit(review_id: str, round_n: Any, raw: Any, token: Any, amend: bool = Fal
             "seq": seq,
             "author": author,
             "guest": is_guest,
+            "by_owner": not no_wake,
             "source": source,
             "record_id": record_id,
             "submitted_at": store.now_iso(),
@@ -343,6 +348,7 @@ def request_pin_fix(review_id: str, round_n: Any, pin: Any, token: Any, idem: An
                "target": targets.clean_target(pin.get("target")),
                "rev": int((current.get("blocks_rev") or {}).get(ref, 0) or 0),
                "status": "queued", "idem": idem_key, "idem_owner": requester,
+               "by_owner": not (data.get("wake") is False or bool(no_wake_reason)),
                "requested_at": store.now_iso(), "wake_seq": 0, "done_at": None, "detail": ""}
         if pin_id:
             req["pin_id"] = pin_id
@@ -409,11 +415,31 @@ def flush_pin_fixes(review_id: str, now: Optional[float] = None) -> "tuple[bool,
         if data.get("wake") is False:
             return False, "this board has wake off"
         requests = r.get("pin_requests") or {}
+        held_legacy = False
+        for q in requests.values():
+            if (q.get("status") == "queued" and _counts_toward_wake_budget(q) and "by_owner" not in q
+                    and not _admin_author(q.get("idem_owner"))):
+                q.update(quiet=True, detail=LEGACY_QUEUED_NO_WAKE)
+                held_legacy = True
+        state = r.get("pin_fix") or {}
+        wake = state.get("wake") or {}
+        if wake.get("status") == "pending_notify":
+            ids = list(wake.get("requests") or [])
+            allowed = [i for i in ids if _pin_wake_allowed(requests.get(i))]
+            if allowed != ids:
+                wake["requests"] = allowed
+                if not allowed:
+                    wake.update(status="failed", sending_until=0.0, last_error=LEGACY_QUEUED_NO_WAKE,
+                                next_attempt=0.0)
+                state["wake"] = wake
+                r["pin_fix"] = state
+                held_legacy = True
+        if held_legacy:
+            log.warning("mock-review: legacy pin fix queue for %s held: %s", review_id, LEGACY_QUEUED_NO_WAKE)
+            store.save(review_id, data, pin_round=r["n"])
         queued = sorted((q for q in requests.values()
                          if q.get("status") == "queued" and _counts_toward_wake_budget(q)),
                         key=lambda q: q.get("requested_at") or "")
-        state = r.get("pin_fix") or {}
-        wake = state.get("wake") or {}
         in_flight = float(wake.get("sending_until") or 0) > now
         min_seconds = float(_review_setting(data, "pin_fix_min_seconds"))
         window = float(_review_setting(data, "pin_fix_window_seconds"))
@@ -561,6 +587,31 @@ def _mention_wakes(data: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(wakes, dict):
         wakes = data["thread_wakes"] = {}
     return wakes
+
+
+def _admin_author(author: Any) -> bool:
+    """True when a legacy record's author is an account (`user:<id>`) whose current instance role is admin.
+
+    A legacy record has no `by_owner` marker, so only a current admin can prove it came from the owner; anything
+    else, including a guest or an unreadable account, fails closed.
+    """
+    if not isinstance(author, str) or not author.startswith("user:") or not author[5:].isdigit():
+        return False
+    try:
+        user = users.get_user(int(author[5:]))
+    except (OSError, sqlite3.Error, ValueError):
+        return False
+    return bool(user) and user.get("role") == "admin"
+
+
+def _pin_wake_allowed(request: Dict[str, Any]) -> bool:
+    """Whether a pin fix may ride a wake: a new-style request carries `by_owner`; a legacy one is allowed only when
+    its requester is still an admin account."""
+    if not request:
+        return False
+    if "by_owner" in request:
+        return request.get("by_owner") is True
+    return _admin_author(request.get("idem_owner"))
 
 
 def _counts_toward_wake_budget(request: Dict[str, Any]) -> bool:
@@ -1132,6 +1183,15 @@ def notify_round(review_id: str, round_n: int, url: Optional[str] = None) -> "tu
             return True, "already notified"
         if sub.get("status") != "pending_notify":   # stored by the request gate (or wake off): never woken
             return False, sub.get("stored_detail") or "nothing pending to send"
+        if "by_owner" not in sub and not _admin_author(sub.get("author")):
+            sub.update(status="stored", stored_detail=LEGACY_QUEUED_NO_WAKE, next_attempt=0)
+            notice = sub.get("notice")
+            if isinstance(notice, dict):
+                notice.update(status="stored", next_attempt=0)
+            store.save(review_id, data)
+            log.warning("mock-review: legacy wake for %s round %s not sent: %s", review_id, round_n,
+                        LEGACY_QUEUED_NO_WAKE)
+            return False, LEGACY_QUEUED_NO_WAKE
         held = wakeguard.review_exposure(data)
         if held:   # create/add-round refuse this; the setting or host may have changed since
             sub.update(last_error=f"held, not woken: {held}", next_attempt=time.time() + config.retry_seconds())

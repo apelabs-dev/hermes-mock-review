@@ -588,6 +588,81 @@ def test_a_funnel_amendment_stored_after_a_failed_send_is_never_delivered(env, r
     assert (sub["seq"], sub["status"]) == (2, "stored"), sub
 
 
+def _legacy_send(rid, token, author, monkeypatch):
+    monkeypatch.setattr(service.notify, "send", lambda *a, **k: (False, "HTTP 502"))
+    res = service.submit(rid, 1, FEEDBACK, token)
+    assert res["status"] == "pending_notify", res
+    with store.locked(rid):
+        data = store.load(rid)
+        sub = data["rounds"][0]["submission"]
+        sub.pop("by_owner", None)
+        sub.update(author=author, status="pending_notify", next_attempt=0)
+        store.save(rid, data)
+
+
+def test_a_legacy_pending_send_by_a_member_is_stored_not_delivered(env, review, monkeypatch):
+    member = account(instance="member", name="Member")
+    rid, token = review["id"], review["token"]
+    _legacy_send(rid, token, f"user:{member['user_id']}", monkeypatch)
+
+    sent = []
+    monkeypatch.setattr(service.notify, "send",
+                        lambda payload, delivery_id, url=None: (sent.append(delivery_id) or (True, "ok")))
+    wake, _ack = service.deliver_submission(rid, 1)
+    assert sent == []
+    assert wake == (False, service.LEGACY_QUEUED_NO_WAKE), wake
+    sub = store.load(rid)["rounds"][0]["submission"]
+    assert sub["status"] == "stored" and sub["stored_detail"] == service.LEGACY_QUEUED_NO_WAKE, sub
+
+
+def test_a_legacy_pending_send_by_the_admin_is_delivered(env, review, monkeypatch):
+    owner = users.owner_user()
+    rid, token = review["id"], review["token"]
+    _legacy_send(rid, token, f"user:{owner['id']}", monkeypatch)
+
+    sent = []
+    monkeypatch.setattr(service.notify, "send",
+                        lambda payload, delivery_id, url=None: (sent.append(delivery_id) or (True, "ok")))
+    wake, _ack = service.deliver_submission(rid, 1)
+    assert wake == (True, "ok"), wake
+    assert sent == [f"mockreview-{rid}-r1-s1"]
+
+
+def _legacy_pin_fix(rid, author):
+    data = store.load(rid)
+    res = service.request_pin_fix(rid, 1, {"block": "m1", "text": "make it bigger"}, data["token"],
+                                  requester=author, do_notify=False)
+    pid = res["request"]["id"]
+    with store.locked(rid):
+        data = store.load(rid)
+        data["rounds"][-1]["pin_requests"][pid].pop("by_owner", None)
+        store.save(rid, data)
+    return pid
+
+
+def test_a_legacy_queued_pin_fix_by_a_member_is_not_sent(env, tmp_path):
+    data = pin_board(tmp_path)
+    member = account(instance="member", name="Member")
+    pid = _legacy_pin_fix(data["id"], f"user:{member['user_id']}")
+
+    ok, _detail = service.flush_pin_fixes(data["id"])
+    assert ok is False
+    assert env["receiver"].wakes == []
+    q = pin_requests(data["id"])[pid]
+    assert q["quiet"] is True and q["detail"] == service.LEGACY_QUEUED_NO_WAKE, q
+
+
+def test_a_legacy_queued_pin_fix_by_the_admin_is_sent(env, tmp_path):
+    data = pin_board(tmp_path)
+    owner = users.owner_user()
+    pid = _legacy_pin_fix(data["id"], f"user:{owner['id']}")
+
+    ok, _detail = service.flush_pin_fixes(data["id"])
+    assert ok is True
+    assert len(env["receiver"].wakes) == 1
+    assert json.loads(env["receiver"].wakes[0]["body"])["requests"] == [pid]
+
+
 def test_a_mention_queued_by_an_older_version_counts_as_the_owners_only_for_an_account_author(env, server, tmp_path,
                                                                                                monkeypatch):
     rid = mention_board(tmp_path)["id"]
