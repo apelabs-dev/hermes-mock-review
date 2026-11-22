@@ -866,7 +866,7 @@ def _capped_wake(review_id: str, data: Dict[str, Any], wakes: Dict[str, Any], co
 def _mention_by_owner(review_id: str, rec: Dict[str, Any]) -> bool:
     """Whether the owner queued this mention wake. A record queued before `by_owner` existed was written for an
     account (the owner or a member, never a guest): it counts as the owner's only when its comment's author is still
-    a `user:` row; anything else, or a comment that cannot be read, fails closed."""
+    an admin account; anything else, or a comment that cannot be read, fails closed."""
     if "by_owner" in rec:
         return rec.get("by_owner") is True
     author = rec.get("author")
@@ -875,7 +875,7 @@ def _mention_by_owner(review_id: str, rec: Dict[str, Any]) -> bool:
             author = str(threads._comment_row(review_id, str(rec.get("comment_id") or ""))["author"])
         except (ReviewError, OSError, sqlite3.Error, KeyError, TypeError):
             return False
-    return author.startswith("user:")
+    return _admin_author(author)
 
 
 def wake_thread_mention(review_id: str, thread: Dict[str, Any], comment_id: str,
@@ -959,7 +959,8 @@ def _deliver_thread_wakes(review_id: str, comment_ids: "list[str]",
     A permanent failure, a held board or a closed review fails the covered records and their requests; a transient
     failure leaves them pending for the retry. A record the owner did not queue is failed with TOOLS_NO_WAKE, and not
     sent, when the board now wakes a Desktop chat or wake_toolsets is set (the request gate's reviewer rule, checked
-    again because the settings may have changed since the mention was queued).
+    again because the settings may have changed since the mention was queued). A legacy record whose author is not an
+    admin account is failed with LEGACY_QUEUED_NO_WAKE and not sent.
     """
     if owner.is_bound():
         return False, "not the owner service: only the board server delivers wake-ups"
@@ -988,12 +989,25 @@ def _deliver_thread_wakes(review_id: str, comment_ids: "list[str]",
         if any(float(w.get("sending_until") or 0) > checked_at for w in picked):
             return False, "a send for this mention wake is already in flight"
         pin_changed = False
+        newest = data["rounds"][-1]
+        round_n = newest["n"]
+        legacy_refused = [w for w in picked if "by_owner" not in w and not _mention_by_owner(review_id, w)]
+        for w in legacy_refused:
+            w.update(status="failed", sending_until=0.0, last_error=LEGACY_QUEUED_NO_WAKE, next_attempt=0.0)
+            pin_changed = _set_mention_request(data, w.get("request_id"), "failed",
+                                               LEGACY_QUEUED_NO_WAKE) or pin_changed
+        if legacy_refused:
+            log.warning("mock-review: legacy mention wake for %s comments %s not sent: %s", review_id,
+                        ", ".join(str(w.get("comment_id")) for w in legacy_refused), LEGACY_QUEUED_NO_WAKE)
+        picked = [w for w in picked if w not in legacy_refused]
+        if not picked:
+            _bounded_thread_wakes(data)
+            store.save(review_id, data, pin_round=round_n if pin_changed else None)
+            return False, LEGACY_QUEUED_NO_WAKE
         for w in picked:
             if not w.get("request_id"):
                 w["request_id"] = _mention_request(data, review_id, w)
                 pin_changed = pin_changed or bool(w["request_id"])
-        newest = data["rounds"][-1]
-        round_n = newest["n"]
         reviewer_held = wakeguard.reviewer_mention_reason(data.get("origin"))
         if reviewer_held:
             refused = [w for w in picked if not _mention_by_owner(review_id, w)]

@@ -663,6 +663,43 @@ def test_a_legacy_queued_pin_fix_by_the_admin_is_sent(env, tmp_path):
     assert json.loads(env["receiver"].wakes[0]["body"])["requests"] == [pid]
 
 
+def _legacy_mention(server, rid, headers, idem):
+    code, res = mention(server, rid, headers, idem=idem)
+    assert code == 201 and res["wake"]["status"] == "pending_notify", res
+    comment_id = res["thread"]["comments"][0]["id"]
+    with store.locked(rid):
+        data = store.load(rid)
+        rec = data["thread_wakes"][comment_id]
+        rec.pop("by_owner"), rec.pop("author")
+        store.save(rid, data)
+    return comment_id
+
+
+def test_a_legacy_mention_by_a_member_is_not_the_owners_and_never_wakes(env, server, tmp_path):
+    rid = mention_board(tmp_path)["id"]
+    member = account(review_id=rid, role="reviewer")
+    comment_id = _legacy_mention(server, rid, signed_in(member), "legacy-member")
+
+    rec = wake_records(rid)[comment_id]
+    tick()
+    assert env["receiver"].wakes == []
+    assert service._mention_by_owner(rid, rec) is False
+    rec = wake_records(rid)[comment_id]
+    assert rec["status"] == "failed" and rec["last_error"] == service.LEGACY_QUEUED_NO_WAKE, rec
+    req = pin_requests(rid)[rec["request_id"]]
+    assert req["status"] == "failed" and req["detail"] == service.LEGACY_QUEUED_NO_WAKE, req
+
+
+def test_a_legacy_mention_by_the_admin_is_delivered(env, server, tmp_path):
+    rid = mention_board(tmp_path)["id"]
+    comment_id = _legacy_mention(server, rid, None, "legacy-owner")
+
+    assert service._mention_by_owner(rid, wake_records(rid)[comment_id]) is True
+    tick()
+    assert len(env["receiver"].wakes) == 1
+    assert json.loads(env["receiver"].wakes[0]["body"])["comment_id"] == comment_id
+
+
 def test_a_mention_queued_by_an_older_version_counts_as_the_owners_only_for_an_account_author(env, server, tmp_path,
                                                                                                monkeypatch):
     rid = mention_board(tmp_path)["id"]
