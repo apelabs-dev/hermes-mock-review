@@ -3,6 +3,14 @@
 All notable changes to this project are listed here. The format follows Keep a Changelog, and the project follows
 semantic versioning.
 
+## [2.3.0](https://github.com/apelabs-dev/hermes-mock-review/compare/v2.2.0...v2.3.0) (2026-11-22)
+
+
+### Features
+
+* **board:** keep resolved pins on the board and show Hermes work as a pulsing red dot ([#63](https://github.com/apelabs-dev/hermes-mock-review/issues/63)) ([03fd338](https://github.com/apelabs-dev/hermes-mock-review/commit/03fd33817dbfe0fef856bcb5309234217c870a07))
+* wake the origin chat on every Hermes messaging platform, Desktop included ([#66](https://github.com/apelabs-dev/hermes-mock-review/issues/66)) ([069060d](https://github.com/apelabs-dev/hermes-mock-review/commit/069060d43126db9992a50d341d44fc743680dfea))
+
 ## [2.2.0](https://github.com/apelabs-dev/hermes-mock-review/compare/v2.1.4...v2.2.0) (2026-11-21)
 
 
