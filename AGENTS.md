@@ -45,8 +45,11 @@ boards for UI mockups and wakes the agent when the reviewer presses Send. User d
     frames, heartbeats) that the live-update layer drives. `live.py`: that layer, the SSE subscription registry,
     presence and typing leases and the event publisher.
   - `notify.py`: the signed wake-up POST. `secrets.py`: the only way to read a secret. `config.py`, `locks.py`: paths,
-    URLs and a cross-platform file lock. `wakeguard.py`: when a board may wake a session that `wake_toolsets`
-    gave tools: only while it is gated (loopback bind, no `public_url`, not `public`).
+    URLs and a cross-platform file lock. `wakeguard.py`: when a board may wake Hermes, in two gates. The board
+    gate (`exposure`): a board that wakes a session `wake_toolsets` gave tools, or a Desktop chat, only while it is
+    gated (loopback bind, no `public_url`, not `public`; a Funnel mapping is fine). The request gate
+    (`request_gate`, with `auth.private_ingress`): the owner wakes only from private ingress, Send/Build are the
+    owner's, a non-owner's pin fix is saved, and a reviewer's mention wakes only a messaging chat with no tools.
   - `db.py`: the SQLite store (`access.sqlite3`): one connection per thread, WAL, `user_version` migrations.
     `users.py`: accounts, invite/login/share links, sessions, grants, tokens, audit. `access.py`: the one access check
     (`resolve`). `auth.py`: who is asking (session, proxy identity, loopback owner), CSRF and throttling. `pages.py`: the

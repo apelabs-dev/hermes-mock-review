@@ -94,12 +94,14 @@ The accounts, sessions, grants and audit rows live in `access.sqlite3` under the
   exist. The same is true of a `members` link opened by nobody or by a guest: only signed-in people who can already read
   the review are let through.
 - A viewer guest may read the board and nothing else. `POST` to `api/submit`, `api/pin-fix`, `api/share`, `api/people`
-  and `api/guest-name` is refused with 403 before any work is done. A reviewer-role guest may Send and request a pin
-  fix: both are stored for the owner, and neither ever wakes Hermes — a guest link never pings it, so tell it in chat.
-  No guest of any link role ever sets `activated`: a viewer cannot reach the wake path at all, and a guest whose link
-  role carries `submit` still only stores a plain `@Hermes` mention. Only the owner and signed-in members whose role
-  carries `submit` can activate Hermes, and never on a board created with wake-up off; an activating mention wakes
-  Hermes once through the Send wake route, while a guest, a token and a wake-off board never wake anyone.
+  and `api/guest-name` is refused with 403 before any work is done. Send, Amend and Build (`api/submit`) are the
+  owner's alone: anyone else, a reviewer-role guest or a member with the Reviewer role included, gets 403 ("only the
+  owner sends feedback to Hermes; your comments and pins stay on the board for them"), and the board shows them no
+  Send or Build button. A reviewer's pin fix is stored quietly for the owner and never wakes Hermes. A reviewer's
+  `@Hermes` mention, from a guest or a member, may wake Hermes under the request gate (see
+  [Who may wake Hermes](#who-may-wake-hermes)); a commenter's or viewer's mention is a plain comment, and a token and a
+  board created with wake-up off never wake anyone. An activating mention wakes Hermes once through the Send wake
+  route.
 - A viewer's `state.json` carries no submit token, no feedback pins or notes, and only the round the link's version
   picker names (or every round while it says `latest`). The board shows one banner line naming the round.
 - Seats are capped per review: 25 live seats, one of them the owner's. A full link refuses new guests with a 409 page
@@ -246,8 +248,10 @@ with it off.
   40-comments-per-thread caps and the 20-writes-per-minute bucket live in `mockreview/threads.py`, which the board, the
   REST API and the agent tools all call. Comment text is untrusted plain text: the board renders it with `textContent`
   and linkifies bare `http(s)` URLs as DOM nodes, never as HTML, and mentions travel as structured ids rather than as
-  parsed text. Only an owner's or reviewer's `@Hermes` sets a thread's `activated` flag and wakes Hermes once per
-  comment; a guest, a token and a wake-off board never wake anyone, and mention wakes share the pin-fix caps.
+  parsed text. Only an owner's or a reviewer's `@Hermes` (a reviewer-role guest's included) can set a thread's
+  `activated` flag and wake Hermes, once per comment and only when the request gate allows it
+  ([Who may wake Hermes](#who-may-wake-hermes)); a commenter, a viewer, a token and a wake-off board never wake
+  anyone, and mention wakes share the pin-fix caps.
 - The live stream. `GET /r/<id>/events` is access-checked like every other read (a JSON 401 for nobody signed in, the
   same 404 as a missing review for no access) and holds one of 25 seats per review: 24 for anyone, one kept for the
   owner. A stream carries only the events of the review its reader may read; `Last-Event-ID` replays from the retained
@@ -278,17 +282,21 @@ The risk: with tools granted, the woken session acts on text a reviewer typed on
 skill tell the model that quoted feedback is design input, not instructions, but a model can still be persuaded. Grant
 only the toolsets the build needs, and only for boards whose reviewers you trust.
 
-A waking board is allowed only while the way to its Send button is gated (`mockreview/wakeguard.py`): the board server
-must listen on loopback, no `public_url` may be configured, and the board must not be `public`. With `host` beyond
-loopback (`0.0.0.0`, `--hosting lan`) anyone on the network reaches the sign-in page, and any reviewer-role account
-there can press Send; a public board exposes the same button to anyone holding the link. While `public_url` is
-configured, a TLS proxy (Caddy, nginx, Cloudflare Tunnel, oauth2-proxy) serves the same loopback port on the internet,
-so it makes every board exposed too, whatever its mode. A Tailscale Funnel mapping (`hermes mockreview public on`)
-sets no `public_url`, so the guard reads the mapping itself (`tailscale funnel status`) and counts it as a public URL.
+A waking board with tools is allowed only while the board itself is gated (the board gate, `wakeguard.exposure` in
+`mockreview/wakeguard.py`): the board server must listen on loopback, no `public_url` may be configured, and the board
+must not be `public`. With `host` beyond loopback (`0.0.0.0`, `--hosting lan`) anyone on the network reaches the
+sign-in page; a public board is open to anyone holding the link. While `public_url` is configured, a TLS proxy (Caddy,
+nginx, Cloudflare Tunnel, oauth2-proxy) serves the same loopback port on the internet and leaves no marker this server
+can trust on each request, so it makes every board exposed too, whatever its mode. A Tailscale Funnel mapping
+(`hermes mockreview public on`) does not refuse a board: Tailscale marks every Funnel request with
+`Tailscale-Funnel-Request` and strips a client's copy, so the request gate ([Who may wake Hermes](#who-may-wake-hermes))
+tells each Funnel request apart from this computer and the tailnet, and a request through Funnel never wakes a board
+with tools or a Desktop chat.
 
-A board made in a Hermes Desktop chat wakes that chat inside its own session, so a reviewer's Send or `@Hermes` starts
-a turn with every tool that session has, whatever `wake_toolsets` says. Such a board is therefore always held to this
-gate: refused at create while Send is not gated, and held at Send when it stops being gated later. Hermes also requires
+A board made in a Hermes Desktop chat wakes that chat inside its own session, so the owner's Send or `@Hermes` starts a
+turn with every tool that session has, whatever `wake_toolsets` says. Such a board is therefore always held to the
+board gate (refused at create while the board is not gated, and held at Send when it stops being gated later), and
+only the owner wakes it, from this computer or the tailnet: a reviewer's mention there is saved. Hermes also requires
 the consent `plugins.entries.mock-review.allow_gateway_injection: true` before the plugin may queue that turn, and setup
 sets it only on an explicit yes at a terminal: `--yes` prints the command instead, so an agent cannot grant it to itself.
 
@@ -306,6 +314,41 @@ A board with `wake` off is always allowed: it wakes nobody.
 
 The guard reads the setting, not the route file: keep `wake_toolsets` matching what you added by hand. After you empty
 it, re-run setup so the route loses its tools too.
+
+## Who may wake Hermes
+
+The board gate above decides whether a board may wake Hermes at all. The request gate (`wakeguard.request_gate`) runs
+on every Send, Amend, Build, pin fix and `@Hermes` mention on the board server, and decides from who is asking (the
+review role) and how the request arrived:
+
+| who | Send, Amend, Build (`api/submit`) | pin fix (`api/pin-fix`) | `@Hermes` mention |
+|---|---|---|---|
+| owner, from private ingress | wakes | wakes | wakes |
+| owner, from anywhere else | saved, not woken | saved quietly, not woken | saved, not woken |
+| reviewer who is not the owner (guest or member) | 403 | saved quietly, never woken | wakes only on a board that wakes a messaging chat while `wake_toolsets` is empty, from any ingress (Funnel included); else saved |
+| commenter, viewer | 403 | 403 | a commenter's is saved, never woken; a viewer cannot comment |
+| an agent's token | — | — | never activates |
+
+The owner is an admin account or this computer's loopback owner. Private ingress means a request with no Funnel marker
+that comes from this computer (loopback, no proxy headers, not a public Host), from a tailnet address, or through
+Tailscale Serve (a trusted proxy whose `X-Forwarded-For` is one tailnet address). A missing Funnel marker alone is never
+enough: a request from a public or LAN address, or through a proxy whose `X-Forwarded-For` is public or a chain, is not
+private. Funnel and tailnet Serve share the node's `*.ts.net` name, so the Funnel host name does not count against a
+request here; the marker does. When the owner's request is saved, the board shows why ("sent from the public link:
+saved, and Hermes wasn't woken. Open the board on the tailnet to send it to Hermes", or the same with "sent from outside
+this computer and the tailnet" for a request that came another way), and the owner sends it from the tailnet with
+Amend. On a board with `public_url` or LAN hosting and wake-up on, an owner who comes through a proxy that is not
+Tailscale Serve is therefore saved, not woken.
+
+A reviewer's mention that the gate saves says why ("saved; Hermes wasn't woken because this board's chat has tools a
+guest may not trigger"). The server checks the same rule again when it delivers a queued mention wake, because the
+settings can change in between: a reviewer's wake whose board now wakes a Desktop chat, or whose route now has
+`wake_toolsets`, fails with that reason and nothing is sent. Reviewer mentions share the pin-fix caps
+(`pin_fix_max_per_hour`, `pin_fix_max_per_round`), and a board created with wake-up off never wakes anyone.
+
+In the board, only the owner sees Send and Build; anyone else sees "Only the owner sends this round to Hermes. Your
+comments and pins are on the board for them." Choosing Reviewer for someone in the Share dialog (the link's guests, a
+person, or a new invite) asks first, because a reviewer can wake Hermes with a mention.
 
 ## MCP server (stdio)
 

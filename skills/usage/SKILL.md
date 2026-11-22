@@ -44,8 +44,10 @@ When a wake says `review.thread_mention`, a reviewer mentioned `@Hermes` in a co
 then answer in the same thread with `mock_review_reply`, passing the wake payload's `request_id` so the block's
 live activity clears. The board shows the work on the pin, block, open thread, Comments list and header. Answer
 questions in the thread and resolve it with `mock_review_resolve` when you are done. Start a new round only if the
-comment asks for one. Mentions wake you from an owner or reviewer on a wake-on board. Guest mentions, agent mentions
-and wake-off boards store the comment without sending a wake, so answer those in chat instead.
+comment asks for one. Mentions wake you on a wake-on board from the owner (on their own computer or the tailnet) or
+from a reviewer, a member or a reviewer-role guest, when the board wakes a messaging chat with no extra
+`wake_toolsets`. Commenter mentions, agent mentions, the owner's mention from a public link and wake-off boards store
+the comment without sending a wake, so answer those in chat instead.
 
 The next round asks only what is still open: blocks marked Change (set `revised` on them to a short string label such
 as `Revised`, not a flag), skipped or unanswered ones, and anything new. Approved blocks and answered questions go in
@@ -152,6 +154,13 @@ board). From the shell the same settings are `hermes mockreview share`:
   the URL and signs every guest out, `stop` ends sharing.
 - A viewer link is read-only and cannot send feedback or wake you. If the user asks for a link to collect feedback, use
   the default commenter role; if they only want someone to look, use viewer and say which round it shows.
+- Only the owner sends feedback: Send and Build answer 403 to everyone else, and their board shows a line saying so.
+  A reviewer (link role or grant) can comment, ask for a pin fix (saved for the owner) and wake you with an
+  `@Hermes` mention on a board that wakes a messaging chat with no extra `wake_toolsets`; the Share dialog asks the
+  owner to confirm before it gives Reviewer.
+- The owner wakes you only from their own computer or the tailnet. Their Send, pin fix or mention through the public
+  Funnel link (or another proxy) is saved and the board says why; tell them to open the board on the tailnet and
+  press Amend to send it.
 
 ## First-run sign-in
 
