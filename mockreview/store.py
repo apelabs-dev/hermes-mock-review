@@ -48,7 +48,7 @@ def size_label(n: int) -> str:
 PROBE_MARKER = "mockreview-probe"
 _LIB_EXPORTS = "export {\n  finder,\n  position,\n  quote\n};"
 _ANCHORS_IMPORT = "import {finder, quote, position} from './lib/anchors.js';"
-_PROBE_IMPORT = "import {LIVE, anchorFor, cleanTarget, surface, installAPI} from './anchors.js';"
+_PROBE_IMPORT = "import {LIVE, CONTROL, controlOf, presses, anchorFor, cleanTarget, surface, installAPI} from './anchors.js';"
 
 
 @functools.lru_cache(maxsize=1)

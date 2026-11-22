@@ -1,4 +1,4 @@
-import {anchorFor, cleanTarget, describeTarget, rangeFor, resolve, stamp, surface, installAPI} from './anchors.js';
+import {LIVE, CONTROL, controlOf, presses, anchorFor, cleanTarget, describeTarget, rangeFor, resolve, stamp, surface, installAPI} from './anchors.js';
 import {createThreads} from './threads.js';
 import {paintAvatar} from './avatar.js';
 /* mock-review board — vanilla JS, no build step, no network beyond this site.
@@ -26,7 +26,8 @@ import {paintAvatar} from './avatar.js';
     phone: { w: 390, h: 844, label: 'Phone', short: 'Phone · 390' }
   };
   var LIMIT = { pin: 600, comment: 2000, note: 3000, guidelines: 5000, choice: 2000, pins: 40, custom: 280 };
-  // Controls keep working in Comment mode: a click whose path touches one of these never starts a board pin.
+  // The board's own controls keep working in Comment mode: a click whose path touches one of these never starts a board
+  // (canvas) pin. Mocks are listed because their clicks belong to mockClick, which pins a mock's controls too.
   var PIN_SKIP = 'button,textarea,input,select,option,label,a,summary,video,audio,[contenteditable],[data-mr-no-pin],.mpin,.mock,.mock-host,.pin-layer,.ipins,.popover';
 
   var app = document.getElementById('app');
@@ -728,11 +729,14 @@ import {paintAvatar} from './avatar.js';
   }
 
   // The pinned hint under the toolbar or the decision header; syncComment() rewrites it in place.
+  function hintText(on) {
+    return on
+      ? 'Click anything to pin a note, mock buttons and links too. Pick, Approve, Change, Skip and notes still work. Leave comment mode (Esc or the Comment button) to use a mock’s controls.'
+      : 'Press Comment (C) to pin a note on anything.';
+  }
   function commentHint(cls) {
     var on = !!S.commentMode;
-    var long = on
-      ? 'Click anything on the board to pin a note — text, cards, a question, the header; controls stay live. Esc or the Comment button leaves comment mode.'
-      : 'Press Comment (C) to pin a note on anything.';
+    var long = hintText(on);
     return h('p', { class: cls, 'data-comment-hint': '' }, icon(on ? 'hand' : 'pin'),
       h('span', { class: 'hint-long', text: long }), h('span', { class: 'hint-short', text: long }));
   }
@@ -1222,9 +1226,7 @@ import {paintAvatar} from './avatar.js';
   }
   function syncComment() {
     var on = !!S.commentMode;
-    var long = on
-      ? 'Click anything on the board to pin a note — text, cards, a question, the header; controls stay live. Esc or the Comment button leaves comment mode.'
-      : 'Press Comment (C) to pin a note on anything.';
+    var long = hintText(on);
     Array.prototype.forEach.call(document.querySelectorAll('[data-comment-toggle]'), function (b) {
       b.setAttribute('aria-pressed', on ? 'true' : 'false');
       b.setAttribute('title', on ? 'Exit comment mode (C)' : 'Comment (C)');
@@ -1424,11 +1426,15 @@ import {paintAvatar} from './avatar.js';
       return /^(\(\s*(min|max)-width\s*:\s*[\d.]+px\s*\)\s*(and\s*)?)+$/i.test(c) ? '@container mock ' + c + ' {' : m;
     });
   }
-  // Keep real hit testing and native selection in both tools. Only noninteractive taps become comments.
+  // Keep real hit testing and native selection in both tools. In comment mode a tap on anything but a LIVE element pins.
   var MOCK_BASE = ':host{display:block}.cq{container:mock/inline-size;pointer-events:auto}' +
     '.cq,.cq *{-webkit-user-select:auto;user-select:auto}' +
     '.cq a[href]{pointer-events:auto;cursor:pointer}' +
     ':host(.use) .cq{pointer-events:auto}';
+  // Comment mode (a host without .use): the pin cursor over the whole mock, buttons and links included, since a click on
+  // any of them pins; LIVE elements keep their own cursor.
+  var MOCK_PIN_CURSOR = ':host(:not(.use)) .cq,:host(:not(.use)) .cq *{cursor:crosshair!important}' +
+    ':host(:not(.use)) .cq :is(' + LIVE + '),:host(:not(.use)) .cq :is(' + LIVE + ') *{cursor:auto!important}';
   function loadAssets(r) {
     if (ASSETS[r.n]) return ASSETS[r.n];
     var base = roundBase(r), d = r.design, out = { dec: null, css: '' }, jobs = [];
@@ -1441,7 +1447,7 @@ import {paintAvatar} from './avatar.js';
     if (r.kind === 'decisions') jobs.push(get(base + 'decisions.json', 'json').then(function (j) { out.dec = j; }));
     if (d && d.mock_css) jobs.push(get(base + 'design/' + d.mock_css, 'text').then(function (t) { out.css = t; }));
     ASSETS[r.n] = Promise.all(jobs).then(function () {
-      out.css = MOCK_BASE + toContainer(out.css + '\n' + ((out.dec && out.dec.extra_css) || ''));
+      out.css = MOCK_BASE + MOCK_PIN_CURSOR + toContainer(out.css + '\n' + ((out.dec && out.dec.extra_css) || ''));
       try { out.sheet = new CSSStyleSheet(); out.sheet.replaceSync(out.css); } catch (e) { out.sheet = null; }
       return out;
     });
@@ -2370,6 +2376,15 @@ import {paintAvatar} from './avatar.js';
       draw: function () { drawPins(m); }, changed: saveDraft });
     // A mock form must never navigate the board, CSP or not.
     sr.addEventListener('submit', function (e) { e.preventDefault(); }, true);
+    // Comment mode: a press inside a native control must not focus it, open a select or drag a range (mockClick pins it
+    // and cancels its click), and Enter or Space must not activate it. Only there: a press on ordinary content keeps
+    // its text selection, and with it quote pins. Nothing stops propagating, so the board's own listeners still run.
+    sr.addEventListener('mousedown', function (e) {
+      if (canComment() && S.commentMode && !mockLive(e) && closestOf(e.composedPath()[0], CONTROL)) e.preventDefault();
+    }, true);
+    function mockKey(e) { if (canComment() && S.commentMode && !mockLive(e) && presses(e.key, e.composedPath()[0])) e.preventDefault(); }
+    sr.addEventListener('keydown', mockKey, true);
+    sr.addEventListener('keyup', mockKey, true);
     inner.addEventListener('click', function (e) { mockClick(m, e); });
     if (window.ResizeObserver) { m.ro = new ResizeObserver(function () { fit(m); }); m.ro.observe(outer); m.ro.observe(inner); }
     requestAnimationFrame(function () { fit(m); drawPins(m); });
@@ -2972,10 +2987,18 @@ import {paintAvatar} from './avatar.js';
     (pin || m.outer).scrollIntoView({ behavior: 'smooth', block: 'center' });
     if (pin) setTimeout(function () { pin.classList.add('flash'); setTimeout(function () { pin.classList.remove('flash'); }, 900); }, 350);
   }
-  function mockClick(m, e) {
-    // Events crossing the shadow root retarget to the host; inspect the actual path.
+  // LIVE (anchors.js) keeps its clicks in comment mode: a mock's own [data-mr-live] controls and the pin markers.
+  // Events crossing the shadow root retarget to the host, so this reads the composed path.
+  function mockLive(e) {
     var path = e.composedPath ? e.composedPath() : [e.target];
-    if (path.some(function (el) { return el instanceof Element && Element.prototype.closest.call(el, 'video,audio,a,button,input,select,textarea,summary,[contenteditable],[data-mr-live],.mpin'); })) return;
+    return path.some(function (el) { return el instanceof Element && Element.prototype.closest.call(el, LIVE); });
+  }
+  function mockClick(m, e) {
+    // Comment mode pins a click on anything in a mock, buttons, links, summaries and fields included, and cancels what the
+    // click would have done (follow the link, toggle the summary, flip the checkbox, press the label). With comment mode
+    // off every click is the mock's own.
+    if (!canComment() || !S.commentMode || mockLive(e)) return;
+    e.preventDefault();
     tapMock(m, e);
   }
   function tapMock(m, e) {
@@ -2986,7 +3009,11 @@ import {paintAvatar} from './avatar.js';
     var selection = m.root.getRootNode().getSelection ? m.root.getRootNode().getSelection() : window.getSelection();
     var range = selection && !selection.isCollapsed && selection.rangeCount ? selection.getRangeAt(0).cloneRange() : null;
     if (range && !m.root.contains(range.commonAncestorContainer)) range = null;
-    var target = e.mrTarget || anchorFor((e.composedPath ? e.composedPath()[0] : e.target), m.root, e.clientX, e.clientY, range);
+    // A click inside a native control pins the control. Its press was cancelled, so a selection still showing is an older
+    // one, not this click's.
+    var hit = e.composedPath ? e.composedPath()[0] : e.target;
+    if (closestOf(hit, CONTROL)) range = null;
+    var target = e.mrTarget || anchorFor(controlOf(hit, m.root), m.root, e.clientX, e.clientY, range);
     var ghost = h('div', { class: 'mpin ghost', style: { left: (x * 100) + '%', top: (y * 100) + '%' } }, h('span', { text: String(S.draft.pins.length + 1) }));
     m.ghost = ghost;
     m.pins.appendChild(ghost);

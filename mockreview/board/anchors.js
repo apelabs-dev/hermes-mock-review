@@ -33,7 +33,13 @@ const parentOf = el => parentGet.call(el);
 const queryIn = (el, sel) => querySelector.call(el, sel);
 const previousOf = el => previousGet.call(el);
 
-export const LIVE = 'video,audio,a,button,input,select,textarea,summary,[contenteditable],[data-mr-live]';
+// Comment mode turns a click on anything in a mock or a framed page into a pin, buttons and links included. LIVE is the
+// only exception: what a page marks `[data-mr-live]` (and everything inside it) and the pin markers keep their clicks
+// and never pin. The board's own decide row is outside every mock and has its own gate (PIN_SKIP in board.js).
+export const LIVE = '[data-mr-live],.mpin';
+// Native controls: elements with an activation of their own (focus, a toggle, navigation, a dropdown, a checkbox flip, a
+// range drag). Comment mode cancels it, and a click anywhere inside one pins the control itself.
+export const CONTROL = 'a,button,input,select,option,textarea,summary,label,video,audio,[contenteditable]';
 const OMIT = 'script,style,link,meta,head,mr-overlay,[data-mr-overlay],[data-mr-highlight]';
 const text = (s, n) => typeof s === 'string' ? s.replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, n) : '';
 const finite = (v, max = 1) => typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(0, v)) : 0;
@@ -66,6 +72,24 @@ export function cleanTarget(v) {
 function hash(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619); return (h >>> 0).toString(36); }
 function signature(el) { return {tag: tagOf(el), h: hash(tagOf(el) + ':' + text(textOf(el), 500))}; }
 function eligible(el, scope) { return !!el && nodeTypeOf(el) === 1 && el !== scope && !is(el, OMIT) && !up(el, 'mr-overlay,[data-mr-overlay]'); }
+function isElement(el) { try { return !!el && nodeTypeOf(el) === 1; } catch (_) { return false; } }   // a Window throws
+// The element a comment-mode click on `el` pins: the native control around it inside `scope`, else `el` itself. The
+// hover outline uses the same answer, so it always shows what a click would pin.
+export function controlOf(el, scope) {
+  const c = isElement(el) ? up(el, CONTROL) : null;
+  return c && c !== scope && containsNode(scope, c) ? c : el;
+}
+// Enter and Space activate a focused native control: follow a link, press a button, toggle a summary or a checkbox, open
+// a select (Enter in a single-line field submits its form). Comment mode cancels them. Typing stays typing: Enter in a
+// textarea or an editable region, Space in any text field.
+const PRESS_INPUT = 'input[type=button],input[type=submit],input[type=reset],input[type=image],input[type=checkbox],' +
+  'input[type=radio],input[type=file],input[type=color]';
+export function presses(key, el) {
+  if (key !== 'Enter' && key !== ' ' && key !== 'Spacebar') return false;
+  const c = isElement(el) ? up(el, CONTROL) : null;
+  if (!c || is(c, 'textarea,[contenteditable]')) return false;
+  return key === 'Enter' || !is(c, 'input') || is(c, PRESS_INPUT);
+}
 function all(scope) { return Array.from(scope.querySelectorAll('*')).filter(el => eligible(el, scope)); }
 const identities = new WeakMap();
 export function stamp(scope) {
@@ -272,8 +296,11 @@ export function surface(scope, overlay, options) {
     hoverFrame = requestAnimationFrame(() => {
       hoverFrame = 0;
       if (!options.enabled()) return clearHover();
-      const el = scope.getRootNode().elementFromPoint?.(hoverPoint.clientX, hoverPoint.clientY) || hoverPoint.target;
-      if (!eligible(el, scope) || !containsNode(scope, el)) return clearHover();
+      const hit = scope.getRootNode().elementFromPoint?.(hoverPoint.clientX, hoverPoint.clientY) || hoverPoint.target;
+      // Outline what a click would pin: nothing over a LIVE element (it keeps its click), the control around the point
+      // inside a native control.
+      if (!eligible(hit, scope) || !containsNode(scope, hit) || up(hit, LIVE)) return clearHover();
+      const el = controlOf(hit, scope);
       const r = rectOf(el);
       const desc = describeTarget(el, scope);
       tag.textContent = desc ? desc.label : '';

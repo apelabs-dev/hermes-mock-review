@@ -229,8 +229,17 @@ feed has its own cursor, moved by `activity/read`. More shows the open-thread an
   coordinates. A mock pin stays with the width it was made at. A round
   stored without a section index (or whose block count changed after it was created) gets its block refs derived at
   render time: the block id, else `s<N>` in file order, with the reserved `page`, `else` and `doc` refs excluded, so
-  nothing about the stored round changes. Controls stay live in comment mode: approve/change/skip, links, fields,
-  native media and the pin markers themselves are never turned into a new pin.
+  nothing about the stored round changes.
+- In comment mode a click on anything in a mock or a framed page becomes a pin, its buttons, links, summaries, fields,
+  labels and native media included. The pin is anchored to the control itself (a click on a button's label text pins
+  the button), and the click does nothing else: no page handler, no navigation, no toggle, no focus, no checkbox flip.
+  Enter or Space on a focused control does nothing either, and makes no pin. Three things keep their clicks and never
+  pin: the board's own decision controls (Pick, Approve, Change, Skip and the note field), anything a page marks
+  `[data-mr-live]`, and the pin markers. To use a mock's controls, leave comment mode (Esc, `C` or the Comment button).
+- `data-mr-live` is the page's way to keep a control working in comment mode, in an inline mock or a framed page. Put it
+  on the control or on an element around it: a click on that element or anything inside it is the page's own, the
+  hover does not outline it, and the cursor stays the page's. A radio wrapped in a `<label>` needs the attribute on the
+  label (or an element around both), since the label is what takes the click.
 - A pin opens its thread in a popover next to it. The header row is the first commenter's avatar, name and time on the
   left, and three ghost icon buttons on the right, on desktop and in the phone sheet alike: Resolve (a pressed, green
   check means the thread is resolved; the same slot becomes Reopen), More (Edit, Copy link and Delete for the root
