@@ -1282,8 +1282,10 @@ class Handler(BaseHTTPRequestHandler):
             return None
         if can_activate:
             # One wake per activating comment: the comment id is the idempotency key, so an idem replay is a
-            # duplicate and a plain reply on an already-activated thread wakes nobody.
-            return service.wake_thread_mention(rid, thread, comment["id"], by_owner=decision.role == "owner")
+            # duplicate and a plain reply on an already-activated thread wakes nobody. The owner off private ingress
+            # is recorded as a non-owner wake, so delivery re-checks the reviewer rule like any reviewer's.
+            return service.wake_thread_mention(rid, thread, comment["id"],
+                                               by_owner=decision.role == "owner" and auth.private_ingress(self._req()))
         if reason:
             return {"status": "stored", "notified": False, "detail": reason}
         return None

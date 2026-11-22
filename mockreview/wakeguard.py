@@ -17,13 +17,15 @@ the request gate below tells it apart from the tailnet and this computer.
 The request gate (`request_gate`) runs on every Send, pin fix and @Hermes mention, after the board gate allowed the
 board. It reads who is asking (the review role) and how the request arrived (`auth.private_ingress`):
 - the owner wakes Hermes only from private ingress (this computer or the tailnet). From the Funnel URL or any other
-  public path the owner's Send, pin fix or mention is saved and Hermes is not woken; Amend from the tailnet sends it.
+  public path the owner's Send or pin fix is saved and Hermes is not woken; Amend from the tailnet sends it. The
+  owner's mention instead follows the reviewer rule below.
 - Send, amend and Build are the owner's alone: the server answers 403 to anyone else.
 - a pin fix from anyone but the owner is saved quietly and never wakes.
-- a reviewer who is not the owner (a guest link's reviewer role or a member's reviewer grant) wakes Hermes with an
-  @Hermes mention only when the board wakes a messaging chat through its webhook route and wake_toolsets is empty,
-  from any ingress. A Desktop chat or a route with tools keeps that mention saved. `_deliver_thread_wakes` checks the
-  same rule again when it sends, because the settings can change after the mention was queued.
+- a reviewer who is not the owner (a guest link's reviewer role or a member's reviewer grant), or the owner off
+  private ingress, wakes Hermes with an @Hermes mention only when the board wakes a messaging chat through its webhook
+  route and wake_toolsets is empty, from any ingress. A Desktop chat or a route with tools keeps that mention saved.
+  `_deliver_thread_wakes` checks the same rule again when it sends, because the settings can change after the mention
+  was queued.
 - a commenter or viewer never wakes Hermes.
 """
 
@@ -159,15 +161,18 @@ def request_gate(kind: str, role: Optional[str], private: bool, origin: Any, fun
     admin or the loopback owner, a member's grant, a guest link's guest_role); `private` is auth.private_ingress;
     `funnel` (auth.via_funnel) only picks the wording of the owner's message; `origin` is the review's stored origin.
     For SUBMIT anything but "" is a refusal (the route answers 403 with SUBMIT_OWNER_ONLY); for the other two it is
-    the `detail` of a saved request. Unknown kinds and roles never wake."""
+    the `detail` of a saved request. An owner's mention off private ingress follows the reviewer rule. Unknown kinds
+    and roles never wake."""
+    if kind == MENTION:
+        if role == "owner" and private:
+            return ""
+        if role in ("owner", "reviewer"):
+            return reviewer_mention_reason(origin)
+        return MENTION_ROLE_NO_WAKE
     if role == "owner":
         if private:
             return ""
         return FUNNEL_NO_WAKE if funnel else OUTSIDE_NO_WAKE
     if kind == PIN_FIX:
         return PIN_FIX_OWNER_ONLY
-    if kind == MENTION:
-        if role != "reviewer":
-            return MENTION_ROLE_NO_WAKE
-        return reviewer_mention_reason(origin)
     return SUBMIT_OWNER_ONLY

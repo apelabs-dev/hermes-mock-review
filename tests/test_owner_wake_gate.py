@@ -201,21 +201,48 @@ def test_the_owners_mention_wakes_from_loopback_and_tailnet_serve(env, funnel_se
     assert len(env["receiver"].wakes) == 1
 
 
-def test_the_owners_mention_through_funnel_is_stored_and_a_tailnet_one_wakes(env, funnel_server, tmp_path, owner):
+@pytest.mark.parametrize("extra, by_owner", [
+    ({**FUNNEL, "Host": FUNNEL_HOST}, False),                           # the public link: the reviewer rule
+    (SERVE, True),                                                      # tailnet Serve is private ingress
+])
+def test_the_owners_mention_wakes_from_the_funnel_as_a_reviewer_and_from_serve_as_the_owner(
+        env, funnel_server, tmp_path, owner, extra, by_owner):
     rid = mention_board(tmp_path)["id"]
-    code, res = mention(funnel_server, rid, as_(owner, FUNNEL), idem="funnel")
+    code, res = mention(funnel_server, rid, as_(owner, extra))
+    assert code == 201 and res["wake"]["status"] == "pending_notify", res
+    assert res["thread"]["activated"] is True
+    assert res["thread"]["comments"][0]["sent_to_hermes"] is True
+    rec = next(iter(wake_records(rid).values()))
+    assert rec["by_owner"] is by_owner and rec["author"].startswith("user:")
+    tick()
+    assert len(env["receiver"].wakes) == 1
+
+
+def test_the_owners_mention_off_private_ingress_on_a_tools_board_is_still_stored(env, funnel_server, tmp_path,
+                                                                                monkeypatch, owner):
+    monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
+    rid = mention_board(tmp_path)["id"]
+    code, res = mention(funnel_server, rid, as_(owner, FUNNEL))
     assert code == 201, res
-    assert res["wake"] == {"status": "stored", "notified": False, "detail": wakeguard.FUNNEL_NO_WAKE}
-    comment = res["thread"]["comments"][0]
-    assert comment["text"] == "@Hermes make this clearer" and comment["sent_to_hermes"] is False
-    assert res["thread"]["activated"] is False
+    assert res["wake"] == {"status": "stored", "notified": False, "detail": wakeguard.TOOLS_NO_WAKE}
+    assert res["thread"]["activated"] is False and res["thread"]["comments"][0]["sent_to_hermes"] is False
     tick()
     assert env["receiver"].wakes == [] and wake_records(rid) == {}
 
-    code, res = mention(funnel_server, rid, as_(owner, SERVE), idem="tailnet", thread_id=res["thread"]["id"])
-    assert code == 200 and res["wake"]["status"] == "pending_notify", res
+
+def test_the_owners_mention_off_private_ingress_on_a_desktop_board_is_still_stored(env, tmp_path, monkeypatch,
+                                                                                   gateway, owner):
+    ctx, base = gateway
+    bind_session(monkeypatch, platform="local", chat_id=LOCAL_CHAT, key=LOCAL_KEY)
+    dec = tmp_path / "mention.json"
+    dec.write_text(json.dumps(MENTION_DECISIONS), encoding="utf-8")
+    rid = create_tool(ctx, title="Desktop owner mention", decisions=str(dec))["review_id"]
+    code, res = mention(base, rid, as_(owner, FUNNEL))
+    assert code == 201, res
+    assert res["wake"] == {"status": "stored", "notified": False, "detail": wakeguard.TOOLS_NO_WAKE}
+    assert res["thread"]["activated"] is False and res["thread"]["comments"][0]["sent_to_hermes"] is False
     tick()
-    assert len(env["receiver"].wakes) == 1
+    assert ctx.injected == [] and env["receiver"].requests == [] and wake_records(rid) == {}
 
 
 @pytest.mark.parametrize("ingress", ["loopback", "serve"])
@@ -319,13 +346,16 @@ TOOLS = "tools"
     ("mention", "owner", True, ORIGIN, False, ""),
     ("mention", "owner", True, {"platform": "local", "chat_id": "x"}, False, ""),
     ("mention", "owner", True, TOOLS, False, ""),
-    # the owner, not private: saved, with the wording of the path it came in by
+    # the owner, not private: Send and pin fix are saved with the wording of the path they came in by; a mention
+    # follows the reviewer rule, so a toolset-free messaging board still wakes
     ("submit", "owner", False, ORIGIN, True, wakeguard.FUNNEL_NO_WAKE),
     ("pin-fix", "owner", False, ORIGIN, True, wakeguard.FUNNEL_NO_WAKE),
-    ("mention", "owner", False, ORIGIN, True, wakeguard.FUNNEL_NO_WAKE),
+    ("mention", "owner", False, ORIGIN, True, ""),
     ("submit", "owner", False, ORIGIN, False, wakeguard.OUTSIDE_NO_WAKE),
     ("pin-fix", "owner", False, ORIGIN, False, wakeguard.OUTSIDE_NO_WAKE),
-    ("mention", "owner", False, ORIGIN, False, wakeguard.OUTSIDE_NO_WAKE),
+    ("mention", "owner", False, ORIGIN, False, ""),
+    ("mention", "owner", False, TOOLS, False, wakeguard.TOOLS_NO_WAKE),
+    ("mention", "owner", False, {"platform": "local", "chat_id": "x"}, False, wakeguard.TOOLS_NO_WAKE),
     # a reviewer who is not the owner
     ("submit", "reviewer", True, ORIGIN, False, wakeguard.SUBMIT_OWNER_ONLY),
     ("pin-fix", "reviewer", True, ORIGIN, False, wakeguard.PIN_FIX_OWNER_ONLY),
@@ -536,6 +566,18 @@ def test_a_reviewers_queued_mention_is_failed_when_wake_toolsets_is_set_before_t
     assert chip["status"] == "failed" and chip["detail"] == wakeguard.TOOLS_NO_WAKE
     tick()
     assert env["receiver"].requests == []
+
+
+def test_the_owners_queued_public_mention_gets_the_same_delivery_re_check(env, funnel_server, tmp_path, owner,
+                                                                         monkeypatch):
+    rid = mention_board(tmp_path)["id"]
+    code, res = mention(funnel_server, rid, as_(owner, FUNNEL))
+    assert code == 201 and res["wake"]["status"] == "pending_notify", res
+    monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
+    tick()
+    assert env["receiver"].requests == []
+    rec = next(iter(wake_records(rid).values()))
+    assert rec["status"] == "failed" and rec["last_error"] == wakeguard.TOOLS_NO_WAKE, rec
 
 
 def test_the_owners_mention_in_the_same_tick_is_still_sent(env, server, tmp_path, monkeypatch):

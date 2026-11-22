@@ -324,7 +324,7 @@ review role) and how the request arrived:
 | who | Send, Amend, Build (`api/submit`) | pin fix (`api/pin-fix`) | `@Hermes` mention |
 |---|---|---|---|
 | owner, from private ingress | wakes | wakes | wakes |
-| owner, from anywhere else | saved, not woken | saved quietly, not woken | saved, not woken |
+| owner, from anywhere else | saved, not woken | saved quietly, not woken | wakes on a board that wakes a messaging chat while `wake_toolsets` is empty (the reviewer rule below); else saved |
 | reviewer who is not the owner (guest or member) | 403 | saved quietly, never woken | wakes only on a board that wakes a messaging chat while `wake_toolsets` is empty, from any ingress (Funnel included); else saved |
 | commenter, viewer | 403 | 403 | a commenter's is saved, never woken; a viewer cannot comment |
 | an agent's token | — | — | never activates |
@@ -338,11 +338,12 @@ request here; the marker does. When the owner's request is saved, the board show
 saved, and Hermes wasn't woken. Open the board on the tailnet to send it to Hermes", or the same with "sent from outside
 this computer and the tailnet" for a request that came another way), and the owner sends it from the tailnet with
 Amend. On a board with `public_url` or LAN hosting and wake-up on, an owner who comes through a proxy that is not
-Tailscale Serve is therefore saved, not woken.
+Tailscale Serve is therefore saved, not woken. An owner's `@Hermes` mention is the one exception: off private ingress it
+follows the reviewer rule below.
 
-A reviewer's mention that the gate saves says why ("saved; Hermes wasn't woken because this board's chat has tools a
+A mention that the gate saves says why ("saved; Hermes wasn't woken because this board's chat has tools a
 guest may not trigger"). The server checks the same rule again when it delivers a queued mention wake, because the
-settings can change in between: a reviewer's wake whose board now wakes a Desktop chat, or whose route now has
+settings can change in between: a mention wake whose board now wakes a Desktop chat, or whose route now has
 `wake_toolsets`, fails with that reason and nothing is sent. Reviewer mentions share the pin-fix caps
 (`pin_fix_max_per_hour`, `pin_fix_max_per_round`), and a board created with wake-up off never wakes anyone.
 
