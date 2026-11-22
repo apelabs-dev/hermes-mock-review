@@ -170,13 +170,14 @@ a mention wake that failed this way is not retried.
 
 ### The woken session says the build continues in the thread
 
-Hermes runs the session Send wakes with its safe webhook tools only, so by default it cannot write files or call the
-mock_review tools. It posts one line, "Round N feedback is saved; the build continues in this thread's chat session.", and
-the origin chat's own session builds the round (ask in that chat if it has not started). To let the woken session build
-by itself, set `wake_toolsets` (for example `hermes config set plugins.entries.mock-review.settings.wake_toolsets
-"mock-review,terminal,file"`; include `mock-review` so it can call the mock_review tools) and run `hermes mockreview setup` again. Setup
-prints the `"toolsets": [...]` line and the route to add it to in `webhook_subscriptions.json`; add it by hand (the
-summary shows `wake toolsets manual`). The gateway reads the route file again on its next request. Every setup run
+Hermes runs the session Send wakes as a webhook session with its safe webhook tools and, by default, mock-review's own
+`mock_review_*` tools for every review on this install (plugin toolsets are on by default). It cannot write files or
+run a terminal, so it posts one line, "Round N feedback is saved; the build continues in this thread's chat session.",
+and the origin chat's own session builds the round (ask in that chat if it has not started). To let the woken session
+build by itself, set `wake_toolsets` (for example `hermes config set plugins.entries.mock-review.settings.wake_toolsets
+"mock-review,terminal,file"`; include `mock-review` to keep the mock_review tools) and run `hermes mockreview setup`
+again. Setup prints the `"toolsets": [...]` line and the route to add it to in `webhook_subscriptions.json`; add it by
+hand (the summary shows `wake toolsets manual`). The gateway reads the route file again on its next request. Every setup run
 re-subscribes the routes and drops the key, so add the line again after each run. Setup refuses while a waking board
 would be ungated (`host` beyond loopback): see [security](security.md#tools-for-the-woken-session-wake_toolsets).
 

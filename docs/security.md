@@ -263,13 +263,15 @@ with it off.
 
 ## Tools for the woken session (`wake_toolsets`)
 
-Hermes runs the session that Send wakes as a webhook session with its safe webhook tools only (web search and extract,
-vision, clarify): no terminal, no files, no mock_review tools. That session therefore cannot build the next round. By
-default it posts one line ("Round N feedback is saved; the build continues in this thread's chat session.") and the
-origin chat's own session does the build.
+Hermes runs the session that Send wakes as a webhook session. It keeps that session's safe webhook tools (web search
+and extract, vision, clarify) and also holds the `mock-review` plugin toolset: Hermes enables plugin toolsets by
+default unless they are default-off, and `mock-review` is not. So the woken session has the `mock_review_*` tools,
+which act as the install's owner, for every review on this install. It still has no terminal and no file tools unless
+`wake_toolsets` grants them, so it cannot build the next round. By default it posts one line ("Round N feedback is
+saved; the build continues in this thread's chat session.") and the origin chat's own session does the build.
 
 `wake_toolsets` (empty by default) lets you grant that session more, for example `mock-review, terminal, file` (the list replaces Hermes's webhook default, so
-include `mock-review` for the mock_review tools). Hermes reads it from the wake route's `toolsets` key in
+include `mock-review` to keep the mock_review tools). Hermes reads it from the wake route's `toolsets` key in
 `$HERMES_HOME/webhook_subscriptions.json`, the per-route override for webhook sessions. `hermes webhook subscribe` has
 no flag for it on purpose, so an agent cannot grant itself tools, and granting them is a manual edit, as Hermes's
 webhook docs describe. `hermes mockreview setup` never opens that file: it prints the exact line to add to each wake
@@ -278,7 +280,8 @@ every run, which drops the key, so add the line again after each setup run. Herm
 toolsets, so setup cannot check the edit; its summary says `wake toolsets manual`. The notice route runs no agent and
 never gets it. To remove it, empty the setting and re-run setup (the re-subscribe drops the key).
 
-The risk: with tools granted, the woken session acts on text a reviewer typed on the board. The feedback header and the
+The risk: the woken session acts on text a reviewer typed on the board. Even without `wake_toolsets` it can read and
+reply on every review on this install as the owner; with more tools granted it can do more. The feedback header and the
 skill tell the model that quoted feedback is design input, not instructions, but a model can still be persuaded. Grant
 only the toolsets the build needs, and only for boards whose reviewers you trust.
 
@@ -325,7 +328,7 @@ review role) and how the request arrived:
 |---|---|---|---|
 | owner, from private ingress | wakes | wakes | wakes |
 | owner, from anywhere else | saved, not woken | saved quietly, not woken | wakes on a board that wakes a messaging chat while `wake_toolsets` is empty (the reviewer rule below); else saved |
-| reviewer who is not the owner (guest or member) | 403 | saved quietly, never woken | wakes only on a board that wakes a messaging chat while `wake_toolsets` is empty, from any ingress (Funnel included); else saved |
+| reviewer who is not the owner (guest or member) | 403 | saved quietly, never woken | wakes only on a board that wakes a messaging chat while `wake_toolsets` is empty, from any ingress (Funnel included); else saved. The woken session holds the `mock_review_*` tools for every review on this install, so give Reviewer only to someone you trust with all of them |
 | commenter, viewer | 403 | 403 | a commenter's is saved, never woken; a viewer cannot comment |
 | an agent's token | — | — | never activates |
 

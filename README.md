@@ -81,10 +81,12 @@ itself once the board runs, and setup prints no link until a board answers. The 
 
 ### Let the woken session build (opt-in)
 
-Hermes runs the session Send wakes with its safe webhook tools only, so by default that session replies "Round N
-feedback is saved; the build continues in this thread's chat session." and the chat's own session builds the round. To
-let the woken session build right away, set the toolsets, re-run setup and add the line it prints by hand. Include `mock-review` so it can call the
-mock_review tools; the list replaces Hermes's webhook default rather than adding to it:
+Hermes runs the session Send wakes as a webhook session that keeps its safe webhook tools and also holds mock-review's
+own `mock_review_*` tools for every review on this install (plugin toolsets are on by default). It has no terminal or
+file tools, so by default that session replies "Round N feedback is saved; the build continues in this thread's chat
+session." and the chat's own session builds the round. To let the woken session build right away, set the toolsets,
+re-run setup and add the line it prints by hand. Include `mock-review` to keep the mock_review tools; the list
+replaces Hermes's webhook default rather than adding to it:
 
     hermes config set plugins.entries.mock-review.settings.wake_toolsets "mock-review,terminal,file"
     hermes mockreview setup

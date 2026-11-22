@@ -3870,8 +3870,9 @@ import {paintAvatar} from './avatar.js';
   // A reviewer can wake Hermes with an @Hermes mention (wakeguard.request_gate), so giving someone Reviewer takes one
   // more, explicit step. Every role select in the Share dialog (the link's guests, a person, a new invite) is this one.
   var REVIEWER_CONFIRM_BODY = 'People with the Reviewer role can wake Hermes with an @Hermes mention on boards that ' +
-    'wake a messaging chat. Hermes then runs in that chat with mock-review’s own tools. They can’t press Send ' +
-    'or Build.';
+    'wake a messaging chat. Hermes then runs in that chat with mock-review’s own tools, which reach every review on ' +
+    'this install, so a Reviewer can read and reply on your other reviews: give Reviewer only to people you trust ' +
+    'with all of them. They can’t press Send or Build.';
   function roleSelect(cls, value, onchange, label) {
     var prev = String(value);
     var sel = shareSelect(cls, SHARE_ROLES, value, function (e) {

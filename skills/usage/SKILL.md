@@ -29,8 +29,9 @@ it" message. Go straight to reading the feedback and building the next round.
 
 A wake in a Desktop chat runs in that chat's own session, with your usual tools, so build the round there directly.
 
-The session Send wakes runs with Hermes's safe webhook tools unless the user granted more (`wake_toolsets`). If that
-session has no mock_review tools or cannot write files, reply with exactly the one line the wake prompt gives
+The session Send wakes runs with Hermes's safe webhook tools plus the plugin toolsets that are on by default, so it has
+the mock_review tools for every review on this install unless the route's `toolsets` replaces that set (`wake_toolsets`).
+If that session has no mock_review tools or cannot write files, reply with exactly the one line the wake prompt gives
 ("Round N feedback is saved; the build continues in this thread's chat session.") and stop. Do not say you cannot
 build, and do not list what is missing.
 

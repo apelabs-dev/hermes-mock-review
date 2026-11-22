@@ -361,8 +361,9 @@ def test_direct_override_removal_is_clear_without_hover(env, server, review, chr
 
 REVIEWER_TITLE = "Give Reviewer access?"
 REVIEWER_BODY = ("People with the Reviewer role can wake Hermes with an @Hermes mention on boards that wake a messaging "
-                 "chat. Hermes then runs in that chat with mock-review’s own tools. They can’t press Send or "
-                 "Build.")
+                 "chat. Hermes then runs in that chat with mock-review’s own tools, which reach every review on this "
+                 "install, so a Reviewer can read and reply on your other reviews: give Reviewer only to people you "
+                 "trust with all of them. They can’t press Send or Build.")
 POSTS = ("window.__posts=[];(function(f){window.fetch=function(u,o){if(o&&o.method==='POST')"
          "window.__posts.push({url:String(u),body:JSON.parse(o.body||'null')});return f.apply(this,arguments)}})"
          "(window.fetch);1")
