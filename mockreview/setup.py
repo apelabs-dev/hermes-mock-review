@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
-from . import api, config, owner, settings, store, wakeguard
+from . import api, config, owner, platforms as platform_kinds, settings, store, wakeguard
 from .migrate import OBSOLETE_KEYS
 from .store import ReviewError
 
@@ -55,35 +55,21 @@ PLATFORM_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 MIN_VERSION = (0, 22, 0)
 VERSION_TIMEOUT = 120    # `hermes --version` checks for updates on the first run in a Hermes home
 
-# Hermes platforms that are not a chat you can be woken in: the webhook ingress, the Microsoft Graph change-notification
-# ingress, the OpenAI-compatible API server and the local CLI. Auto-detection skips them; --origin-platform does not.
-NON_CHAT_PLATFORMS = ("webhook", "msgraph_webhook", "api_server", "local")
+# Hermes platforms that get no webhook route: the surfaces that are not a chat anyone reads (platforms.NOT_A_CHAT: the
+# webhook and Microsoft Graph ingress, the API server, the agent-protocol adapters) and `local`, a Desktop chat, which
+# is woken inside its own session instead. Auto-detection skips them; Desktop chats are always set up (see
+# choose_origins), and an explicit --origin-platform that is not a chat stops setup.
+NON_CHAT_PLATFORMS = (*platform_kinds.NOT_A_CHAT, platform_kinds.LOCAL)
+LOCAL = platform_kinds.LOCAL
+
+# Hermes's consent for a plugin to queue a turn into a chat session (read live by Hermes on every injection). Only
+# `hermes config set` can grant it: a plugin's own settings live under .settings, and this key is not one of them.
+INJECTION_KEY = "plugins.entries.mock-review.allow_gateway_injection"
 
 HOSTING_CHOICES = ("local", "tailnet", "lan")
 
-# The one line a woken session without the tools to build posts instead (Hermes runs webhook sessions with its safe
-# webhook tools unless wake_toolsets grants more). The origin chat's own session builds the round.
-HANDOFF_LINE = "Round {round} feedback is saved; the build continues in this thread's chat session."
-
-# The wake prompt Hermes renders for an inbound round or an @Hermes thread mention. `{...}` placeholders are filled
-# by Hermes from the payload; `{summary}` says what a mention wake is about and which thread it names.
-PROMPT_TEMPLATE = (
-    "Mock review wake: {event_type} for {review_id} round {round} — {title}. "
-    "If event_type is review.thread_mention, a reviewer mentioned Hermes in a comment thread: {summary} "
-    "Read it with mock_review_list_comments(review_id='{review_id}'). When the comment asks for a change, patch "
-    "one block in place FIRST with mock_review_patch_block (pass the round and the rev you read, and the wake "
-    "payload's request_id as request_ids=[request_id]); then answer in that thread with "
-    "mock_review_reply(thread_id=..., text=...). A question that needs no patch goes straight to the answer. "
-    "Mark it resolved with mock_review_resolve(thread_id=...) when you are done. "
-    "If event_type is review.submitted, read the feedback with "
-    "mock_review_feedback(review_id='{review_id}', round={round}), then act on the notes, or build if Build was "
-    "pressed. "
-    "A next round asks only what is still open: approved blocks and answered questions go in a `settled` block, "
-    "never back as questions. "
-    "If this session has no mock_review tools or cannot write files, do not explain what is missing: answer "
-    f"with exactly this one line and stop: {HANDOFF_LINE} "
-    "Board: {review_url}"
-)
+# The wake prompt, shared with the Desktop session wake (wakeprompt.py): the agent route renders it from the payload.
+from .wakeprompt import HANDOFF_LINE, PROMPT_TEMPLATE  # noqa: E402,F401  (setup.PROMPT_TEMPLATE is public)
 
 # wake_toolsets lives in the wake route's manual `toolsets` key: `hermes webhook subscribe` deliberately has no flag
 # for it, so an agent cannot grant itself tools. Setup only names the file; the user edits it (Hermes's webhook docs).
@@ -191,9 +177,14 @@ FOREGROUND_CMD = "hermes mockreview serve"
 
 NON_TTY_USAGE = "not a terminal: re-run with --yes (and --hosting / --origin-platform), or see --help"
 
-NO_PLATFORM_MESSAGE = ("no chat platform found in the Hermes config (platforms.*), so setup cannot tell where to wake "
-                       "you. Re-run with the platform you review on: hermes mockreview setup --origin-platform "
-                       "telegram (repeatable)")
+NO_PLATFORM_MESSAGE = ("no messaging platform found in the Hermes config (platforms.*): setting up Hermes Desktop chats "
+                       "only. To be woken in a messaging chat too, configure it in Hermes, or re-run with: hermes "
+                       "mockreview setup --origin-platform telegram --origin-platform local (repeatable)")
+DESKTOP_CONSENT = ("Hermes Desktop chats: a board made in a Desktop chat wakes that chat inside its own session. Hermes "
+                   "lets a plugin queue a turn into a session only with " + INJECTION_KEY + ": true. That turn runs "
+                   "with every tool the chat has and is started by a reviewer's Send or @Hermes. mock-review uses it "
+                   "only for the Desktop chat that created a board, and only while Send is gated (loopback, no public "
+                   "URL, not a public board).")
 
 TEST_TITLE = "mock-review setup test"
 SETUP_BRIEF = "created by `hermes mockreview setup` to verify the create path"
@@ -641,13 +632,17 @@ def _unique(names: List[str]) -> List[str]:
 
 
 def _several_message(names: List[str]) -> str:
-    return (f"several chat platforms are configured ({', '.join(names)}) and setup cannot ask here. Pick where to wake "
-            f"you with --origin-platform, for example: hermes mockreview setup --origin-platform {names[0]} "
-            "(repeatable)")
+    return (f"chat platforms are configured ({', '.join(names)}) but none of them was picked. Pick where to wake you "
+            f"with --origin-platform, for example: hermes mockreview setup --origin-platform {names[0]} (repeatable)")
 
 
 def choose_origins(req: Request, detected: List[str]) -> Optional[List[str]]:
-    """The origin platforms for this run, or None after printing why setup stops. Changes nothing."""
+    """The origin platforms for this run, or None after printing why setup stops. Changes nothing.
+
+    Every messaging platform configured in Hermes, plus `local` (Hermes Desktop chats, which Hermes serves on every
+    install and which need no route, only the consent setup asks for). `--origin-platform` narrows that to the names
+    given; one that is not a chat (platforms.NOT_A_CHAT) stops setup. Several detected platforms are all set up when
+    setup cannot ask (--yes, --dry-run); at a terminal it asks which, and Enter means all."""
     if req.origin_platforms:
         names = _unique(req.origin_platforms)
         bad = [n for n in names if not PLATFORM_RE.fullmatch(n)]
@@ -655,29 +650,77 @@ def choose_origins(req: Request, detected: List[str]) -> Optional[List[str]]:
             print(f"origin platform name not valid: {', '.join(bad)} (lowercase letters, digits, - and _). "
                   "Example: hermes mockreview setup --origin-platform telegram (repeatable)")
             return None
-        return names
+        not_chat = [n for n in names if n in platform_kinds.NOT_A_CHAT]
+        for name in not_chat:
+            print(f"origin platform {name} cannot be woken: {platform_kinds.NOT_A_CHAT[name]}. Pick the messaging "
+                  "platform you review on, or local for Hermes Desktop chats: hermes mockreview setup "
+                  "--origin-platform telegram (repeatable)")
+        return None if not_chat else names
     if not detected:
         print(NO_PLATFORM_MESSAGE)
-        return None
+        return [LOCAL]
     if len(detected) == 1:
-        print(f"origin platform: {detected[0]} (the only chat platform configured; pass --origin-platform to choose "
-              "another)")
-        return list(detected)
-    if req.yes or req.dry_run:
-        print(_several_message(detected))
-        return None
+        print(f"origin platform: {detected[0]} (the only messaging platform configured; pass --origin-platform to "
+              "choose another), and Hermes Desktop chats")
+        return [*detected, LOCAL]
     listed = ", ".join(detected)
+    if req.yes or req.dry_run:
+        print(f"origin platforms: {listed} (every messaging platform configured; pass --origin-platform to narrow), "
+              "and Hermes Desktop chats")
+        return [*detected, LOCAL]
     for _ in range(2):
         answer = _ask_text(f"chat platforms found: {listed}. Which do you review on? (comma-separated, Enter = all) ")
         picked = _unique([p.strip().lower() for p in answer.split(",") if p.strip()])
         if not picked:
-            return list(detected)
+            return [*detected, LOCAL]
         unknown = [p for p in picked if p not in detected]
         if not unknown:
-            return picked
+            return [*picked, LOCAL]
         print(f"not in the list: {', '.join(unknown)} (choose from {listed})")
     print(_several_message(detected))
     return None
+
+
+def injection_allowed(run: Any = None) -> bool:
+    """True when Hermes already lets mock-review queue a turn into a session (`hermes config get --json`)."""
+    run = run or run_hermes
+    proc = run(["config", "get", "--json", INJECTION_KEY])
+    if proc.returncode != 0:
+        return False
+    try:
+        return json.loads(proc.stdout or "") is True
+    except ValueError:
+        return False
+
+
+def desktop_wake(req: Request, secret: str) -> Tuple[str, str, str]:
+    """Grant Hermes's consent for Desktop wakes only on an explicit yes at a terminal (Enter, EOF and a non-terminal mean
+    no; --yes never grants and prints the command instead, like wake_toolsets; --dry-run plans it). Returns the summary
+    row."""
+    if injection_allowed():
+        print(f"desktop chats: {INJECTION_KEY} is already true")
+        return ("desktop wake", "ok", "already allowed")
+    print(DESKTOP_CONSENT)
+    grant_cmd = f"hermes config set {INJECTION_KEY} true"
+    if req.yes and not req.dry_run:
+        # a reviewer-triggered turn with every tool the chat has: never granted unattended, so an agent running setup
+        # cannot grant it to itself (the same rule as wake_toolsets)
+        print(f"desktop chats: --yes never grants this consent; to let Desktop chats be woken, run: {grant_cmd}")
+        return ("desktop wake", "skipped", "needs your yes")
+    grant = req.dry_run or _ask_yes(
+        "let reviewers' Send and @Hermes start turns in the Desktop chat a board was made in, with every tool that "
+        "chat has? [y/N] ", False)
+    if not grant:
+        print(f"desktop chats: not allowed; a board made in a Desktop chat is refused until: {grant_cmd}")
+        return ("desktop wake", "skipped", "declined")
+    _will_change(f"set {INJECTION_KEY} true (Desktop chats can be woken)")
+    if req.dry_run:
+        return ("desktop wake", "planned", "")
+    r = run_hermes(["config", "set", INJECTION_KEY, "true"])
+    print(redact(((r.stdout or "") + (r.stderr or "")).strip(), secret))
+    if r.returncode != 0:
+        return ("desktop wake", "failed", "hermes config set failed")
+    return ("desktop wake", "ok", "allowed")
 
 
 def next_steps(*, board_running: bool, autostart: bool, gateway: str, restart_for: List[str],
@@ -849,8 +892,9 @@ def _run(args: argparse.Namespace) -> int:
                 return "failed"
         return "ok"
 
-    results = {"routes": [], "notice routes": []}
-    for platform in platforms:
+    results: Dict[str, List[str]] = {"routes": [], "notice routes": []}
+    route_platforms = [p for p in platforms if p != LOCAL]   # a Desktop chat has no route (3d)
+    for platform in route_platforms:
         results["routes"].append(subscribe(wake_route_name(req.webhook_route, platform),
                                            wake_route_argv(req.webhook_route, platform),
                                            f"deliver {platform}"))
@@ -858,7 +902,9 @@ def _run(args: argparse.Namespace) -> int:
                                                   notice_route_argv(req.webhook_route, platform),
                                                   f"deliver {platform}, notice"))
     for label, outcomes in results.items():
-        if req.dry_run:
+        if not outcomes:
+            summary.append((label, "skipped", "no messaging platform"))
+        elif req.dry_run:
             summary.append((label, "planned", f"{len(outcomes)} route(s)"))
         elif "failed" in outcomes:
             summary.append((label, "failed", f"{outcomes.count('failed')} of {len(outcomes)} route(s)"))
@@ -890,7 +936,21 @@ def _run(args: argparse.Namespace) -> int:
         else:
             summary.append(("stale routes", "skipped", f"{len(stale)} left"))
 
-    # 3c. a webhook platform on a non-default port: point webhook_url at it unless the owner set webhook_url
+    # 3c. Desktop chats: no route. The board server in the gateway queues the wake into the chat's own session, which
+    # Hermes allows a plugin only with its consent key set; Hermes reads it live, so no restart is needed.
+    if LOCAL in platforms:
+        row = desktop_wake(req, secret)
+        summary.append(row)
+        failed = failed or row[1] == "failed"
+        if not req.autostart:
+            print("warning: a Desktop chat is woken by the board server inside the gateway; with --no-autostart "
+                  f"(or {FOREGROUND_CMD}) a board made in a Desktop chat is refused")
+        if req.hosting == "lan":
+            print("warning: with lan hosting the board listens beyond loopback, so a board made in a Desktop chat is "
+                  "refused: that chat is woken inside its own session, with every tool it has, so its Send must stay "
+                  "gated")
+
+    # 3d. a webhook platform on a non-default port: point webhook_url at it unless the owner set webhook_url
     listen = webhook_listen(platforms_cfg)
     if listen:
         wport, whost = listen
@@ -958,7 +1018,7 @@ def _run(args: argparse.Namespace) -> int:
 
     # 4a. wake_toolsets: a manual step. Setup prints the route's `toolsets` line and never edits the route file.
     toolsets = settings.get("wake_toolsets")
-    wake_names = [wake_route_name(req.webhook_route, p) for p in platforms]
+    wake_names = [wake_route_name(req.webhook_route, p) for p in route_platforms]
     blockers = wake_toolsets_blockers(req.hosting) if toolsets else []
     if blockers:
         print("refusing to set wake_toolsets: " + "; ".join(blockers) + ". Feedback typed on an ungated board would "

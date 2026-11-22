@@ -1124,7 +1124,11 @@ def _round_record(n: int, spec: Dict[str, Any], variants: List[Dict[str, Any]]) 
 
 
 def normalize_origin(origin: Any, wake: bool = True) -> Dict[str, str]:
-    """Validate an explicit delivery origin; never infer a platform from an identifier."""
+    """Validate an explicit delivery origin; never infer a platform from an identifier.
+
+    A Desktop (`local`) origin also carries `session_key`, the route key its own session is woken by (taken from that
+    session's context at create, see platforms.session_origin); no other platform has one. Origins stored before it
+    existed load unchanged."""
     if not origin and not wake:
         return {}
     if not isinstance(origin, dict):
@@ -1143,6 +1147,13 @@ def normalize_origin(origin: Any, wake: bool = True) -> Dict[str, str]:
         if not isinstance(thread, str) or not re.fullmatch(identifier, thread):
             raise ReviewError("origin thread_id must contain 1-256 safe identifier characters")
         out["thread_id"] = thread
+    if "session_key" in origin:
+        key = origin.get("session_key")
+        if platform != "local":
+            raise ReviewError("origin session_key is only for a Desktop (local) origin")
+        if not isinstance(key, str) or not re.fullmatch(identifier, key):
+            raise ReviewError("origin session_key must contain 1-256 safe identifier characters")
+        out["session_key"] = key
     return out
 
 

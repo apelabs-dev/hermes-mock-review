@@ -10,7 +10,8 @@ import sqlite3
 import time
 from typing import Any, Dict, Optional
 
-from . import config, feedback, notify, owner, settings, store, targets, threads, wakeguard
+from . import (config, feedback, notify, owner, platforms, sessionwake, settings, store, targets, threads,
+               wakeguard)
 from .store import ReviewError
 
 log = logging.getLogger("mockreview.service")
@@ -231,7 +232,8 @@ SEND_LEASE_SECONDS = 30.0
 STALLED_SCAN_SECONDS = 30.0   # minimum interval between watchdog directory scans in the worker tick
 PIN_TERMINAL = ("done", "failed", "timeout")
 MENTION_EVENT = "review.thread_mention"
-MENTION_PERMANENT = ("HTTP 400", "HTTP 413", "HTTP 422")
+# The gateway rejected the payload itself, or the origin is a chat nothing can wake: the same wake fails again.
+MENTION_PERMANENT = ("HTTP 400", "HTTP 413", "HTTP 422", notify.CANNOT_WAKE)
 
 
 def _review_setting(data: Dict[str, Any], name: str) -> Any:
@@ -498,7 +500,7 @@ def flush_pin_fixes(review_id: str, now: Optional[float] = None) -> "tuple[bool,
                     changed = True
             wake.update(status="notified", notified_at=store.now_iso(), last_error=None, next_attempt=0.0)
             log.info("pin fix wake delivered for %s round %s (%s)", review_id, r["n"], msg)
-        elif msg.startswith(("HTTP 400", "HTTP 413", "HTTP 422")):
+        elif msg.startswith(MENTION_PERMANENT):
             for i in ids:
                 q = requests.get(i)
                 if q and q.get("status") == "queued":
@@ -1139,6 +1141,19 @@ def notify_round(review_id: str, round_n: int, url: Optional[str] = None) -> "tu
 TERMINAL_NOTICE = ("notified", "dropped", "no_route", "skipped")
 
 
+def _no_notice_route(origin: Any) -> Optional[str]:
+    """Why no notice can reach this origin's chat, or None when its notice route can. A Desktop chat has no route
+    (sessionwake.NO_NOTICE: the wake turn itself is what it shows); a chat nothing can wake has none either."""
+    if not isinstance(origin, dict) or not origin.get("platform"):
+        return None   # a legacy origin: _notice_payload drops it with its own reason
+    kind, why = platforms.classify(origin["platform"])
+    if kind == platforms.SESSION:
+        return sessionwake.NO_NOTICE
+    if kind == platforms.UNSUPPORTED:
+        return platforms.unsupported_message(origin["platform"], why)
+    return None
+
+
 def _notice_payload(data: Dict[str, Any], round_: Dict[str, Any], key: str, text: str) -> Dict[str, Any]:
     """Origin like the wake payload (the route's `--deliver-chat-id '{chat_id}'` renders from it), the event, the
     round and the message. The message carries counts and the title only: it is mirrored into the chat's session."""
@@ -1154,9 +1169,9 @@ def _deliver_notice(review_id: str, round_n: int, key: str, url: Optional[str] =
     after a gateway answer (502, ...) uses a new delivery id, because Hermes keeps the first one as seen even though it
     was not delivered; a retry after no answer keeps the id. Terminal states: notified; dropped (moot: newer round or closed review; or
     permanent: the payload cannot be built, or the gateway rejected it with 400/413/422); no_route (the gateway has no
-    such route, 404: re-run `hermes mockreview setup`); skipped (the stalled ping only: nothing to build, or the
-    session acknowledged the submission). The ack also waits for the wake to be accepted, because
-    "Hermes is working on it" is only true then. After Build the stalled ping waits build_stale_factor times
+    such route, 404: re-run `hermes mockreview setup`); skipped (the stalled ping: nothing to build, or the
+    session acknowledged the submission; either notice: the origin chat has no notice route, a Desktop chat). The
+    ack also waits for the wake to be accepted, because "Hermes is working on it" is only true then. After Build the stalled ping waits build_stale_factor times
     longer."""
     if owner.is_bound():
         return False, "not the owner service: only the board server delivers notices"
@@ -1181,6 +1196,12 @@ def _deliver_notice(review_id: str, round_n: int, key: str, url: Optional[str] =
             sub[key] = state
             store.save(review_id, data)
             return False, "dropped: a newer round exists or the review is closed"
+        no_notice = _no_notice_route(data.get("origin"))
+        if no_notice:
+            state.update(status="skipped", reason=no_notice)
+            sub[key] = state
+            store.save(review_id, data)
+            return False, f"skipped: {no_notice}"
         minutes = settings.get("stale_after_minutes")
         read_minutes = None
         if key == "stalled_notice":

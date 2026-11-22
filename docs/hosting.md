@@ -102,12 +102,14 @@ and the install's signing key; the database stores the row, not the URL.
 ## Waking the agent
 
 Send posts a signed request to the Hermes webhook route `<webhook_route>-<platform>` (for example `mock-review-telegram`)
-at `http://localhost:8644/webhooks/<route>`. `hermes mockreview setup` creates one route for each chat platform you
-choose (`--origin-platform`, repeatable; with one chat platform configured it uses that one) and stores the shared secret
-as `MOCKREVIEW_WEBHOOK_SECRET`. When the Hermes webhook platform listens on another port (`platforms.webhook.extra.port`)
+at `http://localhost:8644/webhooks/<route>`. `hermes mockreview setup` creates one route for every messaging platform in
+the Hermes config (`--origin-platform`, repeatable, narrows it) and stores the shared secret as
+`MOCKREVIEW_WEBHOOK_SECRET`. When the Hermes webhook platform listens on another port (`platforms.webhook.extra.port`)
 and `webhook_url` was never set, setup saves a `webhook_url` that points at that port. A review is tied to the platform and
-chat it was created from, so the wake lands in the right place. To test the path without a browser, use `hermes
-mockreview notify-test <review id> --to <url>` on a review that has an origin, which sends the same payload.
+chat it was created from, so the wake lands in the right place. The create tool reads that chat from the calling
+session's own context; explicit `origin_*` arguments override it, and nothing is ever guessed. To test the path without
+a browser, use `hermes mockreview notify-test <review id> --to <url>` on a review that has an origin, which sends the
+same payload. A Hermes Desktop chat is woken another way; see [Which chats can be woken](#which-chats-can-be-woken).
 
 A woken session only posts its final answer, so without more the chat would look dead while Hermes works. Setup
 therefore creates a second route per platform, `<webhook_route>-<platform>-notice`. It is created with `--deliver-only
@@ -139,3 +141,60 @@ the board server logs one warning, marks that notice `no_route` and never retrie
 
 If you only want a board that is viewed and never wakes anyone, set `wake_required` to false or pass `--no-wake` on
 `create`.
+
+### Which chats can be woken
+
+Every chat Hermes hosts a session on falls in one of three kinds (`mockreview/platforms.py`). Checked against Hermes
+v0.23.2-117-g3b28235b0a.
+
+| Kind | Platforms | Send and `@Hermes` wake | Ack and stalled ping |
+| --- | --- | --- | --- |
+| Messaging chat | `telegram`, `discord`, `slack`, `signal`, `whatsapp`, `matrix`, `mattermost`, `dingtalk`, `feishu`, `wecom`, `wecom_callback`, `weixin`, `bluebubbles`, `qqbot`, `email`, `sms`, and every chat platform a Hermes plugin registers (for example `irc`, `teams`, `google_chat`, `line`) | The signed POST to the route `<webhook_route>-<platform>` | The route `<webhook_route>-<platform>-notice`, in the same chat |
+| Desktop chat | `local`: a Hermes Desktop chat, served by the gateway | Queued into that chat's own session (below) | None: the woken turn itself shows in the chat |
+| Not a chat | `api_server`, `webhook`, `msgraph_webhook`, `a2a`, `raft`, and any name this Hermes does not know | Refused when the board is created | None |
+
+A messaging platform counts when the running Hermes can deliver webhook routes to it
+(`gateway.webhook_targets.is_known_platform`, after plugin discovery, as `hermes webhook subscribe` checks a route), so
+a name no Hermes platform or platform plugin provides is refused at create. A board whose chat stops being reachable
+later, for example because its platform plugin was removed, fails at Send with `cannot wake: ...` in the stored
+submission and the Send answer. It is never dropped silently. Outside Hermes (the MCP server) nothing can be checked, so
+an explicit origin is passed to the receiver at `webhook_url`.
+
+The ones that are not chats: `webhook` and `msgraph_webhook` are Hermes's ingress endpoints. `api_server` is stateless,
+with each request carrying its own history, so there is no live chat to wake; that needs a Hermes core change. `a2a`
+only answers a pending agent-to-agent request, and `raft` sends nothing from its adapter, so a wake's answer would be
+lost. For a board nobody has to be woken by, pass `wake=false` (`--no-wake`).
+
+#### Desktop chats
+
+A Desktop chat has no webhook route Hermes can deliver to. The board server runs inside the gateway (`autostart`, which
+starts at webhook-platform connect), so it queues the same wake prompt into that chat's own session through the plugin
+API `inject_message(prompt, session_key=...)`. A mention wake takes the same path. It needs:
+
+- The board made from that Desktop chat. Its session key is read from the chat's own session context and stored with the
+  review, and only the calling chat has it. An explicit `local` origin for another chat is refused.
+- `plugins.entries.mock-review.allow_gateway_injection: true`. Hermes lets a plugin queue a turn only with this consent.
+  `hermes mockreview setup` asks for it and grants it only on an explicit `y` (Enter means no). `--yes` never grants it
+  and prints the `hermes config set` command instead, the same rule as `wake_toolsets`, so an agent running setup
+  cannot grant itself a turn with every tool. `--dry-run` only prints the command. The setting covers the whole
+  profile; mock-review only uses it for the Desktop chat that created a board.
+- The board server inside the gateway, with `autostart` on and the webhook platform enabled. A board server run with
+  `hermes mockreview serve` has no plugin context, so a Desktop board is refused at create there.
+- The chat served by this profile's gateway. A terminal UI or a standalone `hermes dashboard` runs its sessions in a
+  process of its own, which the board server cannot reach, so a board made there is refused.
+
+When Hermes accepts the wake, the submission shows `queued in the Desktop chat`. That means Hermes scheduled the turn;
+if the chat is busy, the turn runs after the current one. When Hermes refuses it (the chat was closed, or another profile
+serves it), the board retries every `retry_seconds` with the reason in the stored submission. The session key survives
+context compression (Hermes keeps the key and moves the session to the new segment), so a long chat stays wakeable.
+
+There is no ack or stalled ping in a Desktop chat. The wake itself shows as a turn in that chat, and Hermes has no
+plugin API that posts a notice into a named session without starting a turn. Both notices are stored as `skipped`.
+
+**Send stays gated for a Desktop chat, always.** A messaging wake runs with the route's safe webhook tools only (unless
+`wake_toolsets` widens them). A Desktop wake runs inside the chat's own session, with every tool that session has, on
+text a reviewer typed. So a board that wakes a Desktop chat is refused while Send is not gated: the server listens
+beyond loopback, `public_url` is set, Tailscale Funnel maps the board (`mockreview public on`), or the board is
+`public`. This applies whatever `wake_toolsets` says. The check
+runs when the board is created and again at every wake. On a board that became reachable later, Send is held (`held,
+not woken`) and retried until the gate is back, and an `@Hermes` mention wake fails with the same reason.

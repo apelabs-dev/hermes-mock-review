@@ -14,13 +14,23 @@ home, Hermes checks for updates before it prints its version, which can be slow.
 so re-run setup; a later timeout names the command (never its arguments) and setup is safe to repeat. `cannot run hermes`
 means the `hermes` binary was not found: install Hermes or set `MOCKREVIEW_HERMES_BIN`.
 
-Setup says `no chat platform found in the Hermes config` and exits 2. Setup reads `platforms.*` for the chat you review
-on, and skips the platforms that are not chats (`webhook`, `msgraph_webhook`, `api_server`, `local`). Nothing was changed.
-Configure your chat platform in Hermes, or name it: `hermes mockreview setup --origin-platform telegram` (repeatable).
+Setup says `no messaging platform found in the Hermes config` and sets up Hermes Desktop chats only. Setup reads
+`platforms.*` for the chats you review in, and skips the ones that are not messaging chats (`webhook`, `msgraph_webhook`,
+`api_server`, `a2a`, `raft`, and `local`, which is always set up as Desktop chats). To be woken in a messaging chat too,
+configure it in Hermes and run setup again, or name it: `hermes mockreview setup --origin-platform telegram` (repeatable).
 
-Setup says several chat platforms are configured and exits 2. It only asks on a terminal. With `--yes` or `--dry-run`,
-choose with `--origin-platform <name>` (repeatable). On a terminal it lists the platforms and asks once; Enter means all.
-An explicit `--origin-platform` is used as given, even `webhook`.
+Setup sets up every messaging platform it finds, plus Desktop chats. Under `--yes` or `--dry-run` it takes them all and
+says so. On a terminal with several, it lists them and asks once; Enter means all. `--origin-platform <name>`
+(repeatable) narrows the list to exactly what you name; add `--origin-platform local` to keep Desktop chats. Setup stops
+before changing anything when you name a platform that is not a chat (`origin platform webhook cannot be woken: ...`).
+
+Setup asks whether Desktop chats may be woken. Hermes lets a plugin queue a turn into a session only with
+`plugins.entries.mock-review.allow_gateway_injection: true`, so setup asks before it sets that and needs an explicit `y`
+(Enter means no). `--yes` never sets it: the summary shows `desktop wake skipped (needs your yes)` and setup prints the
+command to run. `--dry-run` only prints the command. If you said no, the summary shows `desktop wake skipped (declined)`;
+grant it later with `hermes config set plugins.entries.mock-review.allow_gateway_injection true`. Setup only sets the key
+through `hermes config set`. It never opens a Hermes file. With `--no-autostart` it warns that Desktop chats cannot be
+woken, because only the board server inside the gateway can wake them.
 
 The test review ends as `pending (board not running)`. The review was saved, and no link is printed because no board of
 this Hermes home answered. It loads by itself once the board runs. The `next:` lines at the end of the setup output say
@@ -65,6 +75,34 @@ server for the same Hermes home, or set `owner` to `service` to create in the se
 
 A create call says `Start the board server`. No server is running for a store that needs one. Run
 `hermes mockreview serve`, or turn on `autostart` and restart the gateway, then retry.
+
+`Wake is enabled, but the calling chat could not be read from this session (...)`. The create tool reads the chat to
+wake from the calling session's own context and never guesses one. The reason in brackets says what was missing: no
+chat at all (a CLI or cron caller), or a session in a process of its own (a terminal UI or a standalone `hermes
+dashboard`), which the board server in the gateway cannot reach. Create the board from the chat that should be woken,
+pass `origin_platform` and `origin_chat_id` exactly as your session context gives them, or pass `wake=false` for a demo.
+
+`this chat cannot be woken: origin platform '<name>' is not a chat mock-review can wake (...)`. The origin is a Hermes
+surface that is not a chat (`api_server`, `webhook`, `msgraph_webhook`, `a2a`, `raft`), or a platform this Hermes does
+not deliver webhook routes to (is its platform plugin installed and enabled?). Nothing was written. See
+[which chats can be woken](hosting.md#which-chats-can-be-woken).
+
+`cannot wake this Desktop chat: ...`. A board made in a Hermes Desktop chat is woken by the board server inside the
+gateway. The reason says what is missing:
+
+- `allow_gateway_injection is off`: run `hermes mockreview setup` and accept the Desktop prompt, or run `hermes config
+  set plugins.entries.mock-review.allow_gateway_injection true`. Hermes reads it on the next wake; no restart is needed.
+- `the board server is not running inside the Hermes gateway`: turn on `autostart` with the webhook platform enabled,
+  and restart the gateway. A board server run with `hermes mockreview serve` cannot wake a Desktop chat.
+- `the board server predates Desktop wakes`: the running board server is older than the plugin. Restart the gateway.
+
+`a Desktop (local) origin is woken inside its own session and needs that session's key`. A `local` origin was passed by
+hand (the CLI's `--platform local`, or `origin_platform` for another chat). Only the Desktop chat itself has its key:
+create the board from that chat without `origin_*`.
+
+`refusing a board that wakes a Desktop chat: ...`. A Desktop chat is woken inside its own session with every tool it
+has, so its board must keep Send gated: server on loopback, no `public_url`, not a `public` board. Keep it local, or pass
+`wake=false`. See [hosting](hosting.md#desktop-chats).
 
 `A prototype ("try it live") round is turned off`. Prototype rounds need `offer_live_demo` set to true, or
 `--allow-live-demo` on the call.
@@ -118,6 +156,17 @@ The board says the feedback was sent, but nothing arrives in the chat. Check the
 4. If the secret was rotated, run `hermes mockreview setup` again so the routes use the new one.
 
 Undelivered wake-ups are retried every `retry_seconds` while the board server runs.
+
+A Desktop chat has no route; the stored submission says what happened. `queued in the Desktop chat` means Hermes took
+the turn (it runs after the chat's current turn, if one is running). `Hermes refused the wake: the Desktop chat is not
+live in this profile's gateway` means the chat was closed, or another profile serves it: the wake is retried and goes
+through once the chat is open again. `allow_gateway_injection is off` means the consent was taken back: see "Creating
+reviews" above. A Desktop chat gets no ack or stalled ping (both are stored as `skipped`): the wake shows as a turn in
+the chat itself.
+
+`cannot wake: this chat cannot be woken: ...` in a stored submission means the board's chat stopped being reachable after
+the board was made, for example because its platform plugin was disabled. Nothing is posted. Turn the platform back on;
+a mention wake that failed this way is not retried.
 
 ### The woken session says the build continues in the thread
 

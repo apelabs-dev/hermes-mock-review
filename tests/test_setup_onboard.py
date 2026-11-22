@@ -132,67 +132,157 @@ def summary_row(out, label):
 
 # ================================================================ 1. origin platform
 
+INJECTION = ["config", "set", setup.INJECTION_KEY, "true"]
+
+
 def test_origin_detect_platforms_skips_the_non_chat_ones():
     platforms = {"webhook": {"enabled": True}, "msgraph_webhook": {"enabled": True}, "api_server": {"enabled": True},
+                 "a2a": {"enabled": True}, "raft": {"enabled": True},
                  "local": {"enabled": True}, "telegram": {"enabled": True}, "discord": {"enabled": False},
                  "slack": {"token": "x"}, "Bad Name": {"enabled": True}, "signal": "not a dict"}
     run = lambda argv: SimpleNamespace(returncode=0, stdout=json.dumps(platforms), stderr="")
     names, _ = setup.detect_platforms(run)
     assert names == ["slack", "telegram"]
-    assert setup.NON_CHAT_PLATFORMS == ("webhook", "msgraph_webhook", "api_server", "local")
+    assert setup.NON_CHAT_PLATFORMS == ("webhook", "msgraph_webhook", "api_server", "a2a", "raft", "local")
 
 
 def test_origin_the_only_chat_platform_is_used_and_said(monkeypatch, tmp_path, capsys):
     r = go(monkeypatch, tmp_path, capsys, {"platforms": {"webhook": {"enabled": True}, "telegram": {"enabled": True}}})
     assert r.rc == 0
-    assert ("origin platform: telegram (the only chat platform configured; pass --origin-platform to choose "
-            "another)") in r.out
+    assert ("origin platform: telegram (the only messaging platform configured; pass --origin-platform to choose "
+            "another), and Hermes Desktop chats") in r.out
     assert route_names(r.log) == ["mock-review-telegram", "mock-review-telegram-notice"]
+    assert not find(r.log, *INJECTION) and "desktop wake skipped (needs your yes)" in summary_row(r.out, "desktop wake")
+    assert f"run: hermes config set {setup.INJECTION_KEY} true" in r.out   # --yes never grants it: printed instead
 
 
-def test_origin_explicit_webhook_is_honoured(monkeypatch, tmp_path, capsys):
-    r = go(monkeypatch, tmp_path, capsys, {"platforms": {"webhook": {"enabled": True}}},
-           args=("--yes", "--origin-platform", "webhook"))
-    assert r.rc == 0
-    assert route_names(r.log) == ["mock-review-webhook", "mock-review-webhook-notice"]
-    assert not find(r.log, "webhook", "list")          # webhook is chosen: there is no stale route to look for
+@pytest.mark.parametrize("name", ["webhook", "msgraph_webhook", "api_server", "a2a", "raft"])
+def test_origin_explicit_non_chat_platform_stops_before_any_change(monkeypatch, tmp_path, capsys, name):
+    r = go(monkeypatch, tmp_path, capsys, {"platforms": {"webhook": {"enabled": True}}, "webhook_enabled": False},
+           args=("--yes", "--origin-platform", name))
+    assert r.rc == 2
+    assert f"origin platform {name} cannot be woken: " in r.out and "local for Hermes Desktop chats" in r.out
+    assert mutating(r.log) == [] and route_names(r.log) == []
 
 
 def test_origin_explicit_wins_over_several_detected(monkeypatch, tmp_path, capsys):
     r = go(monkeypatch, tmp_path, capsys, {"platforms": CHAT_PLATFORMS}, args=("--yes", "--origin-platform", "discord"))
     assert r.rc == 0
     assert route_names(r.log) == ["mock-review-discord", "mock-review-discord-notice"]
+    assert not find(r.log, *INJECTION) and not find(r.log, "config", "get", "--json", setup.INJECTION_KEY)
 
 
-@pytest.mark.parametrize("flag", ["--yes", "--dry-run"])
-def test_origin_several_platforms_non_interactive_stops_before_any_change(monkeypatch, tmp_path, capsys, flag):
-    r = go(monkeypatch, tmp_path, capsys, {"platforms": CHAT_PLATFORMS, "webhook_enabled": False}, args=(flag,))
-    assert r.rc == 2
-    assert "discord, telegram" in r.out and "--origin-platform" in r.out
+def test_origin_several_platforms_non_interactive_sets_up_every_one(monkeypatch, tmp_path, capsys):
+    r = go(monkeypatch, tmp_path, capsys, {"platforms": {**CHAT_PLATFORMS, "slack": {"enabled": True}}})
+    assert r.rc == 0
+    assert ("origin platforms: discord, slack, telegram (every messaging platform configured; pass --origin-platform "
+            "to narrow), and Hermes Desktop chats") in r.out
+    assert route_names(r.log) == [
+        "mock-review-discord", "mock-review-discord-notice", "mock-review-slack", "mock-review-slack-notice",
+        "mock-review-telegram", "mock-review-telegram-notice"]
+    assert not find(r.log, *INJECTION)
+
+
+def test_origin_several_platforms_dry_run_plans_every_one_and_changes_nothing(monkeypatch, tmp_path, capsys):
+    r = go(monkeypatch, tmp_path, capsys, {"platforms": CHAT_PLATFORMS, "webhook_enabled": False}, args=("--dry-run",))
+    assert r.rc == 0
+    for name in ("mock-review-discord", "mock-review-discord-notice", "mock-review-telegram",
+                 "mock-review-telegram-notice"):
+        assert f"will change: subscribe webhook route {name} " in r.out
+    assert f"will change: set {setup.INJECTION_KEY} true" in r.out
     assert mutating(r.log) == []
+    assert "desktop wake planned" in summary_row(r.out, "desktop wake")
 
 
 @pytest.mark.parametrize("mode", ["--yes", "--dry-run", "tty"])
-def test_origin_no_chat_platform_stops_before_any_change(monkeypatch, tmp_path, capsys, mode):
-    args = (mode,) if mode != "tty" else ()
+def test_origin_no_messaging_platform_sets_up_desktop_chats_only(monkeypatch, tmp_path, capsys, mode):
+    args = (mode,) if mode != "tty" else ("--skip-validate",)
     if mode == "tty":
-        tty(monkeypatch)
-    r = go(monkeypatch, tmp_path, capsys, {"platforms": {"webhook": {"enabled": True}}, "webhook_enabled": False},
-           args=args)
-    assert r.rc == 2
-    assert ("no chat platform found in the Hermes config (platforms.*), so setup cannot tell where to wake you. "
-            "Re-run with the platform you review on: hermes mockreview setup --origin-platform telegram "
-            "(repeatable)") in r.out
-    assert "which platforms do you review on" not in r.out
-    assert mutating(r.log) == []
-    assert r.calls == {}
-    assert "setup summary" not in r.out
+        tty(monkeypatch, "y")         # an explicit yes at the Desktop consent question
+    r = go(monkeypatch, tmp_path, capsys, {"platforms": {"webhook": {"enabled": True}}}, args=args)
+    assert r.rc == 0
+    assert setup.NO_PLATFORM_MESSAGE in r.out and "--origin-platform telegram" in r.out
+    assert "Which do you review on" not in r.out
+    assert route_names(r.log) == []
+    assert "routes skipped (no messaging platform)" in summary_row(r.out, "routes")
+    assert bool(find(r.log, *INJECTION)) is (mode == "tty")
 
 
-def test_origin_platforms_config_unreadable_is_the_same_stop(monkeypatch, tmp_path, capsys):
+@pytest.mark.parametrize("answer", ["", "n"])
+def test_desktop_consent_enter_or_no_at_the_terminal_grants_nothing(monkeypatch, tmp_path, capsys, answer):
+    tty(monkeypatch, answer)          # Enter is the default, and the default is no
+    r = go(monkeypatch, tmp_path, capsys, {"platforms": {"webhook": {"enabled": True}}}, args=("--skip-validate",))
+    assert r.rc == 0 and not find(r.log, *INJECTION)
+    assert "desktop wake skipped (declined)" in summary_row(r.out, "desktop wake")
+
+
+def test_origin_platforms_config_unreadable_is_desktop_only_too(monkeypatch, tmp_path, capsys):
     # `hermes config get --json platforms` fails when nothing is configured
     r = go(monkeypatch, tmp_path, capsys, {"platforms": None})
-    assert r.rc == 2 and "--origin-platform" in r.out and mutating(r.log) == []
+    assert r.rc == 0 and setup.NO_PLATFORM_MESSAGE in r.out and route_names(r.log) == []
+
+
+def test_desktop_consent_declined_at_the_terminal_changes_nothing_for_it(monkeypatch, tmp_path, capsys):
+    tty(monkeypatch, "", "n")         # Enter = every messaging platform, then no to the Desktop consent
+    r = go(monkeypatch, tmp_path, capsys, {"platforms": CHAT_PLATFORMS}, args=("--skip-validate",))
+    assert r.rc == 0
+    assert setup.DESKTOP_CONSENT in r.out
+    assert not find(r.log, *INJECTION) and len(route_names(r.log)) == 4
+    assert "desktop wake skipped (declined)" in summary_row(r.out, "desktop wake")
+    assert f"hermes config set {setup.INJECTION_KEY} true" in r.out
+
+
+def test_desktop_consent_already_granted_is_not_asked_or_written_again(monkeypatch, tmp_path, capsys):
+    r = go(monkeypatch, tmp_path, capsys, {"injection_allowed": True})
+    assert r.rc == 0
+    assert find(r.log, "config", "get", "--json", setup.INJECTION_KEY) and not find(r.log, *INJECTION)
+    assert setup.DESKTOP_CONSENT not in r.out
+    assert "desktop wake ok (already allowed)" in summary_row(r.out, "desktop wake")
+
+
+def test_desktop_consent_grant_that_fails_fails_setup(monkeypatch, tmp_path, capsys):
+    real = setup.run_hermes
+
+    def run(argv, **kw):
+        if argv[:3] == ["config", "set", setup.INJECTION_KEY]:
+            return SimpleNamespace(returncode=1, stdout="", stderr="managed key")
+        return real(argv, **kw)
+    monkeypatch.setattr(setup, "run_hermes", run)
+    tty(monkeypatch, "y")
+    r = go(monkeypatch, tmp_path, capsys, {"platforms": {"webhook": {"enabled": True}}}, args=("--skip-validate",))
+    assert r.rc == 1 and "desktop wake failed" in summary_row(r.out, "desktop wake")
+
+
+def test_desktop_without_autostart_is_warned(monkeypatch, tmp_path, capsys):
+    r = go(monkeypatch, tmp_path, capsys, args=("--yes", "--no-autostart"))
+    assert r.rc == 0
+    assert "a board made in a Desktop chat is refused" in r.out
+
+
+@pytest.mark.parametrize("hosting, warned", [("lan", True), ("local", False)])
+def test_desktop_with_lan_hosting_is_warned(monkeypatch, tmp_path, capsys, hosting, warned):
+    r = go(monkeypatch, tmp_path, capsys, args=("--yes", "--hosting", hosting))
+    assert r.rc == 0
+    assert ("with lan hosting the board listens beyond loopback, so a board made in a Desktop chat is refused"
+            in r.out) is warned
+    (tmp_path / "telegram-only").mkdir()
+    r = go(monkeypatch, tmp_path / "telegram-only", capsys,
+           args=("--yes", "--hosting", hosting, "--origin-platform", "telegram"))
+    assert "Desktop chat" not in r.out                    # narrowed away from Desktop: nothing to warn about
+
+
+def test_desktop_grant_argv_is_the_key_hermes_accepts():
+    """The one Hermes command the grant runs, checked against Hermes's own `config set` validation when Hermes is
+    importable (it is never run here)."""
+    assert INJECTION == ["config", "set", "plugins.entries.mock-review.allow_gateway_injection", "true"]
+    cfg = pytest.importorskip("hermes_cli.config")
+    validate = getattr(cfg, "_validate_config_key", None)
+    coerce = getattr(cfg, "_coerce_config_set_value", None)
+    if validate is None or coerce is None:
+        pytest.skip("this Hermes has no config key validator")
+    known, suggestion = validate(setup.INJECTION_KEY)
+    assert known, suggestion
+    assert coerce(setup.INJECTION_KEY, "true") is True      # stored as a YAML boolean: Hermes checks `is True`
 
 
 def test_origin_several_interactive_asks_once_and_honours_the_answer(monkeypatch, tmp_path, capsys):

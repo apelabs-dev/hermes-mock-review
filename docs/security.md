@@ -284,8 +284,13 @@ loopback (`0.0.0.0`, `--hosting lan`) anyone on the network reaches the sign-in 
 there can press Send; a public board exposes the same button to anyone holding the link. While `public_url` is
 configured, a TLS proxy (Caddy, nginx, Cloudflare Tunnel, oauth2-proxy) serves the same loopback port on the internet,
 so it makes every board exposed too, whatever its mode. A Tailscale Funnel mapping (`hermes mockreview public on`)
-sets no `public_url`, so the guard does not see it: while one is on, set `public_url` to the Funnel URL or create
-boards with wake off.
+sets no `public_url`, so the guard reads the mapping itself (`tailscale funnel status`) and counts it as a public URL.
+
+A board made in a Hermes Desktop chat wakes that chat inside its own session, so a reviewer's Send or `@Hermes` starts
+a turn with every tool that session has, whatever `wake_toolsets` says. Such a board is therefore always held to this
+gate: refused at create while Send is not gated, and held at Send when it stops being gated later. Hermes also requires
+the consent `plugins.entries.mock-review.allow_gateway_injection: true` before the plugin may queue that turn, and setup
+sets it only on an explicit yes at a terminal: `--yes` prints the command instead, so an agent cannot grant it to itself.
 
 While `wake_toolsets` is set:
 

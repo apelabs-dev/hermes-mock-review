@@ -90,13 +90,13 @@ def schemas(ask_host: bool, default_host: str, live_demo: bool) -> Dict[str, Dic
             "parameters": {"type": "object", "properties": {
                 "title": {"type": "string"},
                 "origin_platform": {"type": "string", "maxLength": 64, "pattern": "^[a-z][a-z0-9_-]{0,63}$",
-                    "description": "Copy source/platform from your session context in the system prompt; never guess."},
+                    "description": "Omit: read from this chat's session. Only to override; never guess."},
                 "origin_chat_id": {"type": "string", "minLength": 1, "maxLength": 256,
                     "pattern": "^[A-Za-z0-9_.:@!#+/~=-]{1,256}$",
-                    "description": "Copy the origin chat ID from your session context in the system prompt; required for wake."},
+                    "description": "Omit: read from this chat's session. Pass with origin_platform to override."},
                 "origin_thread_id": {"type": "string", "minLength": 1, "maxLength": 256,
                     "pattern": "^[A-Za-z0-9_.:@!#+/~=-]{1,256}$",
-                    "description": "Copy the thread ID from your session context in the system prompt if present; otherwise omit."},
+                    "description": "Omit: read from this chat's session."},
                 "brief": {"type": "string"},
                 "mode": _mode_prop(ask_host, default_host),
                 **ROUND_PROPS, "allow_live_demo": _live_demo_prop(live_demo), **LOOK_PROPS,
@@ -281,6 +281,24 @@ def _comment_resolve(args: Dict[str, Any]) -> Dict[str, Any]:
                 "closed": closed}
 
 
+def _wake_origin(explicit: Dict[str, Any]) -> "tuple[Dict[str, Any], str]":
+    """The chat a waking board is created for: (origin, "") or ({}, why not).
+
+    Explicit origin_* arguments win. With none, the calling session's own context names the chat (Hermes binds it for
+    the turn; platforms.session_origin). A Desktop origin also needs its session's key, which only that context has:
+    an explicit Desktop origin takes it when the context is that same chat. Nothing is ever guessed."""
+    from mockreview import platforms
+    here, why = platforms.session_origin()
+    if not explicit:
+        return (here, "") if here else ({}, f"the calling chat could not be read from this session ({why})")
+    if not all(explicit.get(key) for key in ("platform", "chat_id")):
+        return {}, "origin_platform and origin_chat_id go together: pass both or neither"
+    if (explicit.get("platform") == platforms.LOCAL and here and here.get("platform") == platforms.LOCAL
+            and here.get("chat_id") == explicit.get("chat_id")):
+        return {**explicit, "session_key": here["session_key"]}, ""
+    return explicit, ""
+
+
 # ---------------------------------------------------------------- handlers
 
 class MockReview:
@@ -315,12 +333,13 @@ class MockReview:
                         return json.dumps({"error": "title is required"})
                     origin = {key: a["origin_" + key] for key in ("platform", "chat_id", "thread_id")
                               if "origin_" + key in a}
-                    if settings.get("wake_required", a.get("wake")) and not all(
-                            origin.get(key) for key in ("platform", "chat_id")):
-                        return json.dumps({"error": "Wake is enabled: explicit origin_platform and origin_chat_id "
-                                           "are required. Copy source/platform, chat ID and optional thread ID from "
-                                           "your session context in the system prompt; never guess a destination. "
-                                           "Use wake=false only for a demo board."})
+                    if settings.get("wake_required", a.get("wake")):
+                        origin, why = _wake_origin(origin)
+                        if not origin:
+                            return json.dumps({"error": f"Wake is enabled, but {why}. Create the board from the chat "
+                                               "that should be woken, or pass origin_platform and origin_chat_id "
+                                               "(and origin_thread_id) exactly as your session context gives them; "
+                                               "never guess a destination. Use wake=false only for a demo board."})
                     out: Any = api.create(a["title"], origin or None, brief=a.get("brief") or "",
                                           mode=a.get("mode"), decisions=a.get("decisions"),
                                           prototype=a.get("prototype"), design=a.get("design"),
@@ -425,7 +444,7 @@ class MockReview:
         except Exception as e:
             log.warning("mock-review autostart unavailable: %s", e)
             return "error"
-        return autostart.gateway_factory(native, adapter)
+        return autostart.gateway_factory(native, adapter, self.ctx)
 
 
 def register(ctx: Any) -> None:
@@ -459,3 +478,10 @@ def register(ctx: Any) -> None:
         register_platform("webhook", mr.gateway_factory)
     else:
         log.debug("this Hermes has no register_platform_handler: mock-review autostart is unavailable")
+    # A plugin rescan in the gateway registers again with a new context but never calls gateway_factory again: the
+    # board already serving keeps waking Desktop chats through the newest context.
+    import mockreview.autostart as autostart
+    import mockreview.sessionwake as sessionwake
+    board = autostart.running() if sessionwake.attached() else None
+    if board is not None and sessionwake.owns_home(board.owner_home):
+        sessionwake.attach(ctx)

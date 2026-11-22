@@ -7,7 +7,9 @@ description: "When and how to use the mock_review_* tools and the mock-review se
 
 Use these when UI or design options need the user's review. The board shows each decision, the user marks it
 Approve, Change or Skip, adds notes and pins, and presses Send, which wakes you in the thread you started from.
-Hermes supplies the originating platform and chat to the tools. A CLI caller must pass `--platform` and `--chat-id`.
+`mock_review_create` reads the chat to wake (platform, chat, thread) from your own session, so leave the `origin_*`
+arguments out; pass them only to wake a different chat the user named, exactly as given, and never guess one. This works
+in every messaging chat and in a Hermes Desktop chat. A CLI caller must pass `--platform` and `--chat-id`.
 
 - `mock_review_create(title, decisions=/abs/decisions.json, design=<profile>, mode=...)` returns
   `{review_id, url, settings}`. Post the url with one line per decision.
@@ -21,8 +23,11 @@ Hermes supplies the originating platform and chat to the tools. A CLI caller mus
 - `mock_review_list()` lists open reviews. The user has `/mockreview list|open <id>|close <id>|settings`.
 
 When Send wakes you, the plugin posts an automatic "got it, working on round N" message in the origin chat (and mirrors it
-into your session), and posts a ping there if no new round appears in time. You must NOT post your own "got it" or
-"working on it" message. Go straight to reading the feedback and building the next round.
+into your session), and posts a ping there if no new round appears in time. In a Desktop chat there is no such
+message: the wake arrives as a turn in that chat itself. Either way you must NOT post your own "got it" or "working on
+it" message. Go straight to reading the feedback and building the next round.
+
+A wake in a Desktop chat runs in that chat's own session, with your usual tools, so build the round there directly.
 
 The session Send wakes runs with Hermes's safe webhook tools unless the user granted more (`wake_toolsets`). If that
 session has no mock_review tools or cannot write files, reply with exactly the one line the wake prompt gives
@@ -185,4 +190,7 @@ with either `pin_fix` setting. Mention wakes and pin fixes share the `pin_fix_ma
   `allow_live_demo: true` for that call.
 - If a tool says there is no wake route, Send would store feedback without waking anyone. Tell the user to run
   `hermes mockreview setup`. Pass `wake=false` only for a demo board that nobody needs to be woken by.
+- If create says this chat cannot be woken (the API server, a terminal UI, a platform Hermes does not deliver to) or
+  that a Desktop chat cannot be woken yet, tell the user the reason it gives. Offer a board made from a messaging or
+  Desktop chat, or a `wake=false` board. Never retry with a guessed origin.
 - Close a review (`/mockreview close <id>`) only when the user says it is done.

@@ -1,4 +1,4 @@
-"""Wake Hermes: HMAC-signed POST to its webhook adapter.
+"""Wake Hermes: HMAC-signed POST to its webhook adapter (a Desktop chat is woken in its session: sessionwake.py).
 
 Signing matches gateway/platforms/webhook.py "Generic V2":
     X-Webhook-Timestamp:    <unix seconds>   (must be within 300 s of Hermes's clock)
@@ -19,7 +19,9 @@ import urllib.request
 from typing import Any, Dict, Optional, Tuple
 
 from . import config
+from . import platforms
 from . import secrets
+from . import sessionwake
 
 log = logging.getLogger("mockreview.notify")
 
@@ -125,16 +127,30 @@ def post_notice(url: str, payload: Dict[str, Any], secret: str, delivery_id: str
     return classify_delivered(code, text)
 
 
+# A wake whose origin no route and no session can reach: a permanent failure (service.py stops retrying a mention or
+# a pin fix on it; a submission keeps it as its last error).
+CANNOT_WAKE = "cannot wake: "
+
+
 def send(payload: Dict[str, Any], delivery_id: str, url: Optional[str] = None) -> Tuple[bool, str]:
-    secret, err = load_secret()
-    if not secret:
-        log.error("cannot notify Hermes: %s", err)
-        return False, err
+    """Wake the origin chat (platforms.py): a messaging chat through its webhook route, a Desktop chat inside its own
+    session (sessionwake.py). An origin neither can reach is refused, nothing is posted."""
     from .store import normalize_origin, ReviewError
     try:
         origin = normalize_origin(payload)
     except ReviewError as e:
         return False, e.message
+    kind, why = platforms.classify(origin["platform"])
+    if kind == platforms.SESSION:
+        return sessionwake.send(payload, delivery_id)
+    if kind == platforms.UNSUPPORTED:
+        msg = CANNOT_WAKE + platforms.unsupported_message(origin["platform"], why)
+        log.error("%s", msg)
+        return False, msg
+    secret, err = load_secret()
+    if not secret:
+        log.error("cannot notify Hermes: %s", err)
+        return False, err
     return post(url or config.webhook_url(origin["platform"]), payload, secret, delivery_id)
 
 

@@ -65,6 +65,10 @@ elif cmd == "config":
         st["webhook_enabled"] = True
         save(st)
         out(configpath)
+    elif sub == "set" and key == "plugins.entries.mock-review.allow_gateway_injection":
+        st["injection"] = args[3]
+        save(st)
+        out(configpath)
     elif sub == "set" and key.startswith("plugins.entries.mock-review.settings."):
         k = key.rsplit(".", 1)[1]
         st.setdefault("settings", {})[k] = args[3]
@@ -91,6 +95,12 @@ elif cmd == "config":
                 sys.exit(1)
         elif target == "platforms":
             out(json.dumps(scenario.get("platforms", {"telegram": {"enabled": True}})))
+        elif target == "plugins.entries.mock-review.allow_gateway_injection":
+            if st.get("injection") == "true" or scenario.get("injection_allowed"):
+                out("true")
+            else:
+                out("Config key not set: " + target)
+                sys.exit(1)
         elif target.startswith("plugins.entries.mock-review.settings."):
             k = target.rsplit(".", 1)[1]
             obsolete = scenario.get("obsolete", {})

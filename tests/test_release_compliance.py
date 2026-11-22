@@ -211,7 +211,7 @@ def test_tool_explicit_origin_reaches_store_payload_and_platform_route(env, tmp_
     props = tool["schema"]["parameters"]["properties"]
     assert "thread_id" not in props
     for key in ("platform", "chat_id", "thread_id"):
-        assert "session context in the system prompt" in props["origin_" + key]["description"]
+        assert "read from this chat's session" in props["origin_" + key]["description"]
     result = json.loads(tool["handler"]({"title": "Explicit origin", "decisions": str(_decisions(tmp_path)),
         **{"origin_" + k: v for k, v in origin.items()}}))
     assert "error" not in result, result

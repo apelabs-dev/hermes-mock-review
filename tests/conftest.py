@@ -247,7 +247,15 @@ def isolated_settings(tmp_path, monkeypatch):
     monkeypatch.setattr(setup_mod, "board_identity", lambda port, timeout=2.0: (
         ("none", {}) if str(port) == str(config_mod.PORT) else real_identity(port, timeout)))
     monkeypatch.setenv("MOCKREVIEW_OWNER", "self")   # tests use their own temp store; test_owner.py exercises the rest
+    # The same answers with or without Hermes importable: no calling chat (a test binds one through
+    # platforms._session_env), and every well-formed platform name a deliver platform unless a test asks the registry.
+    from mockreview import platforms, sessionwake
+    for name in ("PLATFORM", "CHAT_ID", "THREAD_ID", "KEY"):
+        monkeypatch.delenv("HERMES_SESSION_" + name, raising=False)
+    monkeypatch.setattr(platforms, "_session_env", lambda: None)
+    monkeypatch.setattr(platforms, "_hermes_knows", lambda platform: None)
     yield tmp_path / "hermes-config.yaml"
+    sessionwake.detach()
     settings.set_config_source(None)
     settings.FORCE_MINI_PARSER = False
     settings._cache["key"] = None
