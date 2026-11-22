@@ -30,6 +30,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from . import wakeprompt
@@ -58,6 +59,29 @@ def attach(ctx: Any) -> None:
     global _ctx
     with _lock:
         _ctx = ctx
+
+
+def _calling_home() -> Path:
+    """The Hermes home of the calling context: Hermes's context-local profile home under multiplexing, else
+    HERMES_HOME (config.hermes_home())."""
+    try:
+        from hermes_constants import get_hermes_home
+        return Path(get_hermes_home())
+    except Exception:
+        from . import config
+        return config.hermes_home()
+
+
+def owns_home(owner_home: Any) -> bool:
+    """True when the calling context belongs to the profile whose home owns the board server. Under profile
+    multiplexing one gateway serves many profiles and every profile's webhook connect reaches gateway_factory; only
+    the owner's plugin context may be attached, or the owner's Desktop wakes would go through another profile's."""
+    if owner_home is None:
+        return False
+    try:
+        return _calling_home().expanduser().resolve() == Path(owner_home).expanduser().resolve()
+    except OSError:
+        return False
 
 
 def detach() -> None:
@@ -115,7 +139,8 @@ def send(payload: Dict[str, Any], delivery_id: str) -> Tuple[bool, str]:
     """Queue the wake prompt into the Desktop chat named by the payload's session_key: (woken, detail)."""
     key = payload.get("session_key")
     if not isinstance(key, str) or not key:
-        return False, "this Desktop origin has no session key (a board created before Desktop wakes): recreate it"
+        # permanent like every other cannot-wake origin (notify.CANNOT_WAKE): only a new board fixes it
+        return False, "cannot wake: this Desktop origin has no session key (made before Desktop wakes): recreate it"
     ready, why = status()
     if not ready:
         return False, why

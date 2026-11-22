@@ -480,6 +480,8 @@ def register(ctx: Any) -> None:
         log.debug("this Hermes has no register_platform_handler: mock-review autostart is unavailable")
     # A plugin rescan in the gateway registers again with a new context but never calls gateway_factory again: the
     # board already serving keeps waking Desktop chats through the newest context.
+    import mockreview.autostart as autostart
     import mockreview.sessionwake as sessionwake
-    if sessionwake.attached():
+    board = autostart.running() if sessionwake.attached() else None
+    if board is not None and sessionwake.owns_home(board.owner_home):
         sessionwake.attach(ctx)

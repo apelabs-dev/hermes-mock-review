@@ -69,6 +69,11 @@ class BoardServer:
         return self._thread is not None and self._thread.is_alive()
 
     @property
+    def owner_home(self) -> Any:
+        """The Hermes home of the profile this server was made for (server.BoardHTTPServer.owner_home), or None."""
+        return getattr(self._srv, "owner_home", None)
+
+    @property
     def url(self) -> str:
         return server.display_url(self.host, self.port) if self._srv is not None else ""
 
@@ -171,7 +176,9 @@ def gateway_factory(native: Any = None, adapter: Any = None, ctx: Any = None) ->
     this process's own board serves, it is how the board wakes a Desktop chat (sessionwake.py)."""
     try:
         status = ensure_started("gateway webhook connect")
-        if ctx is not None and running() is not None:
+        board = running()
+        # only the ctx of the profile whose home owns this board server (multiplexing: one server, many profiles)
+        if ctx is not None and board is not None and sessionwake.owns_home(board.owner_home):
             sessionwake.attach(ctx)
         return status
     except Exception:   # pragma: no cover - ensure_started already catches everything

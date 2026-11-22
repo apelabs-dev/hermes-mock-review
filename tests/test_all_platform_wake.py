@@ -17,8 +17,8 @@ import time
 import pytest
 
 from conftest import http, load_plugin
-from mockreview import (api, autostart, notify, owner, platforms, service, sessionwake, setup, store, wakeguard,
-                        wakeprompt)
+from mockreview import (api, autostart, config, notify, owner, platforms, service, sessionwake, setup, store,
+                        wakeguard, wakeprompt)
 from mockreview.store import ReviewError
 from test_owner import DEC_FB
 from test_plugin import FakeCtx, _decisions
@@ -243,7 +243,7 @@ def test_an_explicit_desktop_origin_without_its_session_key_is_refused(env, tmp_
     assert "needs that session's key" in err and store.list_ids() == []
 
 
-@pytest.mark.parametrize("ungate", ["public_url", "public_mode", "lan"])
+@pytest.mark.parametrize("ungate", ["public_url", "public_mode", "funnel", "lan"])
 def test_an_ungated_desktop_board_is_refused_at_create(env, tmp_path, monkeypatch, gateway, ungate):
     ctx, _ = gateway
     bind_session(monkeypatch, platform="local", chat_id=LOCAL_CHAT, key=LOCAL_KEY)
@@ -252,6 +252,8 @@ def test_an_ungated_desktop_board_is_refused_at_create(env, tmp_path, monkeypatc
         monkeypatch.setenv("MOCKREVIEW_PUBLIC_URL", "https://reviews.example.test")
     elif ungate == "public_mode":
         args["mode"] = "public"
+    elif ungate == "funnel":                              # `mockreview public on` maps Funnel, public_url stays unset
+        monkeypatch.setattr(config, "funnel_url", lambda: "https://board.example.test")
     else:
         monkeypatch.setattr(wakeguard, "bound_host", lambda: "0.0.0.0")
     assert not wakeguard.granted()                        # the gate holds for a Desktop chat without wake_toolsets
@@ -279,6 +281,20 @@ def test_the_serving_board_wakes_through_the_newest_plugin_context_and_lets_go_w
     assert sessionwake._ctx is newer
     autostart.stop_running(2)
     assert not sessionwake.attached() and sessionwake.status()[1] == sessionwake.NOT_IN_GATEWAY
+
+
+def test_only_the_owning_profiles_context_is_attached(env, gateway, tmp_path, monkeypatch):
+    ctx, _ = gateway
+    other = GatewayCtx()
+    monkeypatch.setattr(sessionwake, "_calling_home", lambda: tmp_path / "profiles" / "beta")
+    autostart.gateway_factory(None, None, other)    # another profile's webhook connect under multiplexing
+    load_plugin().register(other)                   # and its plugin rescan
+    assert sessionwake._ctx is ctx
+
+
+def test_a_desktop_board_without_a_session_key_fails_for_good(env, gateway):
+    ok, why = sessionwake.send({"session_key": None}, "d1")   # a Desktop board made before Desktop wakes
+    assert not ok and why.startswith(notify.CANNOT_WAKE) and why.startswith(service.MENTION_PERMANENT)
 
 
 def test_a_cli_register_attaches_nothing(env):

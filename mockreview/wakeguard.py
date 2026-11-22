@@ -93,12 +93,15 @@ def exposure(mode: str, wake: bool, session: bool = False) -> Optional[str]:
         return None
     if mode == "public" or config.public_url():
         return "the board is on a public URL, so anyone who can get a session or guest link can press Send"
+    if config.funnel_url():
+        return ("Tailscale Funnel maps the board to a public URL (`mockreview public on`), so anyone who can get a "
+                "session or guest link can press Send")
     return lan_reason()
 
 
 def review_exposure(data: Dict[str, Any]) -> Optional[str]:
-    """exposure() for a stored review: its mode, its wake flag and its origin, plus the public_url setting, are all
-    that matter."""
+    """exposure() for a stored review: its mode, its wake flag and its origin, plus the public_url setting and a Funnel
+    mapping, are all that matter."""
     if data.get("wake") is False:
         return None
     from . import platforms
