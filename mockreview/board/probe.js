@@ -1,4 +1,4 @@
-import {LIVE, anchorFor, cleanTarget, surface, installAPI} from './anchors.js';
+import {LIVE, CONTROL, controlOf, presses, anchorFor, cleanTarget, surface, installAPI} from './anchors.js';
 /* mockreview-probe: injected into every variant page (the top of an artifact page, the end of the others).
  * Runs inside the sandboxed (opaque-origin) iframe. It talks to the board only
  * via postMessage: it reports page size, page-state writes and comment-mode taps,
@@ -239,24 +239,55 @@ import {LIVE, anchorFor, cleanTarget, surface, installAPI} from './anchors.js';
   addEventListener('pointerdown', tap, true);
   addEventListener('click', tap, true);
 
-  // Decision-page controls (Pick / Approve / Change / Skip / note / A|B|C toggle) must work in Comment mode too:
-  // a page marks them `[data-mr-live]`, and taps on them never become pins.
+  // Comment mode pins a click on anything in the page, its buttons, links and fields included. Only LIVE keeps its clicks:
+  // the controls a page marks `[data-mr-live]` (Pick / Approve / Change / Skip / note / A|B|C toggle) work in comment
+  // mode too and never become pins. To use any other control, the reviewer leaves comment mode.
+  function pathOf(e) { return e.composedPath ? e.composedPath() : [e.target]; }
   function live(e) {
-    return (e.composedPath ? e.composedPath() : [e.target]).some(function (el) {
-      return el instanceof Element && Element.prototype.closest.call(el, LIVE);
-    });
+    return pathOf(e).some(function (el) { return el instanceof Element && Element.prototype.closest.call(el, LIVE); });
   }
+  function inControl(e) {
+    return pathOf(e).some(function (el) { return el instanceof Element && Element.prototype.matches.call(el, CONTROL); });
+  }
+  function pinning(e) { return comment && !fromUs(e) && !live(e); }
+
+  // A comment-mode press belongs to the pin, so the page's own handlers never see it. These are window capture listeners
+  // and run before any page listener on the document or an element. An artifact page's probe is its first script, so
+  // they also run before the page's own window listeners; a prototype page gets the probe at its end, so a page listener
+  // registered on window in the capture phase before the probe still runs first. `tap` above was registered first and
+  // keeps running. mousedown is cancelled too inside a native control (no focus, no select opening, no range drag), and
+  // only there: cancelling it on ordinary content would stop text selection, and with it quote pins.
+  function hold(e) {
+    if (!pinning(e)) return;
+    e.stopImmediatePropagation();
+    if (e.type === 'mousedown' && inControl(e)) e.preventDefault();
+  }
+  ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'dblclick', 'auxclick'].forEach(function (type) {
+    addEventListener(type, hold, true);
+  });
+  ['touchstart', 'touchend'].forEach(function (type) { addEventListener(type, hold, { capture: true, passive: true }); });
 
   addEventListener('click', function (e) {
-    if (!comment || fromUs(e) || live(e)) return;
+    if (!pinning(e)) return;
     e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
     var s = size(), px = e.clientX + scrollX, py = e.clientY + scrollY;
-    var selection = getSelection();
+    // A click inside a native control pins the control. Its mousedown was cancelled, so a selection still showing is an
+    // older one, not this click's.
+    var control = inControl(e), selection = control ? null : getSelection();
     var range = selection && !selection.isCollapsed && selection.rangeCount ? selection.getRangeAt(0).cloneRange() : null;
-    var target = anchorFor(e.target, bodyOf(), e.clientX, e.clientY, range);
+    var target = anchorFor(controlOf(e.target, bodyOf()), bodyOf(), e.clientX, e.clientY, range);
     post({ type: 'click', x: px / s.w, y: py / s.h, h: s.h, cx: e.clientX, cy: e.clientY, target: target });
   }, true);
+  // Enter or Space on a focused native control would activate it; in comment mode it does nothing and the page's own key
+  // handlers do not see it. A key makes no pin. Escape (below) and every other key pass through.
+  function keys(e) {
+    if (!pinning(e) || !presses(e.key, pathOf(e)[0])) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+  }
+  addEventListener('keydown', keys, true);
+  addEventListener('keyup', keys, true);
   addEventListener('keydown', function (e) { if (e.key === 'Escape' && comment) post({ type: 'escape' }); });
+  // The pin cursor over everything a comment-mode click pins, controls included; LIVE elements keep their own.
   var cursor = document.createElement('style');
   cursor.textContent = 'html.mr-comment,html.mr-comment *{cursor:crosshair!important}html.mr-comment :is(' + LIVE + '),html.mr-comment :is(' + LIVE + ') *{cursor:auto!important}';
   (document.head || document.documentElement).appendChild(cursor);

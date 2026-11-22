@@ -101,10 +101,10 @@ list, and put your best answer in `recommendation`. Never make the user type an 
   up to 6 options. Prefer 2 or 3, and use more only when they are distinct.
 
 Example: `{"type":"callout","tone":"warn","title":"Constraint","text":"Must fit one phone screen."}`.
-Safe absolute HTTP(S) links in mock/option HTML open in a new tab without creating pins; other hrefs are removed.
+Safe absolute HTTP(S) links in mock/option HTML open in a new tab (in comment mode a click pins them instead); other hrefs are removed.
 `interactive_elements` is on by default: build every control a mock shows so it works without script. Use `<select>` or
 `<details>` for a dropdown, a checkbox with `:checked` for a switch, radios with `:checked` for tabs, and real
-`<input>`/`<textarea>` fields. The board opens usable; pressing Comment (or `C`) pins a note on noninteractive content; native controls and text selection stay live. Pass
+`<input>`/`<textarea>` fields. The board opens usable; in comment mode (Comment or `C`) a tap on anything, controls included, pins a note and does not work the control, so the reviewer leaves comment mode to use them. Mark an element `data-mr-live` only if it must keep working in comment mode. Pass
 `interactive_elements: false` only for mocks that are meant as static pictures.
 A plan board's footer has one button, set by `footer_button`: `build` (the default; Build is locked until nothing is
 open or on Change, and turns into Send while a block is on Change) or `send` (notes only, never Build).

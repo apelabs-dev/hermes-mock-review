@@ -40,7 +40,7 @@ def run_dom(test, html=()):
         pytest.skip('Node is needed for executed board DOM tests')
     source = (ROOT / 'mockreview/board/board.js').read_text(encoding='utf-8')
     functions = []
-    for name in ['h', 'append', 'safeLink', 'secureLink', 'cleanFragment', 'renderTable', 'mockClick']:
+    for name in ['h', 'append', 'safeLink', 'secureLink', 'cleanFragment', 'renderTable', 'mockLive', 'mockClick']:
         start = re.search(r'^  function ' + name + r'\(', source, re.M)
         if start is None:  # Allows the revert proof to execute the old functions too.
             continue
@@ -167,21 +167,38 @@ assert.equal(cell.textContent, text);
 ''')
 
 
-def test_shadow_link_click_opens_without_pin_and_other_clicks_still_pin():
+def test_shadow_link_click_pins_in_comment_mode_and_opens_without_it():
     source = (ROOT / 'mockreview/board/board.js').read_text(encoding='utf-8')
     assert "mockClick(m, e);" in source
+    anchors = (ROOT / 'mockreview/board/anchors.js').read_text(encoding='utf-8')
+    live = re.search(r"^export const LIVE = '([^']*)';", anchors, re.M).group(1)
     run_dom('''
-let pins = 0;
+global.LIVE = ''' + json.dumps(live) + ''';
+let comment = true, pins = 0;
+global.S = {get commentMode() { return comment; }};
+global.canComment = () => true;
 global.tapMock = () => { pins++; };
 const a = document.createElement('a'); a.setAttribute('href', 'https://example.test/');
 const span = document.createElement('span'); a.appendChild(span);
 const host = document.createElement('div');
-const event = {target: host, composedPath: () => [span, a, host],
- preventDefault: () => { throw Error('link must keep default navigation'); }};
-mockClick({}, event); assert.equal(pins, 0);
-mockClick({}, {target: host, composedPath: () => [host]}); assert.equal(pins, 1);
+function click(path, target = host) {   // no path: an event without composedPath, read through e.target
+  const e = {target, prevented: false, preventDefault() { this.prevented = true; }};
+  if (path) e.composedPath = () => path;
+  mockClick({}, e);
+  return e;
+}
+// Comment mode: a click inside a mock link pins and cancels the link; plain content pins too.
+let e = click([span, a, host]); assert.equal(pins, 1); assert.equal(e.prevented, true);
+e = click([host]); assert.equal(pins, 2);
+// A pin marker and anything inside [data-mr-live] never pin and keep their default.
 const pin = document.createElement('button'); pin.setAttribute('class', 'mpin');
-mockClick({}, {target: pin}); assert.equal(pins, 1);
+e = click(null, pin); assert.equal(pins, 2); assert.equal(e.prevented, false);
+const keep = document.createElement('div'); keep.setAttribute('data-mr-live', '');
+const inside = document.createElement('button'); keep.appendChild(inside);
+e = click([inside, keep, host]); assert.equal(pins, 2); assert.equal(e.prevented, false);
+// Comment mode off: the link keeps its default navigation and nothing pins.
+comment = false;
+e = click([span, a, host]); assert.equal(pins, 2); assert.equal(e.prevented, false);
 ''')
 
 

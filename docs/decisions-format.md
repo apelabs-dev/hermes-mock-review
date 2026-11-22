@@ -102,7 +102,7 @@ video players, a timeline, anything that needs script. Give exactly one of `html
 absolute path to an `.html` file). Optional `text` (2000) and `caption` (300), both plain text; `height` (`"auto"`, the
 default, follows the page up to 4000 px, or a fixed 80 to 4000); `desktop_width` as for `mock`; `display` (`"frame"`,
 the default, or `"page"`); `markable` (default `false`; `true` adds the keys every markable block takes, and the reviewer
-can approve or change it). Reviewers can pin it in Pin mode either way.
+can approve or change it). Reviewers can pin it in comment mode either way.
 
     {"type": "artifact", "id": "clip", "title": "Click sound", "html": "<audio controls src=\"data:audio/wav;base64,UklGRg==\"></audio><script>document.title = 'ok'</script>", "caption": "Take 3", "markable": true}
 
@@ -160,7 +160,13 @@ How it runs:
 - The board reads these messages from the frame: its height, its background colour, a tap, a pin edit, `data` set/remove/list, a `mark` and
   nothing else. A message from a frame that is not a block of the round the board is showing, or tagged with an earlier
   round, is ignored. Messages are rate-limited per frame (a frame that floods is ignored, not obeyed) and height changes
-  are bounded. A tap can open a pin draft (in Pin mode); only the reviewer saves it.
+  are bounded. A tap can open a pin draft (in comment mode); only the reviewer saves it.
+- In comment mode a tap anywhere in the page pins, its own buttons, links, fields and media controls included, and it
+  reaches none of the page's handlers; Enter or Space on a focused control does nothing. Mark an element
+  `data-mr-live` to keep it working in comment mode: a tap on it, or on anything inside it, is the page's own and never
+  pins. For a radio wrapped in a `<label>`, mark the label. On an artifact page the board's listeners run before any of
+  the page's; on a prototype or variant page the probe is added at the end, so a `window` capture-phase listener the
+  page registers before it still runs first.
 
 A page that uses all three:
 
@@ -273,7 +279,8 @@ The board parses mock, option and piece HTML without running it and removes `scr
 `embed`, `base`, `meta` and `link` elements, `on*` attributes and `javascript:` URLs. Style it with `extra_css`,
 with the design profile's `mock.css`, or with inline `style` attributes. Anchor hrefs retain only absolute HTTP(S) URLs
 without whitespace/control characters; relative URLs and all other protocols are removed. Safe links open in a new tab
-with `target="_blank" rel="noopener noreferrer"`; clicking one does not add a pin.
+with `target="_blank" rel="noopener noreferrer"` when comment mode is off. In comment mode a click on one pins the link
+instead and does not open it.
 
 ### Interactive elements
 
@@ -287,9 +294,12 @@ every control a mock shows so that it responds, using markup that needs no scrip
 - hover and focus states: `:hover` and `:focus-visible`.
 
 The board opens usable: taps reach the mock's own controls, and pressing Comment (or `C`) turns comment mode on, where
-a tap on noninteractive content pins a note on its element. Native controls, links, forms and text selection stay live;
-comment mode never cancels their mouse, drag or submit events. The existing board CSP and opaque iframe sandbox still
-restrict form navigation. A create or add-round whose mocks have no such control returns a `hint` saying so. The setting controls the authoring hint; it does not disable native controls.
+a tap on anything in the mock pins a note on its element, controls included. A tap inside a button, link, summary,
+field, label or native media player pins that control and does not work it (no navigation, toggle, focus or checkbox
+flip), and Enter or Space on a focused control does nothing. Only an element marked `data-mr-live` (and everything
+inside it) keeps its clicks in comment mode. Text selection on ordinary content still works, so a drag still makes a
+quote pin. Leave comment mode (Esc, `C` or the Comment button) to use the controls. A mock form never navigates the
+board, and the board CSP and opaque iframe sandbox still restrict form navigation. A create or add-round whose mocks have no such control returns a `hint` saying so. The setting controls the authoring hint; it does not disable native controls.
 
 ### Element and text anchors
 
@@ -298,7 +308,8 @@ Give meaningful elements a stable `data-mr-part`, for example
 New rounds automatically stamp `data-mr-id` on anchorable HTML at installation; these IDs are stored with the round,
 without changing the source file. Dynamic content gets an ID when first observed. Highlight wrappers get no IDs.
 
-In Comment mode the hovered content has an outline, and a pin's composer shows `on <label>`: its nearest heading,
+In Comment mode the hovered content has an outline (inside a native control, the control's: the element a click would
+pin; none over a `data-mr-live` element), and a pin's composer shows `on <label>`: its nearest heading,
 then role/type and up to 40 characters of text (120 characters total). A heading uses its own text. Pins follow their
 element on move/resize. Removing it leaves an indigo pin (55% opacity) at the last position with **Element removed**; restoring a
 unique matching element reattaches it. Empty-space and older coordinate-only pins retain their positions.

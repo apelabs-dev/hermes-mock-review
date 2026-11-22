@@ -251,9 +251,13 @@ def test_comment_mode_stays_on_after_a_pin_is_saved_or_cancelled(server, live_re
     b.click_sel("#comment-toggle")
     assert b.until("document.querySelector('#comment-toggle').getAttribute('aria-pressed') === 'true'")
     assert b.label() == "Exit comment mode" and b.js("document.body.classList.contains('proto-pin')")
-    assert b.tap_page() == "page", "native buttons stay live in comment mode"
+    assert b.tap_page() == "pin", "a comment-mode click on the page's button must pin it, not press it"
+    assert b.js("document.querySelector('.popover .pop-where').textContent") == "on button \u201cDo the thing\u201d", \
+        "the pin must be anchored to the button itself"
+    b.press(".popover .pop-close")
+    assert b.until("!document.querySelector('.popover')")
     assert b.tap_text() == "pin", "noninteractive text opens a pin"
-    assert b.clicks() == 1, "the native button handler must run in comment mode"
+    assert b.clicks() == 0, "the page's button handler must not run in comment mode"
     b.js("(function(t){t.value='make this bigger';t.dispatchEvent(new Event('input'));return 1})"
          "(document.querySelector('.popover textarea'))")
     b.press(".popover .btn-primary")
@@ -270,7 +274,7 @@ def test_comment_mode_stays_on_after_a_pin_is_saved_or_cancelled(server, live_re
     assert b.until("document.querySelector('#comment-toggle').getAttribute('aria-pressed') === 'false'")
     assert not b.js("document.body.classList.contains('proto-pin')")
     assert (b.js("window.__escapes || 0") or 0) >= 1, "the probe must forward Esc from the frame"
-    assert b.tap_page() == "page" and b.clicks() == 2
+    assert b.tap_page() == "page" and b.clicks() == 1
     # Two real clicks: on, then off.
     b.click_sel("#comment-toggle")
     assert b.until("document.querySelector('#comment-toggle').getAttribute('aria-pressed') === 'true'")
@@ -301,8 +305,11 @@ def test_decisions_round_click_works_the_mock_until_comment_mode(server, decisio
     # Close it again first, so "the mock did not react" is a real observation and not just the state we left behind.
     b.js("document.querySelector('.mock-host').shadowRoot.querySelector('details').open = false")
     b.click(*b.summary_center())
-    assert b.until("document.querySelector('.mock-host').shadowRoot.querySelector('details').open === true"), "native summary stays live"
-    assert not b.popover()
+    assert b.until("!!document.querySelector('.popover .pop-where')"), "a comment-mode click on the summary must pin it"
+    assert b.js("document.querySelector('.popover .pop-where').textContent") == "on summary \u201cMore\u201d"
+    assert b.details_open() is False, "a comment-mode click on the summary must not also open it"
+    b.press(".popover .pop-close")
+    assert b.until("!document.querySelector('.popover')")
     r = json.loads(b.js("(function(){var r=document.querySelector('.mock-host').shadowRoot.querySelector('p').getBoundingClientRect();return JSON.stringify([r.left+10,r.top+5])})()"))
     b.click(*r)
     assert b.until("!!document.querySelector('.popover')"), "noninteractive text must pin a note"
@@ -312,7 +319,7 @@ def test_decisions_round_click_works_the_mock_until_comment_mode(server, decisio
     assert b.until("document.querySelector('#comment-toggle').getAttribute('aria-pressed') === 'false'")
     assert not b.js("document.body.classList.contains('tool-comment')")
     b.click(*b.summary_center())
-    assert b.until("document.querySelector('.mock-host').shadowRoot.querySelector('details').open === false"), \
+    assert b.until("document.querySelector('.mock-host').shadowRoot.querySelector('details').open === true"), \
         "a click must work the mock again once comment mode is off"
 
 

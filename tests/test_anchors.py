@@ -129,34 +129,49 @@ def test_describe_target_prefers_part_and_caps_lengths(server, anchor_review, ch
     assert b.js(f"window.__anchors.cleanTarget({json.dumps(dict(TARGET, path='['))})") is None
 
 
-def test_pin_mode_tap_records_target_and_links_still_open(server, anchor_review, chrome):
+def composer(b, label):
+    """The new-pin composer is open on `label`; close it without saving."""
+    assert b.until("!!document.querySelector('.popover .pop-where')", timeout=5), f'no composer for {label}'
+    where = b.js("document.querySelector('.popover .pop-where').textContent")
+    assert where == 'on ' + label, where
+    b.press('.popover .pop-close')
+    assert b.until("!document.querySelector('.popover')")
+
+
+def test_comment_mode_click_pins_native_controls_without_working_them(server, anchor_review, chrome):
     b = board(chrome, server, anchor_review)
     on(b)
-    # Composed descendants of native controls remain live, including submit/selection events.
-    b.js(f"{ROOT}.querySelector('#form').addEventListener('submit',e=>{{e.preventDefault();window.__submitted=true}})")
-    b.click(*point(b, '#check'))
-    assert b.js(f"{ROOT}.querySelector('#check').checked") and not b.popover()
-    b.click(*point(b, '#field'))
+    # Comment mode: a click inside a native control pins the control itself and cancels what it would have done (no
+    # checkbox flip, no focus, no submit, no toggle, no tab). Only [data-mr-live] keeps its click.
+    b.js(f"(()=>{{let r={ROOT};window.__focus=[];r.querySelector('#form').addEventListener('submit',e=>{{e.preventDefault();window.__submitted=true}});"
+         "for(let id of ['field','editable'])r.getElementById(id).addEventListener('focus',()=>window.__focus.push(id));return 1})()")
+    before = {t['targetId'] for t in chrome.call('Target.getTargets')['targetInfos']}
+    for sel, label in (('#check', 'Order summary > checkbox'), ('#field', 'Order summary > input'),
+                       ('#submit', 'Order summary > button \u201cSubmit\u201d'),
+                       ('summary', 'Order summary > summary \u201cDetails\u201d'),
+                       ('#editable', 'Order summary > div \u201cEditable text\u201d'),
+                       ('#link', 'Order summary > a \u201cOpen health\u201d')):
+        b.click(*point(b, sel))
+        composer(b, label)
+    b.cdp.pump(0.3)
+    state = json.loads(b.js(f"JSON.stringify({{checked:{ROOT}.querySelector('#check').checked,focus:window.__focus,"
+                            f"submitted:!!window.__submitted,open:{ROOT}.querySelector('details').open}})"))
+    assert state == {'checked': False, 'focus': [], 'submitted': False, 'open': False}, state
+    opened = [t for t in chrome.call('Target.getTargets')['targetInfos'] if t['targetId'] not in before]
+    for t in opened:
+        chrome.call('Target.closeTarget', {'targetId': t['targetId']})
+    assert not opened, 'a comment-mode click on a mock link must not open it'
+    b.click(*point(b, '#live')); b.cdp.pump(0.3)
+    assert not b.popover(), 'a [data-mr-live] element keeps its click in comment mode'
+    # A field focused another way still types: c and Space are text there, not the comment toggle or a press.
+    b.js(f"{ROOT}.querySelector('#field').focus()")
     b.key('c', 'KeyC', 67, text='c')
-    assert b.js(f"{ROOT}.querySelector('#field').value") == 'c' and b.aria() == 'true'
-    b.click(*point(b, '#submit'))
-    assert b.until('window.__submitted === true') and not b.popover()
+    b.key(' ', 'Space', 32, text=' ')
+    assert b.js(f"{ROOT}.querySelector('#field').value") == 'c ' and b.aria() == 'true'
     # Without the test's listener (a clone carries none), the board itself stops a mock form navigating.
     href = b.js('location.href')
     assert b.js(f"(()=>{{let f={ROOT}.querySelector('#form').cloneNode(true);{ROOT}.querySelector('#form').after(f);let ev=new Event('submit',{{bubbles:true,cancelable:true,composed:true}});f.dispatchEvent(ev);f.remove();return ev.defaultPrevented}})()") is True
     assert b.js('location.href') == href
-    b.click(*point(b, 'summary'))
-    assert b.js(f"{ROOT}.querySelector('details').open") and not b.popover()
-    for sel in ('#live', '#editable'):
-        b.click(*point(b, sel)); assert not b.popover()
-    before = {t['targetId'] for t in chrome.call('Target.getTargets')['targetInfos']}
-    b.click(*point(b, '#link'))
-    assert b.until("!document.querySelector('.popover')")
-    targets_now = chrome.call('Target.getTargets')['targetInfos']
-    opened = [t for t in targets_now if t['targetId'] not in before]
-    assert opened, 'real native link click must open a tab'
-    for t in opened:
-        chrome.call('Target.closeTarget', {'targetId': t['targetId']})
     b.click(*point(b, '#copy'))
     assert b.until("document.querySelector('.popover .pop-where').textContent.startsWith('on Order summary')")
     save(b)
@@ -316,7 +331,7 @@ def test_opaque_bundled_probe_anchors_and_api(server, env, tmp_path, chrome):
     spec = store.parse_round_spec(prototype=str(path))
     data = store.create_review('Prototype anchors', '', ORIGIN, 'local', spec, wake=False)
     b = Board(chrome, f"{server}/r/{data['id']}/", wait="!!document.querySelector('.proto iframe')")
-    b.js("window.__positions=[];addEventListener('message',e=>{if(e.source!==document.querySelector('.proto iframe').contentWindow)return;if(e.data.fixtureError)window.__error=e.data.fixtureError;if(e.data.type==='positions')window.__positions=e.data.pins;if(e.data.fixture)window.__fixture=e.data})")
+    b.js("window.__positions=[];window.__seen=[];addEventListener('message',e=>{if(e.source!==document.querySelector('.proto iframe').contentWindow)return;if(e.data.fixtureError)window.__error=e.data.fixtureError;if(e.data.type==='positions')window.__positions=e.data.pins;if(e.data.fixture){window.__fixture=e.data;window.__seen.push(e.data.fixture)}})")
     def command(cmd):
         b.js("document.querySelector('.proto iframe').contentWindow.postMessage({fixtureCommand:%s},'*')" % json.dumps(cmd))
     assert describe_target(b), b.js('JSON.stringify({error:window.__error,fixture:window.__fixture})')
@@ -324,12 +339,17 @@ def test_opaque_bundled_probe_anchors_and_api(server, env, tmp_path, chrome):
     assert b.js("(()=>{try{return !!document.querySelector('.proto iframe').contentWindow.document}catch(_){return false}})()") is False
     on(b)
     frame = json.loads(b.js("JSON.stringify((()=>{let r=document.querySelector('.proto iframe').getBoundingClientRect();return [r.left,r.top]})())"))
+    # Comment mode: the checkbox and the submit button pin themselves; neither flips, nor reaches the page's handler.
     b.click(frame[0] + 16, frame[1] + 16)
-    command('describe'); assert b.until('window.__fixture.checked===true')
+    composer(b, 'Prototype > checkbox')
+    b.js('window.__fixture=null')
+    command('describe'); assert b.until("window.__fixture?.fixture==='described'")
+    assert b.js('window.__fixture.checked') is False
     submit_point = b.js('window.__fixture.submitPoint')
     b.click(frame[0] + submit_point[0], frame[1] + submit_point[1])
-    assert b.until("window.__fixture?.fixture==='form-button'")
-    assert b.js('window.__fixture.prevented') is False  # sandbox still blocks form navigation, as before E2
+    composer(b, 'Prototype > submit \u201cSubmit\u201d')
+    b.cdp.pump(0.3)
+    assert 'form-button' not in b.js('JSON.stringify(window.__seen)'), b.js('JSON.stringify(window.__seen)')
     b.click(frame[0] + 100, frame[1] + 110)
     assert b.until("document.querySelector('.popover .pop-where')?.textContent.startsWith('on Prototype')")
     save(b)
