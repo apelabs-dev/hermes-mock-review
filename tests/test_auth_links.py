@@ -470,7 +470,7 @@ def test_opening_a_confirm_page_keeps_a_signed_in_board_tab_working(env, server,
     that overwrote it with the link's HMAC made the tab's next write answer 403.
     """
     from conftest import FEEDBACK
-    member = account(review_id=review["id"], role="reviewer")
+    member = account(instance="admin", name="Admin")      # Send is the owner's: an admin account is an owner
     link = users.create_login_link("cli") if purpose == "login" else users.create_invite("test")
     jar = {"mr_session": member["session"], "mr_csrf": member["csrf"]}
     status, pairs, _ = raw("GET", server + link["path"],

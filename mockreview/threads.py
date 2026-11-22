@@ -320,9 +320,14 @@ def clean_mentions(review_id: str, values: Any) -> List[Dict[str, str]]:
 
 def _activated(mentions: Sequence[Dict[str, str]], role: Optional[str], can_activate: Optional[bool] = None,
                actor: str = "") -> bool:
+    """Whether this comment's @Hermes activates its thread. The board server decides (`can_activate`, from
+    wakeguard.request_gate), and only it may let a share-link guest's mention through; a caller that does not decide
+    falls back to the role, and a guest never activates there."""
+    if can_activate is not None:
+        return bool(can_activate and any(m["kind"] == "hermes" for m in mentions))
     if str(actor).startswith("guest:"):
         return False
-    allowed = role in ACTIVATE_ROLES if can_activate is None else bool(can_activate)
+    allowed = role in ACTIVATE_ROLES
     return bool(allowed and any(m["kind"] == "hermes" for m in mentions))
 
 

@@ -16,8 +16,8 @@ from .store import ReviewError
 
 log = logging.getLogger("mockreview.service")
 
-# One string for every store-but-never-wake caller: the route passes it for a share-link guest, and the response's
-# `detail` says why nothing was delivered.
+# The detail a guest submission is stored with when its caller gives no reason. The board server never sends one any
+# more (api/submit is the owner's alone, wakeguard.request_gate); `submit(guest=True)` keeps the guard.
 GUEST_NO_WAKE = "a share-link guest never wakes Hermes: what you sent is saved for the owner"
 GUEST_NEVER_DELIVERED = "a share-link guest's feedback is never delivered to Hermes"
 
@@ -160,6 +160,8 @@ def submit(review_id: str, round_n: Any, raw: Any, token: Any, amend: bool = Fal
             "record_id": record_id,
             "submitted_at": store.now_iso(),
             "status": status,
+            # Why the request gate saved it without a wake (the owner from Funnel, say): the board shows it.
+            "stored_detail": no_wake_reason if no_wake_reason and not wake_off and not is_guest else None,
             "attempts": 0,
             "last_error": None,
             "next_attempt": 0,
@@ -810,7 +812,23 @@ def _capped_wake(review_id: str, data: Dict[str, Any], wakes: Dict[str, Any], co
     return {"status": "capped", "notified": False, "detail": detail}
 
 
-def wake_thread_mention(review_id: str, thread: Dict[str, Any], comment_id: str) -> Dict[str, Any]:
+def _mention_by_owner(review_id: str, rec: Dict[str, Any]) -> bool:
+    """Whether the owner queued this mention wake. A record queued before `by_owner` existed was written for an
+    account (the owner or a member, never a guest): it counts as the owner's only when its comment's author is still
+    a `user:` row; anything else, or a comment that cannot be read, fails closed."""
+    if "by_owner" in rec:
+        return rec.get("by_owner") is True
+    author = rec.get("author")
+    if not isinstance(author, str):
+        try:
+            author = str(threads._comment_row(review_id, str(rec.get("comment_id") or ""))["author"])
+        except (ReviewError, OSError, sqlite3.Error, KeyError, TypeError):
+            return False
+    return author.startswith("user:")
+
+
+def wake_thread_mention(review_id: str, thread: Dict[str, Any], comment_id: str,
+                        by_owner: bool = False) -> Dict[str, Any]:
     """Queue one activating `@Hermes` comment for the worker tick.
 
     Called by the board server right after it stored the comment; an idem replay names the same comment id and is a
@@ -818,9 +836,11 @@ def wake_thread_mention(review_id: str, thread: Dict[str, Any], comment_id: str)
     delivers what is due (`retry_thread_wakes`). The pin_fix_max_per_hour / pin_fix_max_per_round budget is shared
     with pin fixes, because both wake the same agent, and it is counted against the newest round at queue time even
     when the thread was opened in an older round: the record's `round` is always that newest round. Only the owning
-    board server delivers: a CLI or MCP call bound to its store stores the comment (a no-op here) and sends nothing. A
-    guest, a token reply and a wake-off board never reach here (`can_activate` is false for them); the checks below
-    are the second half of that guard.
+    board server delivers: a CLI or MCP call bound to its store stores the comment (a no-op here) and sends nothing.
+    The board server calls this only for a comment the request gate let through (wakeguard.request_gate): a token
+    reply, a wake-off board, a commenter and a reviewer the gate held never reach here. `by_owner` is recorded, and
+    `_deliver_thread_wakes` checks a non-owner record against the gate again when it sends. The checks below are the
+    second half of that guard.
     """
     if owner.is_bound():
         return {"status": "deferred", "notified": False,
@@ -828,8 +848,11 @@ def wake_thread_mention(review_id: str, thread: Dict[str, Any], comment_id: str)
     comment = next((c for c in thread.get("comments") or [] if c.get("id") == comment_id), None)
     if comment is None or not comment.get("sent_to_hermes"):
         return {"status": "ignored", "notified": False, "detail": "this comment does not mention Hermes"}
-    if not str(comment.get("author") or "").startswith("user:"):
-        return {"status": "ignored", "notified": False, "detail": "a guest never wakes Hermes"}
+    author = str(comment.get("author") or "")
+    if not author.startswith(("user:", "guest:")):
+        return {"status": "ignored", "notified": False, "detail": "only a person on the board wakes Hermes"}
+    if author.startswith("guest:") and by_owner:
+        return {"status": "ignored", "notified": False, "detail": "a share-link guest is never the owner"}
     anchor = thread.get("anchor") if isinstance(thread.get("anchor"), dict) else {}
     block = str(anchor.get("block") or anchor.get("option") or "")
     now = time.time()
@@ -866,7 +889,7 @@ def wake_thread_mention(review_id: str, thread: Dict[str, Any], comment_id: str)
                 "text": comment.get("text") or "", "anchor": anchor, "block": block,
                 "author_name": comment.get("author_name") or "", "at": store.now_iso(),
                 "status": "pending_notify", "attempts": 0, "next_attempt": 0.0, "sending_until": 0.0,
-                "last_error": None, "request_id": None,
+                "last_error": None, "request_id": None, "by_owner": bool(by_owner), "author": author,
                 "delivery_id": f"mockreview-{review_id}-m-{comment_id}"}
         wakes[comment_id] = wake
         wake["request_id"] = _mention_request(data, review_id, wake)
@@ -883,7 +906,9 @@ def _deliver_thread_wakes(review_id: str, comment_ids: "list[str]",
     A wake queued by an older version may still need its pin request opened here. One send means one delivery id
     and one stamp.
     A permanent failure, a held board or a closed review fails the covered records and their requests; a transient
-    failure leaves them pending for the retry.
+    failure leaves them pending for the retry. A record the owner did not queue is failed with TOOLS_NO_WAKE, and not
+    sent, when the board now wakes a Desktop chat or wake_toolsets is set (the request gate's reviewer rule, checked
+    again because the settings may have changed since the mention was queued).
     """
     if owner.is_bound():
         return False, "not the owner service: only the board server delivers wake-ups"
@@ -918,6 +943,20 @@ def _deliver_thread_wakes(review_id: str, comment_ids: "list[str]",
                 pin_changed = pin_changed or bool(w["request_id"])
         newest = data["rounds"][-1]
         round_n = newest["n"]
+        reviewer_held = wakeguard.reviewer_mention_reason(data.get("origin"))
+        if reviewer_held:
+            refused = [w for w in picked if not _mention_by_owner(review_id, w)]
+            for w in refused:
+                w.update(status="failed", sending_until=0.0, last_error=reviewer_held, next_attempt=0.0)
+                pin_changed = _set_mention_request(data, w.get("request_id"), "failed", reviewer_held) or pin_changed
+            if refused:
+                log.warning("mock-review: mention wake for %s comments %s not sent: %s", review_id,
+                            ", ".join(str(w.get("comment_id")) for w in refused), reviewer_held)
+            picked = [w for w in picked if w not in refused]
+            if not picked:
+                _bounded_thread_wakes(data)
+                store.save(review_id, data, pin_round=round_n if pin_changed else None)
+                return False, reviewer_held
         held = wakeguard.review_exposure(data)
         if held:   # create/add-round refuse this; the setting or host may have changed since
             detail = f"held, not woken: {held}"

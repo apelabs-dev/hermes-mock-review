@@ -122,9 +122,8 @@ def test_members_only_switch_revokes_the_guests_already_inside(env, server, revi
     link = users.share("test", rid, "create", "reviewer")
     guest = join(server, link["path"])
     assert state(server, rid, guest)["me"]["kind"] == "guest"
-    submitted = post(server, api(rid) + "/submit",
-                     {"round": 1, "token": review["token"], "feedback": FEEDBACK}, signed_in(guest))
-    assert submitted[0] == 200
+    note = {"text": "a guest note", "anchor": {"block": "a", "x": 0.2, "y": 0.3}}
+    assert post(server, api(rid) + "/threads", {**note, "idem": "inside"}, signed_in(guest))[0] == 201
 
     recorder = Recorder()
     streams.set_closer(recorder)
@@ -137,6 +136,8 @@ def test_members_only_switch_revokes_the_guests_already_inside(env, server, revi
 
     status, _, _ = raw("GET", server + "/r/{}/state.json".format(rid), headers=signed_in(guest, False))
     assert status == 404
+    status, _, _ = post(server, api(rid) + "/threads", {**note, "idem": "revoked"}, signed_in(guest))
+    assert status in (403, 404)
     status, _, _ = post(server, api(rid) + "/submit",
                         {"round": 1, "token": review["token"], "feedback": FEEDBACK}, signed_in(guest))
     assert status in (403, 404)

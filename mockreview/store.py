@@ -1296,6 +1296,7 @@ def public_state(data: Dict[str, Any]) -> Dict[str, Any]:
             "pin_requests": pin_requests,
             "submission": None if not sub else {
                 "status": sub.get("status"),
+                "detail": sub.get("stored_detail") or "",
                 "submitted_at": sub.get("submitted_at"),
                 "notified_at": sub.get("notified_at"),
                 "amended": bool(sub.get("seq", 1) > 1),

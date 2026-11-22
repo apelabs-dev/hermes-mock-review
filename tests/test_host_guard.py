@@ -232,16 +232,18 @@ def test_same_origin_post_works(board, review, env):
 
 
 def test_public_origin_post_works(board, review):
-    """A real Serve request: the tailnet Host on the served port, HTTPS reported by the trusted proxy, and the Origin
-    naming that same scheme, host and port. A public Host is not the loopback owner, so the reviewer's session carries
-    the request."""
+    """A real Serve request: the tailnet Host on the served port, HTTPS and the one tailnet client address reported by
+    the trusted proxy, and the Origin naming that same scheme, host and port. A proxied request is not the loopback
+    owner, so an admin's session (Send is the owner's alone) carries the request."""
     import authkit
-    reviewer = authkit.account(review["id"], role="reviewer")
-    cookies = "".join(f"{k}: {v}\r\n" for k, v in authkit.signed_in(reviewer).items())
-    code, _ = raw(board, "POST", f"/r/{review['id']}/api/submit", f"{PUBLIC}:8790",
-                  extra=f"Origin: https://{PUBLIC}:8790\r\nX-Forwarded-Proto: https\r\n" + cookies,
-                  body=submit_body(review))
-    assert code == 200
+    admin = authkit.account(instance="admin", name="Admin")
+    cookies = "".join(f"{k}: {v}\r\n" for k, v in authkit.signed_in(admin).items())
+    code, resp = raw(board, "POST", f"/r/{review['id']}/api/submit", f"{PUBLIC}:8790",
+                     extra=(f"Origin: https://{PUBLIC}:8790\r\nX-Forwarded-Proto: https\r\n"
+                            "X-Forwarded-For: 100.64.0.7\r\n" + cookies),
+                     body=submit_body(review))
+    assert code == 200, resp
+    assert b'"notified": true' in resp, resp
 
 
 def test_index_needs_sign_in_off_this_computer(board, review, monkeypatch):

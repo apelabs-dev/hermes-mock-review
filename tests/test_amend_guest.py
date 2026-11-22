@@ -1,5 +1,10 @@
 """FIX-AMEND: a share-link guest can never replace a member's feedback or reach Hermes.
 
+Send is the owner's alone: the board server refuses a guest's or a member reviewer's Send, amend and Build with 403
+before service.submit runs (wakeguard.SUBMIT_OWNER_ONLY). service.submit keeps its own guest rules behind that, so a
+guest record that reaches it some other way (an older board, a future route) is still stored, owner-only and never
+delivered. The service-level tests below build that record by calling service.submit the way the route used to.
+
 Every submission records its author; a guest's canonical record is owner-only data, and every agent-facing reader
 (api.get_feedback, feedback.md/feedback.json) is guest-blind. The deep copy of FEEDBACK carries a unique string so a
 leak into a wake body, an ack, a file or a reader result is easy to see.
@@ -11,7 +16,7 @@ import pytest
 
 from authkit import account, signed_in, token_of
 from conftest import FEEDBACK, SECRET, http
-from mockreview import api, config, service, store, users
+from mockreview import api, config, service, store, users, wakeguard
 from test_plan_format import PLAN, _all_resolved
 
 ORIGIN = {"platform": "discord", "chat_id": "test-chat"}
@@ -35,6 +40,12 @@ def guest_feedback(text):
     return fb
 
 
+def guest_submit(rid, guest, token, feedback, amend=False):
+    """A guest's Send as service.submit sees it: what the route passed before Send became the owner's alone."""
+    return service.submit(rid, 1, feedback, token, amend=amend, source="local", no_wake_reason=service.GUEST_NO_WAKE,
+                          author=f"guest:{guest['guest_id']}", guest=True)
+
+
 def stored_submission(rid):
     return store.load(rid)["rounds"][0]["submission"]
 
@@ -46,6 +57,11 @@ def dump(sub):
 def assert_no_guest_text(requests, text):
     for r in requests:
         assert text not in r["body"].decode("utf-8"), r["path"]
+
+
+def assert_route_refuses(server, rid, guest, body):
+    code, _headers, out = http("POST", submit_url(server, rid), body, signed_in(guest))
+    assert code == 403 and json.loads(out)["error"] == wakeguard.SUBMIT_OWNER_ONLY, out
 
 
 # ---------------------------------------------------------------- negative
@@ -60,9 +76,10 @@ def test_a_guest_cannot_amend_a_members_pending_submission(env, server, review, 
     assert code == 200 and json.loads(out)["status"] == "pending_notify", out
     before = dump(stored_submission(rid))
 
-    code, _headers, out = http("POST", submit_url(server, rid),
-                               {**body, "feedback": guest_feedback(GUEST_A), "amend": True}, signed_in(guest))
-    assert code == 409 and "someone else" in json.loads(out)["error"], out
+    assert_route_refuses(server, rid, guest, {**body, "feedback": guest_feedback(GUEST_A), "amend": True})
+    with pytest.raises(store.ReviewError, match="someone else") as e:
+        guest_submit(rid, guest, review["token"], guest_feedback(GUEST_A), amend=True)
+    assert e.value.status == 409
     assert dump(stored_submission(rid)) == before
     assert stored_submission(rid)["status"] == "pending_notify"
 
@@ -85,9 +102,9 @@ def test_a_guest_cannot_change_a_notified_members_submission(env, server, review
     assert code == 200 and json.loads(out)["status"] == "notified", out
     before = dump(stored_submission(rid))
 
-    code, _headers, out = http("POST", submit_url(server, rid),
-                               {**body, "feedback": guest_feedback(GUEST_A), "amend": True}, signed_in(guest))
-    assert code == 409 and "someone else" in json.loads(out)["error"], out
+    assert_route_refuses(server, rid, guest, {**body, "feedback": guest_feedback(GUEST_A), "amend": True})
+    with pytest.raises(store.ReviewError, match="someone else"):
+        guest_submit(rid, guest, review["token"], guest_feedback(GUEST_A), amend=True)
     after = stored_submission(rid)
     assert dump(after) == before
     assert after["status"] == "notified" and after["seq"] == 1
@@ -96,13 +113,15 @@ def test_a_guest_cannot_change_a_notified_members_submission(env, server, review
     assert_no_guest_text(env["receiver"].requests, GUEST_A)
 
 
-def test_a_guests_stored_send_never_reaches_the_agent_readers(env, server, review):
+def test_a_guests_send_is_refused_at_the_route_and_a_stored_one_never_reaches_the_agent_readers(env, server, review):
     rid = review["id"]
     _made, guest = join_guest(rid)
     body = {"round": 1, "token": review["token"], "feedback": guest_feedback(GUEST_A)}
-    code, _headers, out = http("POST", submit_url(server, rid), body, signed_in(guest))
-    res = json.loads(out)
-    assert code == 200 and res["status"] == "stored" and res["notified"] is False, out
+    assert_route_refuses(server, rid, guest, body)
+    assert store.load(rid)["rounds"][0].get("submission") is None
+
+    res = guest_submit(rid, guest, review["token"], guest_feedback(GUEST_A))
+    assert res["status"] == "stored" and res["notified"] is False, res
     assert res["detail"] == service.GUEST_NO_WAKE
     assert env["receiver"].requests == []
 
@@ -124,17 +143,17 @@ def test_a_guests_stored_send_never_reaches_the_agent_readers(env, server, revie
 # ---------------------------------------------------------------- positive
 
 
-def test_a_guest_can_amend_its_own_submission(env, server, review):
+def test_a_guests_stored_record_is_amended_only_by_that_guest_and_never_over_http(env, server, review):
     rid = review["id"]
     _made, guest = join_guest(rid)
-    body = {"round": 1, "token": review["token"], "feedback": guest_feedback(GUEST_A)}
-    code, _headers, out = http("POST", submit_url(server, rid), body, signed_in(guest))
-    assert code == 200 and json.loads(out)["status"] == "stored", out
+    assert guest_submit(rid, guest, review["token"], guest_feedback(GUEST_A))["status"] == "stored"
 
-    code, _headers, out = http("POST", submit_url(server, rid),
-                               {**body, "feedback": guest_feedback(GUEST_B), "amend": True}, signed_in(guest))
-    res = json.loads(out)
-    assert code == 200 and res["amended"] is True and res["status"] == "stored", out
+    assert_route_refuses(server, rid, guest, {"round": 1, "token": review["token"],
+                                              "feedback": guest_feedback(GUEST_B), "amend": True})
+    assert store.load(rid)["rounds"][0]["feedback"]["guidelines"] == GUEST_A
+
+    res = guest_submit(rid, guest, review["token"], guest_feedback(GUEST_B), amend=True)
+    assert res["amended"] is True and res["status"] == "stored", res
     assert res["notified"] is False and res["detail"] == service.GUEST_NO_WAKE
     rnd = store.load(rid)["rounds"][0]
     assert rnd["feedback"]["guidelines"] == GUEST_B
@@ -145,16 +164,20 @@ def test_a_guest_can_amend_its_own_submission(env, server, review):
     assert got["feedback"] is None and GUEST_B not in json.dumps(got)
 
 
-def test_a_member_amends_its_own_submission(env, server, review):
+def test_a_member_reviewer_cannot_send_and_the_owner_amends_its_own_submission(env, server, review):
     rid = review["id"]
     reviewer = account(review_id=rid, role="reviewer")
     body = {"round": 1, "token": review["token"], "feedback": FEEDBACK}
-    code, _headers, out = http("POST", submit_url(server, rid), body, signed_in(reviewer))
+    for amend in (False, True):
+        code, _headers, out = http("POST", submit_url(server, rid), {**body, "amend": amend}, signed_in(reviewer))
+        assert code == 403 and json.loads(out)["error"] == wakeguard.SUBMIT_OWNER_ONLY, out
+    assert store.load(rid)["rounds"][0].get("submission") is None
+
+    code, _headers, out = http("POST", submit_url(server, rid), body)
     assert code == 200 and json.loads(out)["status"] == "notified", out
 
     amended = guest_feedback("Actually: drop the table.")
-    code, _headers, out = http("POST", submit_url(server, rid),
-                               {**body, "feedback": amended, "amend": True}, signed_in(reviewer))
+    code, _headers, out = http("POST", submit_url(server, rid), {**body, "feedback": amended, "amend": True})
     res = json.loads(out)
     assert code == 200 and res["amended"] is True and res["status"] == "notified", out
     assert stored_submission(rid)["seq"] == 2
@@ -168,9 +191,7 @@ def test_a_member_amends_its_own_submission(env, server, review):
 def test_the_owner_can_supersede_a_guests_submission(env, server, review):
     rid = review["id"]
     _made, guest = join_guest(rid)
-    body = {"round": 1, "token": review["token"], "feedback": guest_feedback(GUEST_A)}
-    code, _headers, out = http("POST", submit_url(server, rid), body, signed_in(guest))
-    assert code == 200 and json.loads(out)["status"] == "stored", out
+    assert guest_submit(rid, guest, review["token"], guest_feedback(GUEST_A))["status"] == "stored"
 
     body = {"round": 1, "token": review["token"], "feedback": FEEDBACK, "amend": True}
     code, _headers, out = http("POST", submit_url(server, rid), body)
@@ -190,10 +211,10 @@ def test_the_owner_can_supersede_a_guests_submission(env, server, review):
     assert GUEST_A not in json.dumps(got)
 
     before = dump(stored_submission(rid))
-    code, _headers, out = http("POST", submit_url(server, rid),
-                               {"round": 1, "token": review["token"],
-                                "feedback": guest_feedback(GUEST_B), "amend": True}, signed_in(guest))
-    assert code == 409 and "someone else" in json.loads(out)["error"], out
+    assert_route_refuses(server, rid, guest, {"round": 1, "token": review["token"],
+                                              "feedback": guest_feedback(GUEST_B), "amend": True})
+    with pytest.raises(store.ReviewError, match="someone else"):
+        guest_submit(rid, guest, review["token"], guest_feedback(GUEST_B), amend=True)
     assert dump(stored_submission(rid)) == before
 
 
@@ -203,9 +224,7 @@ def test_the_owner_can_supersede_a_guests_submission(env, server, review):
 def test_build_payload_refuses_a_guest_round(env, server, review):
     rid = review["id"]
     _made, guest = join_guest(rid)
-    body = {"round": 1, "token": review["token"], "feedback": guest_feedback(GUEST_A)}
-    code, _headers, out = http("POST", submit_url(server, rid), body, signed_in(guest))
-    assert code == 200 and json.loads(out)["status"] == "stored", out
+    assert guest_submit(rid, guest, review["token"], guest_feedback(GUEST_A))["status"] == "stored"
 
     data = store.load(rid)
     with pytest.raises(store.ReviewError, match="never delivered to Hermes"):
@@ -215,9 +234,7 @@ def test_build_payload_refuses_a_guest_round(env, server, review):
 def test_notify_round_refuses_a_guest_round(env, server, review):
     rid = review["id"]
     _made, guest = join_guest(rid)
-    body = {"round": 1, "token": review["token"], "feedback": guest_feedback(GUEST_A)}
-    code, _headers, out = http("POST", submit_url(server, rid), body, signed_in(guest))
-    assert code == 200 and json.loads(out)["status"] == "stored", out
+    assert guest_submit(rid, guest, review["token"], guest_feedback(GUEST_A))["status"] == "stored"
 
     assert service.notify_round(rid, 1) == (False, service.GUEST_NEVER_DELIVERED)
     assert env["receiver"].requests == []
@@ -238,9 +255,9 @@ def test_a_guests_marks_do_not_settle_the_round_for_the_agent(env, server, tmp_p
     data, path = _plan(tmp_path)
     rid = data["id"]
     _made, guest = join_guest(rid)
-    body = {"round": 1, "token": data["token"], "feedback": {"marks": _all_resolved(), "action": "send"}}
-    code, _headers, out = http("POST", submit_url(server, rid), body, signed_in(guest))
-    assert code == 200 and json.loads(out)["status"] == "stored", out
+    feedback = {"marks": _all_resolved(), "action": "send"}
+    assert_route_refuses(server, rid, guest, {"round": 1, "token": data["token"], "feedback": feedback})
+    assert guest_submit(rid, guest, data["token"], feedback)["status"] == "stored"
 
     first = store.load(rid)["rounds"][0]
     assert store.guest_submission(first) is True

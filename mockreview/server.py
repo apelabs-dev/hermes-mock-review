@@ -21,7 +21,8 @@ Routes (every one behind the Host allowlist and the access layer: auth.py, acces
     GET  /r/<id>/rounds/<n>/<v>/<path>      variant files, and an artifact page at rounds/<n>/a/blocks/<id>.html
                                             (served sandboxed)
     GET  /r/<id>/api/share                  the share view: link, seats, people, rounds (owner)
-    POST /r/<id>/api/submit                 {"round", "token", "amend", "feedback"} (reviewer)
+    POST /r/<id>/api/submit                 {"round", "token", "amend", "feedback"} (owner; wakes only from private
+                                            ingress, see wakeguard.request_gate)
     POST /r/<id>/api/share                  {"action": create|regenerate|update|stop, "guest_role", "expires",
                                              "audience", "round"} -> the share view (owner)
     POST /r/<id>/api/people                 {"action": invite|grant|revoke, ...} (owner)
@@ -52,7 +53,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Tuple, Union
 
 from . import (access, api, auth, config, export, frames, live, owner, pages, runtime, secrets, service, settings, sse,
-               store, threads, users)
+               store, threads, users, wakeguard)
 from .store import ReviewError
 
 log = logging.getLogger("mockreview.server")
@@ -1188,17 +1189,20 @@ class Handler(BaseHTTPRequestHandler):
             if thread_cap is not None:
                 return self._thread_post(rid, who, decision, rest, body)
             action = rest[0]
-            quiet = service.GUEST_NO_WAKE if who.guest is not None else ""
             if action == "submit":
+                # Send, amend and Build are the owner's alone (wakeguard.request_gate); the owner's own Send from the
+                # Funnel URL or another public path is saved and not woken.
+                if decision.role != "owner":
+                    raise ReviewError(wakeguard.SUBMIT_OWNER_ONLY, 403)
                 res = service.submit(rid, body.get("round"), body.get("feedback"), body.get("token"),
                                      amend=body.get("amend") is True, source="local",
-                                     no_wake_reason=quiet, author=who.actor,
-                                     guest=who.guest is not None)
+                                     no_wake_reason=self._wake_gate(wakeguard.SUBMIT, decision),
+                                     author=who.actor, guest=who.guest is not None)
                 return self._json(200, res)
             if action == "pin-fix":
                 res = service.request_pin_fix(rid, body.get("round"), body.get("pin"), body.get("token"),
                                               idem=body.get("idem"), requester=who.actor,
-                                              no_wake_reason=quiet)
+                                              no_wake_reason=self._wake_gate(wakeguard.PIN_FIX, decision))
                 return self._json(200, res)
             if action == "share":
                 round_value = body.get("round")
@@ -1254,14 +1258,40 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("POST %s failed", urllib.parse.urlsplit(self.path).path.split("/")[1:2])
             self._json(500, {"ok": False, "error": "internal error"})
 
+    def _wake_gate(self, kind: str, decision: "access.Decision", origin: Any = None) -> str:
+        """wakeguard.request_gate for this request: "" when it may wake Hermes, else why it is saved instead."""
+        req = self._req()
+        return wakeguard.request_gate(kind, decision.role, auth.private_ingress(req), origin,
+                                      funnel=auth.via_funnel(req))
+
+    def _mention_gate(self, rid: str, who: "auth.Who", decision: "access.Decision") -> Tuple[bool, str]:
+        """(can_activate, why a mention is saved instead). An agent's token writes comments and thread status; it
+        never activates @Hermes, so two agents cannot wake each other (the MCP tool already drops a hermes mention, and
+        this is the server-side half of that guard), and no post on a board created with wake-up off does: both are
+        plain comments with no reason to report. Everyone else asks the request gate."""
+        data = store.load(rid)
+        if who.source == "token" or data.get("wake") is False:
+            return False, ""
+        reason = self._wake_gate(wakeguard.MENTION, decision, data.get("origin"))
+        return not reason, reason
+
+    def _mention_wake(self, rid: str, thread: Dict[str, Any], comment: Optional[Dict[str, Any]],
+                      decision: "access.Decision", can_activate: bool, reason: str) -> Optional[Dict[str, Any]]:
+        """The `wake` member of a thread POST answer, or None when the comment does not mention Hermes."""
+        if not comment or not _mentions_hermes(comment):
+            return None
+        if can_activate:
+            # One wake per activating comment: the comment id is the idempotency key, so an idem replay is a
+            # duplicate and a plain reply on an already-activated thread wakes nobody.
+            return service.wake_thread_mention(rid, thread, comment["id"], by_owner=decision.role == "owner")
+        if reason:
+            return {"status": "stored", "notified": False, "detail": reason}
+        return None
+
     def _thread_post(self, rid: str, who: "auth.Who", decision: "access.Decision", rest: List[str],
                      body: Dict[str, Any]) -> None:
-        # An agent's token writes comments and thread status; it never activates @Hermes, so two agents cannot wake
-        # each other. The MCP tool already drops a hermes mention, and this is the server-side half of that guard.
-        # A guest never activates either, and no post on a board created with wake-up off does.
         if rest == ["threads"]:
-            can_activate = (access.can(decision, "submit") and who.source != "token" and who.guest is None
-                            and store.load(rid).get("wake") is not False)
+            can_activate, reason = self._mention_gate(rid, who, decision)
             round_n = body.get("round")
             if round_n is not None:
                 try:
@@ -1273,15 +1303,13 @@ class Handler(BaseHTTPRequestHandler):
                 decision.role, body.get("text"), anchor=body.get("anchor"), mentions=body.get("mentions"),
                 round_n=round_n, idem=body.get("idem"), can_activate=can_activate, principal=who.actor)
             res = {"ok": True, "thread": thread}
-            comment = (thread.get("comments") or [None])[0]
-            if can_activate and comment and _mentions_hermes(comment):
-                # One wake per activating comment: the comment id is the idempotency key, so an idem replay is a
-                # duplicate and a plain reply on an already-activated thread wakes nobody.
-                res["wake"] = service.wake_thread_mention(rid, thread, comment["id"])
+            wake = self._mention_wake(rid, thread, (thread.get("comments") or [None])[0], decision, can_activate,
+                                      reason)
+            if wake is not None:
+                res["wake"] = wake
             return self._json(201, res)
         if len(rest) == 3 and rest[0] == "threads" and rest[2] == "reply":
-            can_activate = (access.can(decision, "submit") and who.source != "token" and who.guest is None
-                            and store.load(rid).get("wake") is not False)
+            can_activate, reason = self._mention_gate(rid, who, decision)
             thread, comment_id = threads.reply_comment(
                 rid, rest[1], who.actor,
                 ((who.user or {}).get("name") or (who.guest or {}).get("display_name") or "Guest"),
@@ -1289,8 +1317,9 @@ class Handler(BaseHTTPRequestHandler):
                 can_activate=can_activate, principal=who.actor)
             comment = next((c for c in thread.get("comments") or [] if c["id"] == comment_id), None)
             res = {"ok": True, "thread": thread, "comment": comment}
-            if can_activate and comment and _mentions_hermes(comment):
-                res["wake"] = service.wake_thread_mention(rid, thread, comment_id)
+            wake = self._mention_wake(rid, thread, comment, decision, can_activate, reason)
+            if wake is not None:
+                res["wake"] = wake
             return self._json(200, res)
         if len(rest) == 3 and rest[0] == "threads" and rest[2] == "status":
             # The board offers Resolve to anyone who may comment, but an agent's token is narrower: the card and the MCP
