@@ -24,8 +24,10 @@ board. It reads who is asking (the review role) and how the request arrived (`au
 - a reviewer who is not the owner (a guest link's reviewer role or a member's reviewer grant), or the owner off
   private ingress, wakes Hermes with an @Hermes mention only when the board wakes a messaging chat through its webhook
   route and wake_toolsets is empty, from any ingress. A Desktop chat or a route with tools keeps that mention saved.
-  `_deliver_thread_wakes` checks the same rule again when it sends, because the settings can change after the mention
-  was queued.
+  A reviewer's link or grant also needs the owner's confirmation that this Reviewer may wake Hermes
+  (`users.wake_ok_for`), which only setting or re-confirming Reviewer in Share records: a row from before this gate
+  existed is saved until then. `_deliver_thread_wakes` checks both rules again when it sends, because the settings and
+  the role can change after the mention was queued.
 - a commenter or viewer never wakes Hermes.
 """
 
@@ -50,6 +52,8 @@ OUTSIDE_NO_WAKE = ("sent from outside this computer and the tailnet: saved, and 
 TOOLS_NO_WAKE = "saved; Hermes wasn't woken because this board's chat has tools a guest may not trigger"
 PIN_FIX_OWNER_ONLY = "saved for the owner; a pin fix from anyone but the owner doesn't wake Hermes"
 MENTION_ROLE_NO_WAKE = "saved; only the owner or a reviewer can wake Hermes with a mention"
+REVIEWER_WAKE_UNCONFIRMED = ("saved; Hermes was not woken: the owner has not confirmed that this Reviewer may wake "
+                             "Hermes. Ask them to pick Reviewer again in Share.")
 SUBMIT_OWNER_ONLY = ("only the owner sends feedback to Hermes; your comments and pins stay on the board for them")
 
 

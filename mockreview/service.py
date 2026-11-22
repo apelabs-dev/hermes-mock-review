@@ -957,10 +957,12 @@ def _deliver_thread_wakes(review_id: str, comment_ids: "list[str]",
     A wake queued by an older version may still need its pin request opened here. One send means one delivery id
     and one stamp.
     A permanent failure, a held board or a closed review fails the covered records and their requests; a transient
-    failure leaves them pending for the retry. A record the owner did not queue is failed with TOOLS_NO_WAKE, and not
-    sent, when the board now wakes a Desktop chat or wake_toolsets is set (the request gate's reviewer rule, checked
-    again because the settings may have changed since the mention was queued). A legacy record whose author is not an
-    admin account is failed with LEGACY_QUEUED_NO_WAKE and not sent.
+    failure leaves them pending for the retry. A record the owner did not queue is failed with
+    REVIEWER_WAKE_UNCONFIRMED, and not sent, when its author's link or grant no longer carries the owner's Reviewer
+    confirmation (the owner may have changed the role after the mention was queued). It is failed with TOOLS_NO_WAKE,
+    and not sent, when the board now wakes a Desktop chat or wake_toolsets is set (the request gate's reviewer rule,
+    checked again because the settings may have changed since the mention was queued). A legacy record whose author is
+    not an admin account is failed with LEGACY_QUEUED_NO_WAKE and not sent.
     """
     if owner.is_bound():
         return False, "not the owner service: only the board server delivers wake-ups"
@@ -1004,6 +1006,22 @@ def _deliver_thread_wakes(review_id: str, comment_ids: "list[str]",
             _bounded_thread_wakes(data)
             store.save(review_id, data, pin_round=round_n if pin_changed else None)
             return False, LEGACY_QUEUED_NO_WAKE
+        unconfirmed = [w for w in picked if not _mention_by_owner(review_id, w)
+                       and not users.wake_ok_for(review_id, str(w.get("author") or ""))]
+        for w in unconfirmed:
+            w.update(status="failed", sending_until=0.0, last_error=wakeguard.REVIEWER_WAKE_UNCONFIRMED,
+                     next_attempt=0.0)
+            pin_changed = _set_mention_request(data, w.get("request_id"), "failed",
+                                               wakeguard.REVIEWER_WAKE_UNCONFIRMED) or pin_changed
+        if unconfirmed:
+            log.warning("mock-review: mention wake for %s comments %s not sent: %s", review_id,
+                        ", ".join(str(w.get("comment_id")) for w in unconfirmed),
+                        wakeguard.REVIEWER_WAKE_UNCONFIRMED)
+        picked = [w for w in picked if w not in unconfirmed]
+        if not picked:
+            _bounded_thread_wakes(data)
+            store.save(review_id, data, pin_round=round_n if pin_changed else None)
+            return False, wakeguard.REVIEWER_WAKE_UNCONFIRMED
         for w in picked:
             if not w.get("request_id"):
                 w["request_id"] = _mention_request(data, review_id, w)

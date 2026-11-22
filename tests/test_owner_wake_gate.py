@@ -9,12 +9,13 @@ carries X-Forwarded-For is proxied (Tailscale Serve sets exactly one tailnet add
 """
 
 import json
+import sqlite3
 
 import pytest
 
 from authkit import account, peer, signed_in, token_of  # noqa: F401  (peer is a fixture)
 from conftest import FEEDBACK, http
-from mockreview import access, api, auth, config, service, store, users, wakeguard
+from mockreview import access, api, auth, config, db, service, store, users, wakeguard
 from mockreview.store import ReviewError
 from test_all_platform_wake import (LOCAL_CHAT, LOCAL_KEY, MENTION_DECISIONS, bind_session, create_tool,  # noqa: F401
                                     gateway, wait_for)
@@ -757,3 +758,112 @@ def test_a_mention_queued_by_an_older_version_counts_as_the_owners_only_for_an_a
     tick()
     assert [m["text"] for m in json.loads(env["receiver"].wakes[0]["body"])["mentions"]] == ["@Hermes from the owner"]
     assert sorted(r["status"] for r in wake_records(rid).values()) == ["failed", "notified"]
+
+
+# ---------------------------------------------------------------- 9. a reviewer wakes only after the owner confirms
+
+
+def old_wake_ok(table, rid):
+    """Simulate a row that predates the opt-in: the migration gave it wake_ok 0."""
+    with db.tx() as conn:
+        conn.execute(f"UPDATE {table} SET wake_ok = 0 WHERE review_id = ?", (rid,))
+
+
+def test_a_reviewer_link_from_before_the_update_is_saved_not_woken(env, server, tmp_path):
+    rid = mention_board(tmp_path)["id"]
+    guest = join_guest(rid)
+    old_wake_ok("share_links", rid)
+
+    code, res = mention(server, rid, signed_in(guest))
+    assert code == 201, res
+    assert res["wake"]["status"] == "stored", res
+    assert res["wake"]["detail"] == wakeguard.REVIEWER_WAKE_UNCONFIRMED
+    assert res["thread"]["activated"] is False and res["thread"]["comments"][0]["sent_to_hermes"] is False
+    tick()
+    assert env["receiver"].wakes == [] and wake_records(rid) == {}
+
+
+def test_reconfirming_reviewer_in_share_lets_the_same_link_wake(env, server, tmp_path):
+    rid = mention_board(tmp_path)["id"]
+    guest = join_guest(rid)
+    old_wake_ok("share_links", rid)
+    code, res = mention(server, rid, signed_in(guest), idem="old")
+    assert code == 201 and res["wake"]["detail"] == wakeguard.REVIEWER_WAKE_UNCONFIRMED, res
+    assert env["receiver"].wakes == [] and wake_records(rid) == {}
+
+    users.share("test", rid, "update", "reviewer")
+    users.share("test", rid, "update", expires="24h")          # no role: the confirmation is kept
+    wake_ok = db.connect().execute("SELECT wake_ok FROM share_links WHERE review_id = ?", (rid,)).fetchone()[0]
+    assert wake_ok == 1
+    code, res = mention(server, rid, signed_in(guest), idem="confirmed")
+    assert code == 201 and res["wake"]["status"] == "pending_notify", res
+    tick()
+    assert len(env["receiver"].wakes) == 1
+
+
+def test_a_reviewer_grant_from_before_the_update_is_saved_and_a_regrant_wakes(env, server, tmp_path):
+    rid = mention_board(tmp_path)["id"]
+    member = account(review_id=rid, role="reviewer")
+    with db.tx() as conn:
+        conn.execute("UPDATE grants SET wake_ok = 0 WHERE user_id = ? AND review_id = ?", (member["user_id"], rid))
+
+    code, res = mention(server, rid, signed_in(member), idem="old")
+    assert code == 201 and res["wake"]["detail"] == wakeguard.REVIEWER_WAKE_UNCONFIRMED, res
+    assert env["receiver"].wakes == [] and wake_records(rid) == {}
+
+    users.grant("test", member["user_id"], "reviewer", review_id=rid)
+    code, res = mention(server, rid, signed_in(member), idem="confirmed")
+    assert code == 201 and res["wake"]["status"] == "pending_notify", res
+    tick()
+    assert len(env["receiver"].wakes) == 1
+
+
+def test_wake_ok_for_follows_the_effective_grant_and_fails_closed(env, tmp_path):
+    rid = mention_board(tmp_path)["id"]
+    member = account(all_reviews=True, role="reviewer")
+    assert users.wake_ok_for(rid, f"user:{member['user_id']}") is True
+
+    users.grant("test", member["user_id"], "commenter", review_id=rid)
+    assert users.wake_ok_for(rid, f"user:{member['user_id']}") is False  # the review's own grant wins
+
+    users.grant("test", member["user_id"], "reviewer", review_id=rid)
+    assert users.wake_ok_for(rid, f"user:{member['user_id']}") is True
+    assert users.wake_ok_for(rid, "guest:no-such-guest") is False
+    assert users.wake_ok_for(rid, f"user:{users.owner_user()['id']}") is True
+    assert users.wake_ok_for(rid, "token:abc") is False
+
+
+def test_the_migration_leaves_an_existing_reviewer_link_and_grant_at_zero(env, tmp_path):
+    path = tmp_path / "version-5.sqlite3"
+    conn = sqlite3.connect(str(path), isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    try:
+        assert db.migrate(conn, db.MIGRATIONS[:5]) == 5
+        conn.execute("INSERT INTO users (id, name, email, role, source, created_at) "
+                     "VALUES (1, 'Old member', '', 'member', 'test', 1)")
+        conn.execute("INSERT INTO share_links (review_id, active, audience, guest_role, generation, created_by, "
+                     "created_at) VALUES ('old-review', 1, 'anyone', 'reviewer', 1, 'test', 1)")
+        conn.execute("INSERT INTO grants (review_id, all_reviews, user_id, role, granted_by, created_at) "
+                     "VALUES ('old-review', 0, 1, 'reviewer', 'test', 1)")
+
+        assert db.migrate(conn) == 6
+        link = conn.execute("SELECT wake_ok FROM share_links WHERE review_id = 'old-review'").fetchone()[0]
+        grant = conn.execute("SELECT wake_ok FROM grants WHERE review_id = 'old-review'").fetchone()[0]
+        assert (link, grant) == (0, 0)
+    finally:
+        conn.close()
+
+
+def test_a_queued_reviewers_mention_is_not_sent_once_the_owner_clears_reviewer(env, server, tmp_path):
+    rid = mention_board(tmp_path)["id"]
+    guest = join_guest(rid)
+    code, res = mention(server, rid, signed_in(guest))
+    assert code == 201 and res["wake"]["status"] == "pending_notify", res
+
+    users.share("test", rid, "update", "commenter")
+    tick()
+    assert env["receiver"].wakes == []
+    rec = next(iter(wake_records(rid).values()))
+    assert rec["status"] == "failed" and rec["last_error"] == wakeguard.REVIEWER_WAKE_UNCONFIRMED, rec
+    chip = pin_requests(rid)[rec["request_id"]]
+    assert chip["status"] == "failed" and chip["detail"] == wakeguard.REVIEWER_WAKE_UNCONFIRMED, chip

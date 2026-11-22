@@ -359,18 +359,21 @@ def test_sessions_and_link_nonces_are_stored_hashed(env):
 
 def test_migrations_are_versioned_idempotent_and_include_comments_and_events(env):
     conn = db.connect()
-    assert db.version(conn) == db.MIGRATIONS[-1][0] == 5
-    assert db.migrate(conn) == 5
-    assert [n for n, _ in db.MIGRATIONS] == [1, 2, 3, 4, 5]
+    assert db.version(conn) == db.MIGRATIONS[-1][0] == 6
+    assert db.migrate(conn) == 6
+    assert [n for n, _ in db.MIGRATIONS] == [1, 2, 3, 4, 5, 6]
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     assert {"users", "identities", "sessions", "grants", "invites", "share_links", "guests", "access_tokens", "audit",
             "login_throttle", "revoked_sessions", "threads", "comments", "mentions", "reads", "events"} <= tables
     assert "round" in {r["name"] for r in conn.execute("PRAGMA table_info(share_links)")}
+    for table in ("share_links", "grants"):
+        assert "wake_ok" in {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
     assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == db.BUSY_TIMEOUT_MS
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     assert re.search(r"\b2\b.*comments", db.__doc__, re.S) and re.search(r"\b3\b.*events", db.__doc__, re.S)
     assert re.search(r"\b4\b.*round", db.__doc__, re.S) and re.search(r"\b5\b.*revoked", db.__doc__, re.S)
+    assert re.search(r"\b6\b.*wake_ok", db.__doc__, re.S)
 
 
 def test_each_thread_gets_its_own_connection(env):

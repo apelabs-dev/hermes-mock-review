@@ -544,9 +544,10 @@ def _grant(conn: sqlite3.Connection, actor: str, user_id: int, role: str, review
         raise AuthError("a grant is for one review (--review) or for all reviews (--all-reviews)")
     conn.execute("DELETE FROM grants WHERE user_id = ? AND COALESCE(review_id, '*') = ?",
                  (user_id, review_id or "*"))
-    conn.execute("INSERT INTO grants (review_id, all_reviews, user_id, role, expires_at, granted_by, created_at) "
-                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                 (review_id, 1 if all_reviews else 0, user_id, role, expires_at, actor, now()))
+    conn.execute("INSERT INTO grants (review_id, all_reviews, user_id, role, expires_at, granted_by, created_at, "
+                 "wake_ok) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                 (review_id, 1 if all_reviews else 0, user_id, role, expires_at, actor, now(),
+                  1 if role == "reviewer" else 0))
     audit(conn, actor, "grant.set", f"user:{user_id}", review_id=review_id, all_reviews=bool(all_reviews), role=role,
           expires_at=expires_at)
 
@@ -596,6 +597,37 @@ def granted_review_ids(user_id: int) -> Tuple[bool, List[str]]:
     rows = db.connect().execute("SELECT review_id, all_reviews FROM grants WHERE user_id = ? AND "
                                 "(expires_at IS NULL OR expires_at > ?)", (user_id, now())).fetchall()
     return any(r["all_reviews"] for r in rows), [r["review_id"] for r in rows if r["review_id"]]
+
+
+def wake_ok_for(review_id: str, actor: str) -> bool:
+    """Whether this actor's current access to the review includes the owner's confirmation that its Reviewer role may
+    wake Hermes, read fresh from the database. An admin is the owner; a member follows the effective live grant (the
+    review's own grant wins over an all-reviews one, as in grant_role); a guest's own guest row must belong to the
+    review, then the review's share link answers. Anything else, or an unreadable row, fails closed."""
+    if not isinstance(actor, str):
+        return False
+    conn = db.connect()
+    if actor.startswith("guest:"):
+        guest = conn.execute("SELECT review_id FROM guests WHERE id = ?", (actor[6:],)).fetchone()
+        if guest is None or guest["review_id"] != review_id:
+            return False
+        link = conn.execute("SELECT wake_ok FROM share_links WHERE review_id = ?", (review_id,)).fetchone()
+        return bool(link is not None and int(link["wake_ok"] or 0) == 1)
+    if actor.startswith("user:"):
+        uid = actor[5:]
+        if not uid.isdigit():
+            return False
+        user = conn.execute("SELECT role FROM users WHERE id = ?", (int(uid),)).fetchone()
+        if user is None:
+            return False
+        if user["role"] == "admin":
+            return True
+        grant = conn.execute(
+            "SELECT wake_ok FROM grants WHERE user_id = ? AND (review_id = ? OR all_reviews = 1) "
+            "AND (expires_at IS NULL OR expires_at > ?) ORDER BY review_id IS NULL",
+            (int(uid), review_id, now())).fetchone()
+        return bool(grant is not None and int(grant["wake_ok"] or 0) == 1)
+    return False
 
 
 # ---------------------------------------------------------------- share links and guests
@@ -732,7 +764,9 @@ def _set_link(actor: str, review_id: str, action: str, guest_role: Optional[str]
 
     `expires` absent (UNSET) leaves the stored expiry alone; present and None / "" / "never" means it never expires.
     `audience` and `round` are validated here; the server also checks the round exists in the review. A change to the
-    stored `guest_role` or `round` closes the review's open guest streams, so the board reconnects under the new scope."""
+    stored `guest_role` or `round` closes the review's open guest streams, so the board reconnects under the new scope.
+    Passing `guest_role` also records the owner's confirmation that a Reviewer link may wake Hermes (and clears it for
+    any other role); leaving it out keeps the stored role and its confirmation."""
     if guest_role is not None and guest_role not in REVIEW_ROLES:
         raise AuthError("guest role must be reviewer, commenter or viewer")
     if audience is not None:
@@ -756,10 +790,11 @@ def _set_link(actor: str, review_id: str, action: str, guest_role: Optional[str]
                 aud = audience or "anyone"
                 revoke_guests = aud == "members"
                 version = round or "latest"
+                wake = 1 if role == "reviewer" else 0
                 conn.execute("INSERT OR REPLACE INTO share_links (review_id, active, audience, guest_role, "
-                             "expires_at, generation, round, created_by, created_at) "
-                             "VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?)",
-                             (review_id, aud, role, until, gen, version, actor, now()))
+                             "expires_at, generation, round, created_by, created_at, wake_ok) "
+                             "VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?)",
+                             (review_id, aud, role, until, gen, version, actor, now(), wake))
                 audit(conn, actor, "share.create", f"review:{review_id}", guest_role=role, generation=gen,
                       expires_at=until, audience=aud, round=version)
             elif r is None or not r["active"]:
@@ -771,9 +806,10 @@ def _set_link(actor: str, review_id: str, action: str, guest_role: Optional[str]
                 aud = audience or r["audience"]
                 revoke_guests = aud == "members"
                 version = round or r["round"]
+                wake = (1 if role == "reviewer" else 0) if guest_role is not None else int(r["wake_ok"])
                 conn.execute("UPDATE share_links SET generation = generation + 1, guest_role = ?, expires_at = ?, "
-                             "audience = ?, round = ? WHERE review_id = ?",
-                             (role, stored_expiry, aud, version, review_id))
+                             "audience = ?, round = ?, wake_ok = ? WHERE review_id = ?",
+                             (role, stored_expiry, aud, version, wake, review_id))
                 audit(conn, actor, "share.regenerate", f"review:{review_id}", generation=r["generation"] + 1,
                       guest_role=role, expires_at=stored_expiry, audience=aud, round=version)
             elif action == "update":
@@ -782,8 +818,9 @@ def _set_link(actor: str, review_id: str, action: str, guest_role: Optional[str]
                 aud = audience or r["audience"]
                 revoke_guests = aud == "members"
                 version = round or r["round"]
-                conn.execute("UPDATE share_links SET guest_role = ?, expires_at = ?, audience = ?, round = ? "
-                             "WHERE review_id = ?", (role, stored_expiry, aud, version, review_id))
+                wake = (1 if role == "reviewer" else 0) if guest_role is not None else int(r["wake_ok"])
+                conn.execute("UPDATE share_links SET guest_role = ?, expires_at = ?, audience = ?, round = ?, "
+                             "wake_ok = ? WHERE review_id = ?", (role, stored_expiry, aud, version, wake, review_id))
                 audit(conn, actor, "share.update", f"review:{review_id}", guest_role=role, expires_at=stored_expiry,
                       audience=aud, round=version)
             elif action == "stop":

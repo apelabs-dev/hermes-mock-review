@@ -328,7 +328,7 @@ review role) and how the request arrived:
 |---|---|---|---|
 | owner, from private ingress | wakes | wakes | wakes |
 | owner, from anywhere else | saved, not woken | saved quietly, not woken | wakes on a board that wakes a messaging chat while `wake_toolsets` is empty (the reviewer rule below); else saved |
-| reviewer who is not the owner (guest or member) | 403 | saved quietly, never woken | wakes only on a board that wakes a messaging chat while `wake_toolsets` is empty, from any ingress (Funnel included); else saved. The woken session holds the `mock_review_*` tools for every review on this install, so give Reviewer only to someone you trust with all of them |
+| reviewer who is not the owner (guest or member) | 403 | saved quietly, never woken | wakes only after the owner has set or re-confirmed Reviewer in Share for that link or grant, and only on a board that wakes a messaging chat while `wake_toolsets` is empty, from any ingress (Funnel included); else saved. A Reviewer link or grant that predates this update is saved, not woken, until re-confirmed. The woken session holds the `mock_review_*` tools for every review on this install, so give Reviewer only to someone you trust with all of them |
 | commenter, viewer | 403 | 403 | a commenter's is saved, never woken; a viewer cannot comment |
 | an agent's token | — | — | never activates |
 
@@ -345,14 +345,20 @@ Tailscale Serve is therefore saved, not woken. An owner's `@Hermes` mention is t
 follows the reviewer rule below.
 
 A mention that the gate saves says why ("saved; Hermes wasn't woken because this board's chat has tools a
-guest may not trigger"). The server checks the same rule again when it delivers a queued mention wake, because the
-settings can change in between: a mention wake whose board now wakes a Desktop chat, or whose route now has
-`wake_toolsets`, fails with that reason and nothing is sent. Reviewer mentions share the pin-fix caps
-(`pin_fix_max_per_hour`, `pin_fix_max_per_round`), and a board created with wake-up off never wakes anyone.
+guest may not trigger"). A Reviewer's `@Hermes` mention is saved with "the owner has not confirmed that this Reviewer
+may wake Hermes" until the owner sets or re-confirms Reviewer in Share for that link or grant: choosing Reviewer before
+this update did not go through that confirmation, so every existing Reviewer link and grant starts saved. Picking any
+other role clears the confirmation. The server checks the same rules again when it delivers a queued mention wake,
+because the settings and the role can change in between: a mention wake whose author's Reviewer confirmation is gone,
+or whose board now wakes a Desktop chat, or whose route now has `wake_toolsets`, fails with that reason and nothing is
+sent. Reviewer mentions share the pin-fix caps (`pin_fix_max_per_hour`, `pin_fix_max_per_round`), and a board created
+with wake-up off never wakes anyone.
 
 In the board, only the owner sees Send and Build; anyone else sees "Only the owner sends this round to Hermes. Your
 comments and pins are on the board for them." Choosing Reviewer for someone in the Share dialog (the link's guests, a
-person, or a new invite) asks first, because a reviewer can wake Hermes with a mention.
+person, or a new invite) asks first, because a reviewer can wake Hermes with a mention. That confirmation is also what
+lets the Reviewer wake by mention: for a Reviewer link, person or invite made before this update, pick another role and
+then Reviewer again to confirm it.
 
 ## MCP server (stdio)
 

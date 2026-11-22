@@ -1268,11 +1268,14 @@ class Handler(BaseHTTPRequestHandler):
         """(can_activate, why a mention is saved instead). An agent's token writes comments and thread status; it
         never activates @Hermes, so two agents cannot wake each other (the MCP tool already drops a hermes mention, and
         this is the server-side half of that guard), and no post on a board created with wake-up off does: both are
-        plain comments with no reason to report. Everyone else asks the request gate."""
+        plain comments with no reason to report. Everyone else asks the request gate; a non-owner Reviewer also needs
+        the owner's confirmation on its link or grant, read fresh from the database."""
         data = store.load(rid)
         if who.source == "token" or data.get("wake") is False:
             return False, ""
         reason = self._wake_gate(wakeguard.MENTION, decision, data.get("origin"))
+        if not reason and decision.role == "reviewer" and not users.wake_ok_for(rid, who.actor):
+            reason = wakeguard.REVIEWER_WAKE_UNCONFIRMED
         return not reason, reason
 
     def _mention_wake(self, rid: str, thread: Dict[str, Any], comment: Optional[Dict[str, Any]],
