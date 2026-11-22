@@ -64,8 +64,10 @@ import {paintAvatar} from './avatar.js';
   // Who is looking (state.json `me`, served by the board server) and the CSRF token every POST
   // carries: the server sets the mr_csrf cookie and wants the same value back in X-CSRF-Token.
   function me() { return (S.review && S.review.me) || null; }
-  function isGuest() { var m = me(); return !!m && m.kind === 'guest'; }
   function canDo(cap) { var m = me(); return !m || (m.caps || []).indexOf(cap) >= 0; }
+  // Send and Build are the owner's alone: the board server answers 403 to anyone else. No `me` is an older board
+  // server, which keeps its own rule.
+  function ownerSends() { var m = me(); return !m || m.review_role === 'owner'; }
   // Commenting is its own capability: any round, submitted or not, and never gated on the submit role.
   function canComment() { return !!R() && canDo('comment') && pinsOn(); }
   function csrfToken() {
@@ -189,12 +191,14 @@ import {paintAvatar} from './avatar.js';
   function viewed() { return roundObj(S.view); }
   function key(suffix, n) { return 'mr:' + R().id + ':r' + (n || S.view) + ':' + suffix; }
   function localSent(n) { return lsGet(key('sent', n)); }
-  // A wake-off board saves feedback without pinging Hermes, and a guest link never wakes it: one copy for the
-  // banner, the send bar and the toast.
+  // A wake-off board saves feedback without pinging Hermes, and so does a Send the request gate held (the server's
+  // `detail` says why): one copy for the banner, the send bar and the toast.
   var STORED_GUEST_COPY = 'Saved by a share-link guest. Hermes was not pinged: tell it in chat.';
-  function savedCopy(state, otherwise) {
-    if (isGuest()) return 'Saved for the owner. A guest link never pings Hermes — the owner starts it.';
-    return state && state.wake === false ? 'Saved. This board does not ping Hermes: tell it in chat.' : otherwise;
+  var OWNER_ONLY_COPY = 'Only the owner sends this round to Hermes. Your comments and pins are on the board for them.';
+  function savedCopy(state, otherwise, sub) {
+    if (state && state.wake === false) return 'Saved. This board does not ping Hermes: tell it in chat.';
+    if (!ownerSends()) return 'Saved on the board. Hermes was not pinged: only the owner sends a round to Hermes.';
+    return (sub && sub.detail) || otherwise;
   }
 
   function submittedFeedback(r) {
@@ -770,7 +774,7 @@ import {paintAvatar} from './avatar.js';
     }
     if (!canDo('submit')) {
       return h('div', { class: 'banner banner-muted' },
-        'You can look at this review' + (canDo('comment') ? ' and comment on it' : '') + '. Only reviewers send feedback.');
+        'You can look at this review' + (canDo('comment') ? ' and comment on it' : '') + '. Only the owner sends feedback to Hermes.');
     }
     if (r.n !== st.current_round) {
       var fb = submittedFeedback(r);
@@ -785,9 +789,9 @@ import {paintAvatar} from './avatar.js';
         h('button', { class: 'link-btn', onclick: cancelAmend, text: 'Cancel amend' }));
     }
     if (submittedFeedback(r)) {
-      if (R().wake === false || (r.submission && r.submission.status === 'stored') || (isGuest() && !r.submission)) {
+      if (R().wake === false || (r.submission && r.submission.status === 'stored') || (!ownerSends() && !r.submission)) {
         return h('div', { class: 'banner banner-ok', role: 'status' },
-          h('span', { text: savedCopy(R(), STORED_GUEST_COPY) }));
+          h('span', { text: savedCopy(R(), STORED_GUEST_COPY, r.submission) }));
       }
       var pend = r.submission && r.submission.status === 'pending_notify';
       var stalled = r.submission && r.submission.stalled_notice_at;
@@ -3326,7 +3330,7 @@ import {paintAvatar} from './avatar.js';
     }
     var fb = submittedFeedback(r);
     if (fb && !S.amending) {
-      var sub = r.submission, ls = localSent(r.n), quiet = st.wake === false || isGuest();
+      var sub = r.submission, ls = localSent(r.n), quiet = st.wake === false;
       var title, subline, cls;
       var built = fb.action === 'build', glabel = (r.gate && r.gate.label) || 'Build';
       if (sub && sub.status === 'notified') {
@@ -3340,7 +3344,7 @@ import {paintAvatar} from './avatar.js';
           subline = 'Sent ' + fmtDate(sub.submitted_at) + (sub.amended ? ' (amended)' : '') + ' · Hermes was notified and is working on it.';
         }
       } else if (sub && sub.status === 'stored') {
-        title = 'Saved'; cls = 'ok'; subline = savedCopy(st, STORED_GUEST_COPY);
+        title = 'Saved'; cls = 'ok'; subline = savedCopy(st, STORED_GUEST_COPY, sub);
       } else if (sub && sub.status === 'pending_notify') {
         title = 'Saved ✓ — still reaching Hermes'; cls = 'warn';
         subline = 'Your feedback is stored. Hermes hasn’t confirmed yet; the board server retries every minute.';
@@ -3357,7 +3361,13 @@ import {paintAvatar} from './avatar.js';
       }
       sendbar.classList.add('sb-' + cls);
       inner.appendChild(h('div', { class: 'sb-status' }, h('span', { class: 'sb-title', text: title }), h('span', { class: 'sb-sub', text: subline })));
-      inner.appendChild(h('button', { class: 'btn', onclick: startAmend, text: 'Amend feedback' }));
+      if (ownerSends()) inner.appendChild(h('button', { class: 'btn', onclick: startAmend, text: 'Amend feedback' }));
+      return;
+    }
+    if (!ownerSends()) {   // a reviewer who is not the owner keeps editing locally; Send and Build are not theirs
+      sendbar.classList.add('sb-reader');
+      inner.appendChild(h('div', { class: 'sb-summary' }, summaryChips()));
+      inner.appendChild(h('p', { class: 'sb-owner-only', text: OWNER_ONLY_COPY }));
       return;
     }
     var missing = missingNotes();
@@ -3385,8 +3395,8 @@ import {paintAvatar} from './avatar.js';
     }
     inner.appendChild(h('button', {
       class: 'btn btn-send btn-primary', disabled: ready ? null : true, onclick: function () { send(); },
-      title: missing.length ? 'Every Change needs a note first' : hasContent(S.draft) ? (isGuest() ? 'Send this round’s feedback. It is saved for the owner: a guest link never pings Hermes' : 'Send this round’s feedback to Hermes') : (isNew(r) ? 'Mark a decision, use the page controls, drop a pin or write a note first' : 'Pick a variant, drop a pin or write a note first')
-    }, S.sending ? h('span', { class: 'spinner' }) : icon('send'), S.sending ? 'Sending…' : (S.amending ? 'Send amendment' : isNew(r) || isGuest() ? 'Send' : 'Send to Hermes')));
+      title: missing.length ? 'Every Change needs a note first' : hasContent(S.draft) ? 'Send this round’s feedback to Hermes' : (isNew(r) ? 'Mark a decision, use the page controls, drop a pin or write a note first' : 'Pick a variant, drop a pin or write a note first')
+    }, S.sending ? h('span', { class: 'spinner' }) : icon('send'), S.sending ? 'Sending…' : (S.amending ? 'Send amendment' : isNew(r) ? 'Send' : 'Send to Hermes')));
   }
 
   function toast(msg, kind) {
@@ -3430,8 +3440,9 @@ import {paintAvatar} from './avatar.js';
       S.amending = false;
       if (res && res.state) applyState(res.state);
       loadDraft(); render();
-      var quiet = R().wake === false || isGuest();
-      toast(quiet ? savedCopy(R(), '') : res && res.notified === false ? 'Saved — Hermes will be pinged as soon as it answers.' : build ? ((r.gate && r.gate.label) || 'Build') + ' pressed ✓' : 'Sent ✓ — Hermes is on it', quiet ? 'ok' : res && res.notified === false ? 'warn' : 'ok');
+      // Saved without a wake: a wake-off board, or a Send the request gate held (from Funnel, say) with its reason.
+      var quiet = R().wake === false, held = !quiet && !!res && res.status === 'stored';
+      toast(quiet ? savedCopy(R(), '') : held ? res.detail || savedCopy(R(), STORED_GUEST_COPY) : res && res.notified === false ? 'Saved — Hermes will be pinged as soon as it answers.' : build ? ((r.gate && r.gate.label) || 'Build') + ' pressed ✓' : 'Sent ✓ — Hermes is on it', quiet ? 'ok' : held || (res && res.notified === false) ? 'warn' : 'ok');
       maybePollForNotify();
       maybeWatchForRound();
     }).catch(function (e) {
@@ -3449,7 +3460,7 @@ import {paintAvatar} from './avatar.js';
       return res.json().catch(function () { return {}; }).then(function (j) {
         if (res.status === 409) throw err('Already sent', j.error || 'This round already has feedback.', true);
         if (!res.ok) throw err('Couldn’t send', j.error || ('Server answered HTTP ' + res.status));
-        return fetchState().then(function (st) { return { notified: j.notified, state: st }; });
+        return fetchState().then(function (st) { return { notified: j.notified, status: j.status, detail: j.detail, state: st }; });
       });
     }, function () { throw err('Offline?', 'The board server didn’t answer. Your draft is saved on this device — try again in a moment.'); });
   }
@@ -3829,6 +3840,57 @@ import {paintAvatar} from './avatar.js';
     return sel;
   }
 
+  // A reviewer can wake Hermes with an @Hermes mention (wakeguard.request_gate), so giving someone Reviewer takes one
+  // more, explicit step. Every role select in the Share dialog (the link's guests, a person, a new invite) is this one.
+  var REVIEWER_CONFIRM_BODY = 'People with the Reviewer role can wake Hermes with an @Hermes mention on boards that ' +
+    'wake a messaging chat. Hermes then runs in that chat with mock-review’s own tools. They can’t press Send ' +
+    'or Build.';
+  function roleSelect(cls, value, onchange, label) {
+    var prev = String(value);
+    var sel = shareSelect(cls, SHARE_ROLES, value, function (e) {
+      var was = prev;
+      if (sel.value !== 'reviewer' || was === 'reviewer') { prev = sel.value; onchange(e); return; }
+      confirmReviewer(sel, function () { prev = sel.value; onchange(e); }, function () { sel.value = was; });
+    }, label);
+    return sel;
+  }
+
+  // Cancel, Escape and a click on the backdrop put the old role back and send nothing; the Share dialog underneath
+  // stays open (its own key handler stands aside while S.share.confirm is set).
+  function confirmReviewer(sel, yes, no) {
+    var cancel = h('button', { class: 'btn role-confirm-cancel', type: 'button', text: 'Cancel' });
+    var ok = h('button', { class: 'btn btn-primary role-confirm-ok', type: 'button', text: 'Give Reviewer access' });
+    var box = h('div', { class: 'role-confirm', role: 'dialog', 'aria-modal': 'true',
+                         'aria-labelledby': 'role-confirm-title', 'aria-describedby': 'role-confirm-body' },
+      h('h2', { class: 'role-confirm-title', id: 'role-confirm-title', text: 'Give Reviewer access?' }),
+      h('p', { class: 'role-confirm-body', id: 'role-confirm-body', text: REVIEWER_CONFIRM_BODY }),
+      h('div', { class: 'role-confirm-actions' }, cancel, ok));
+    var backdrop = h('div', { class: 'role-confirm-backdrop' }, box);
+    var share = S.share, done = false;
+    function close(confirmed) {
+      if (done) return;
+      done = true;
+      document.removeEventListener('keydown', key, true);
+      if (backdrop.parentNode) backdrop.parentNode.removeChild(backdrop);
+      if (share && share.confirm === backdrop) share.confirm = null;
+      if (confirmed) yes(); else no();
+      if (sel.isConnected) sel.focus({ preventScroll: true });
+    }
+    function key(e) {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(false); return; }
+      if (e.key !== 'Tab') return;
+      e.preventDefault();   // two buttons: Tab and Shift+Tab move between them, never behind the dialog
+      (document.activeElement === cancel ? ok : cancel).focus();
+    }
+    cancel.addEventListener('click', function () { close(false); });
+    ok.addEventListener('click', function () { close(true); });
+    backdrop.addEventListener('click', function (e) { if (e.target === backdrop) close(false); });
+    if (share) share.confirm = backdrop;
+    document.addEventListener('keydown', key, true);
+    document.body.appendChild(backdrop);
+    cancel.focus({ preventScroll: true });
+  }
+
   function shareExpiryValue(link) {
     if (!link || link.expires_at == null) return 'never';
     return (link.expires_at * 1000) - Date.now() <= 26 * 3600 * 1000 ? '24h' : '7d';
@@ -3919,7 +3981,7 @@ import {paintAvatar} from './avatar.js';
     S.share = { el: backdrop, box: box, view: null, invite: null, inviteRole: 'commenter', inviteExpiry: 'never',
       returnTo: document.activeElement };
     S.share.key = function (e) {
-      if (!S.share) return;
+      if (!S.share || S.share.confirm) return;   // "Give Reviewer access?" is open on top and handles its own keys
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeShare(); return; }
       if (e.key !== 'Tab') return;
       var f = Array.prototype.filter.call(box.querySelectorAll('button,input,select,a[href],textarea'), function (el) {
@@ -3958,7 +4020,7 @@ import {paintAvatar} from './avatar.js';
     var input = h('input', { class: 'share-input share-invite-input', type: 'text',
                              placeholder: 'Name or email to invite', maxlength: 254,
                              'aria-label': 'Name or email to invite' });
-    var inviteRole = shareSelect('share-invite-role', SHARE_ROLES, S.share.inviteRole, function (e) {
+    var inviteRole = roleSelect('share-invite-role', S.share.inviteRole, function (e) {
       S.share.inviteRole = e.target.value;
     }, 'What an invited person can do');
     var inviteExpiry = shareSelect('share-invite-expiry',
@@ -3999,7 +4061,7 @@ import {paintAvatar} from './avatar.js';
       if (p.role === 'owner') {
         row.appendChild(h('span', { class: 'share-owner', text: 'Owner' }));
       } else {
-        row.appendChild(shareSelect('share-person-role', SHARE_ROLES, p.role, function (e) {
+        row.appendChild(roleSelect('share-person-role', p.role, function (e) {
           peoplePost({ action: 'grant', user_id: p.user_id, role: e.target.value });
         }, 'Role for ' + p.name));
         if (p.direct_role) {
@@ -4031,7 +4093,7 @@ import {paintAvatar} from './avatar.js';
         shareSelect('share-audience', [['anyone', 'Anyone with the link'], ['members', 'Signed-in people only']],
           link.audience, function (e) { sharePost({ action: 'update', audience: e.target.value }); },
           'Who can open it')));
-      roleSel = shareSelect('share-guest-role', SHARE_ROLES, link.guest_role, function (e) {
+      roleSel = roleSelect('share-guest-role', link.guest_role, function (e) {
         sharePost({ action: 'update', guest_role: e.target.value });
       }, 'What guests can do');
       expSel = shareSelect('share-expiry',

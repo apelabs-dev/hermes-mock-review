@@ -82,7 +82,6 @@ export function createThreads(opts) {
     return Math.round(sec / 86400) + 'd';
   }
   function can(cap) { return !!(S.me && (S.me.caps || []).indexOf(cap) >= 0); }
-  function isGuest() { return !!(S.me && S.me.kind === 'guest'); }
   function safeLink(text) {
     if (typeof text !== 'string' || /[\s\u0000-\u001f\u007f-\u009f]/.test(text) || !/^https?:\/\//i.test(text)) return null;
     try {
@@ -667,7 +666,13 @@ export function createThreads(opts) {
   }
 
   // ---- the composer's Send to Hermes box, shared by a new pin and a reply ----
-  function hermesAllowed() { return can('submit') && !isGuest() && (!opts.canSendToHermes || opts.canSendToHermes()); }
+  // The owner and any reviewer (a share-link guest or a member) get the box; commenters and viewers never. The board
+  // server decides whether the mention wakes Hermes or is saved (wakeguard.request_gate), and says why in `wake.detail`.
+  function hermesAllowed() { return can('submit') && (!opts.canSendToHermes || opts.canSendToHermes()); }
+  function wakeNote(j) {
+    var w = j && j.wake;
+    if (w && w.status === 'stored' && w.detail) opts.toast(w.detail, 'warn');
+  }
   function hasHermesToken(v) { return /(^|\s)@Hermes(?=\s|$)/.test(String(v || '')); }
   function setHermesMention(ta, on) {
     if (!ta._mrMentions) ta._mrMentions = [];
@@ -982,6 +987,7 @@ export function createThreads(opts) {
       request('threads/' + encodeURIComponent(t.id) + '/reply', {text: text, mentions: mentions}).then(function (j) {
         if (j.thread) { upsert(j.thread); redraw(); }
         renderPopBody();
+        wakeNote(j);
       }).catch(function (e) { if (ta) { ta.value = text; if (replyBar) replyBar.sync(); } opts.toast(e.message || 'Could not reply', 'warn'); });
     }
     function setStatus(thread, status) {
@@ -1157,6 +1163,7 @@ export function createThreads(opts) {
       if (j.thread) { S.created[j.thread.id] = true; upsert(j.thread); }
       syncHeader();
       redraw();
+      wakeNote(j);
       return j.thread;
     });
   }
