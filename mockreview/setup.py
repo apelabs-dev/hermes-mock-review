@@ -181,9 +181,10 @@ NO_PLATFORM_MESSAGE = ("no messaging platform found in the Hermes config (platfo
                        "only. To be woken in a messaging chat too, configure it in Hermes, or re-run with: hermes "
                        "mockreview setup --origin-platform telegram --origin-platform local (repeatable)")
 DESKTOP_CONSENT = ("Hermes Desktop chats: a board made in a Desktop chat wakes that chat inside its own session. Hermes "
-                   "lets a plugin queue a turn into a session only with " + INJECTION_KEY + ": true; mock-review uses "
-                   "it only for the Desktop chat that created a board, and only while Send is gated (loopback, no "
-                   "public URL, not a public board).")
+                   "lets a plugin queue a turn into a session only with " + INJECTION_KEY + ": true. That turn runs "
+                   "with every tool the chat has and is started by a reviewer's Send or @Hermes. mock-review uses it "
+                   "only for the Desktop chat that created a board, and only while Send is gated (loopback, no public "
+                   "URL, not a public board).")
 
 TEST_TITLE = "mock-review setup test"
 SETUP_BRIEF = "created by `hermes mockreview setup` to verify the create path"
@@ -693,17 +694,24 @@ def injection_allowed(run: Any = None) -> bool:
 
 
 def desktop_wake(req: Request, secret: str) -> Tuple[str, str, str]:
-    """Grant Hermes's consent for Desktop wakes, asking first (Enter = yes; --yes grants; --dry-run only prints).
-    Returns the summary row."""
+    """Grant Hermes's consent for Desktop wakes only on an explicit yes at a terminal (Enter, EOF and a non-terminal mean
+    no; --yes never grants and prints the command instead, like wake_toolsets; --dry-run plans it). Returns the summary
+    row."""
     if injection_allowed():
         print(f"desktop chats: {INJECTION_KEY} is already true")
         return ("desktop wake", "ok", "already allowed")
     print(DESKTOP_CONSENT)
-    grant = True if (req.yes or req.dry_run) else _ask_yes(
-        "allow mock-review to wake the Desktop chat a board was made in? [Y/n] ", True)
+    grant_cmd = f"hermes config set {INJECTION_KEY} true"
+    if req.yes and not req.dry_run:
+        # a reviewer-triggered turn with every tool the chat has: never granted unattended, so an agent running setup
+        # cannot grant it to itself (the same rule as wake_toolsets)
+        print(f"desktop chats: --yes never grants this consent; to let Desktop chats be woken, run: {grant_cmd}")
+        return ("desktop wake", "skipped", "needs your yes")
+    grant = req.dry_run or _ask_yes(
+        "let reviewers' Send and @Hermes start turns in the Desktop chat a board was made in, with every tool that "
+        "chat has? [y/N] ", False)
     if not grant:
-        print(f"desktop chats: not allowed; a board made in a Desktop chat is refused until: hermes config set "
-              f"{INJECTION_KEY} true")
+        print(f"desktop chats: not allowed; a board made in a Desktop chat is refused until: {grant_cmd}")
         return ("desktop wake", "skipped", "declined")
     _will_change(f"set {INJECTION_KEY} true (Desktop chats can be woken)")
     if req.dry_run:

@@ -131,6 +131,20 @@ def _session_env() -> Optional[Callable[[str, str], str]]:
     return get_session_env
 
 
+def _bound_key() -> str:
+    """The route key Hermes bound for THIS turn (gateway.session_context.bound_session_key, Hermes >= 0.22.3), with no
+    os.environ fallback, or "" when nothing is bound or this Hermes lacks the helper (then a Desktop origin is
+    refused rather than read from the environment)."""
+    try:
+        from gateway.session_context import bound_session_key
+    except Exception:
+        return ""
+    try:
+        return str(bound_session_key() or "").strip()
+    except Exception:
+        return ""
+
+
 def session_origin() -> Tuple[Optional[Dict[str, str]], str]:
     """The origin of the session whose turn is calling, from the context Hermes binds for that turn, or (None, why).
 
@@ -155,7 +169,9 @@ def session_origin() -> Tuple[Optional[Dict[str, str]], str]:
     if thread_id:
         origin["thread_id"] = thread_id
     if platform == LOCAL:
-        if not key:
-            return None, "the Desktop session has no route key in its context"
-        origin["session_key"] = key
+        # only the key bound for this turn: get_session_env falls back to os.environ, which can name a parent chat
+        bound = _bound_key()
+        if not bound:
+            return None, "the Desktop session has no route key bound in this turn"
+        origin["session_key"] = bound
     return origin, ""

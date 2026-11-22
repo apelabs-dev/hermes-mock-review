@@ -152,7 +152,8 @@ def test_origin_the_only_chat_platform_is_used_and_said(monkeypatch, tmp_path, c
     assert ("origin platform: telegram (the only messaging platform configured; pass --origin-platform to choose "
             "another), and Hermes Desktop chats") in r.out
     assert route_names(r.log) == ["mock-review-telegram", "mock-review-telegram-notice"]
-    assert find(r.log, *INJECTION) and "desktop wake ok (allowed)" in summary_row(r.out, "desktop wake")
+    assert not find(r.log, *INJECTION) and "desktop wake skipped (needs your yes)" in summary_row(r.out, "desktop wake")
+    assert f"run: hermes config set {setup.INJECTION_KEY} true" in r.out   # --yes never grants it: printed instead
 
 
 @pytest.mark.parametrize("name", ["webhook", "msgraph_webhook", "api_server", "a2a", "raft"])
@@ -179,7 +180,7 @@ def test_origin_several_platforms_non_interactive_sets_up_every_one(monkeypatch,
     assert route_names(r.log) == [
         "mock-review-discord", "mock-review-discord-notice", "mock-review-slack", "mock-review-slack-notice",
         "mock-review-telegram", "mock-review-telegram-notice"]
-    assert find(r.log, *INJECTION)
+    assert not find(r.log, *INJECTION)
 
 
 def test_origin_several_platforms_dry_run_plans_every_one_and_changes_nothing(monkeypatch, tmp_path, capsys):
@@ -197,14 +198,22 @@ def test_origin_several_platforms_dry_run_plans_every_one_and_changes_nothing(mo
 def test_origin_no_messaging_platform_sets_up_desktop_chats_only(monkeypatch, tmp_path, capsys, mode):
     args = (mode,) if mode != "tty" else ("--skip-validate",)
     if mode == "tty":
-        tty(monkeypatch, "")          # Enter at the Desktop consent question: the default, yes
+        tty(monkeypatch, "y")         # an explicit yes at the Desktop consent question
     r = go(monkeypatch, tmp_path, capsys, {"platforms": {"webhook": {"enabled": True}}}, args=args)
     assert r.rc == 0
     assert setup.NO_PLATFORM_MESSAGE in r.out and "--origin-platform telegram" in r.out
     assert "Which do you review on" not in r.out
     assert route_names(r.log) == []
     assert "routes skipped (no messaging platform)" in summary_row(r.out, "routes")
-    assert bool(find(r.log, *INJECTION)) is (mode != "--dry-run")
+    assert bool(find(r.log, *INJECTION)) is (mode == "tty")
+
+
+@pytest.mark.parametrize("answer", ["", "n"])
+def test_desktop_consent_enter_or_no_at_the_terminal_grants_nothing(monkeypatch, tmp_path, capsys, answer):
+    tty(monkeypatch, answer)          # Enter is the default, and the default is no
+    r = go(monkeypatch, tmp_path, capsys, {"platforms": {"webhook": {"enabled": True}}}, args=("--skip-validate",))
+    assert r.rc == 0 and not find(r.log, *INJECTION)
+    assert "desktop wake skipped (declined)" in summary_row(r.out, "desktop wake")
 
 
 def test_origin_platforms_config_unreadable_is_desktop_only_too(monkeypatch, tmp_path, capsys):
@@ -239,7 +248,8 @@ def test_desktop_consent_grant_that_fails_fails_setup(monkeypatch, tmp_path, cap
             return SimpleNamespace(returncode=1, stdout="", stderr="managed key")
         return real(argv, **kw)
     monkeypatch.setattr(setup, "run_hermes", run)
-    r = go(monkeypatch, tmp_path, capsys)
+    tty(monkeypatch, "y")
+    r = go(monkeypatch, tmp_path, capsys, {"platforms": {"webhook": {"enabled": True}}}, args=("--skip-validate",))
     assert r.rc == 1 and "desktop wake failed" in summary_row(r.out, "desktop wake")
 
 

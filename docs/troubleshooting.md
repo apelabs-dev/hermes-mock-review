@@ -25,8 +25,9 @@ says so. On a terminal with several, it lists them and asks once; Enter means al
 before changing anything when you name a platform that is not a chat (`origin platform webhook cannot be woken: ...`).
 
 Setup asks whether Desktop chats may be woken. Hermes lets a plugin queue a turn into a session only with
-`plugins.entries.mock-review.allow_gateway_injection: true`, so setup asks before it sets that (Enter means yes). `--yes`
-sets it and `--dry-run` only prints the command. If you said no, the summary shows `desktop wake skipped (declined)`;
+`plugins.entries.mock-review.allow_gateway_injection: true`, so setup asks before it sets that and needs an explicit `y`
+(Enter means no). `--yes` never sets it: the summary shows `desktop wake skipped (needs your yes)` and setup prints the
+command to run. `--dry-run` only prints the command. If you said no, the summary shows `desktop wake skipped (declined)`;
 grant it later with `hermes config set plugins.entries.mock-review.allow_gateway_injection true`. Setup only sets the key
 through `hermes config set`. It never opens a Hermes file. With `--no-autostart` it warns that Desktop chats cannot be
 woken, because only the board server inside the gateway can wake them.

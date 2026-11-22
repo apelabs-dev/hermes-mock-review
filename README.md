@@ -63,8 +63,8 @@ Desktop chats. The webhook ingress, the Microsoft Graph ingress, the API server 
 chats, so they never count. With several messaging platforms it asks on a terminal (Enter means all of them); under
 `--yes` or `--dry-run` it takes them all and says so. With none, it sets up Desktop chats only. `--origin-platform NAME`
 (repeatable; `local` is Desktop) narrows it to exactly what you name. A Desktop chat is woken inside its own session,
-which needs Hermes's `allow_gateway_injection` consent: setup asks for it (Enter means yes). See [which chats can be
-woken](docs/hosting.md#which-chats-can-be-woken).
+which needs Hermes's `allow_gateway_injection` consent: setup asks for it and needs an explicit yes (`--yes` only
+prints the command). See [which chats can be woken](docs/hosting.md#which-chats-can-be-woken).
 
 The first run usually ends with the test review marked `pending (board not running)`: the review is saved and loads by
 itself once the board runs, and setup prints no link until a board answers. The last lines of the output start with

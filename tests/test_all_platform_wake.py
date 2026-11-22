@@ -53,6 +53,7 @@ def bind_session(monkeypatch, **values):
     """The calling turn's session context, as Hermes binds it (HERMES_SESSION_<NAME>)."""
     bound = {"HERMES_SESSION_" + k.upper(): v for k, v in values.items()}
     monkeypatch.setattr(platforms, "_session_env", lambda: (lambda name, default="": bound.get(name, default)))
+    monkeypatch.setattr(platforms, "_bound_key", lambda: bound.get("HERMES_SESSION_KEY", ""))
 
 
 def create_tool(ctx, **args):
@@ -120,7 +121,7 @@ def test_explicit_origin_arguments_win_over_the_session(env, tmp_path, monkeypat
 @pytest.mark.parametrize("bound, why", [
     ({"key": LOCAL_KEY}, platforms.TUI_PROCESS),          # a terminal UI in its own process: only a key
     ({}, "no calling chat in this context"),
-    ({"platform": "local", "chat_id": LOCAL_CHAT}, "the Desktop session has no route key in its context"),
+    ({"platform": "local", "chat_id": LOCAL_CHAT}, "the Desktop session has no route key bound in this turn"),
 ])
 def test_no_readable_calling_chat_is_refused_and_never_guessed(env, tmp_path, monkeypatch, bound, why):
     bind_session(monkeypatch, **bound)
@@ -261,15 +262,18 @@ def test_an_ungated_desktop_board_is_refused_at_create(env, tmp_path, monkeypatc
     assert "refusing a board that wakes a Desktop chat" in err and store.list_ids() == [] and ctx.injected == []
 
 
-def test_a_desktop_board_ungated_after_create_is_held_at_send(env, tmp_path, monkeypatch, gateway):
+@pytest.mark.parametrize("later", ["public_url", "funnel"])
+def test_a_desktop_board_ungated_after_create_is_held_at_send(env, tmp_path, monkeypatch, gateway, later):
     ctx, _ = gateway
     bind_session(monkeypatch, platform="local", chat_id=LOCAL_CHAT, key=LOCAL_KEY)
     rid = create_tool(ctx, title="Later public", decisions=str(_decisions(tmp_path)))["review_id"]
-    monkeypatch.setenv("MOCKREVIEW_PUBLIC_URL", "https://reviews.example.test")
+    if later == "public_url":
+        monkeypatch.setenv("MOCKREVIEW_PUBLIC_URL", "https://reviews.example.test")
+    else:                                                 # `mockreview public on` after the board was made
+        monkeypatch.setattr(config, "funnel_url", lambda: "https://board.example.test")
     res = service.submit(rid, 1, DEC_FB, store.load(rid)["token"])
     assert not res["notified"]
-    assert store.load(rid)["rounds"][0]["submission"]["last_error"].startswith("held, not woken: the board is on a "
-                                                                                "public URL")
+    assert store.load(rid)["rounds"][0]["submission"]["last_error"].startswith("held, not woken: ")
     assert ctx.injected == []
 
 
@@ -465,3 +469,14 @@ def test_the_session_origin_is_read_from_hermes_own_session_context(monkeypatch)
 
     assert contextvars.copy_context().run(in_turn) == (
         {"platform": "local", "chat_id": LOCAL_CHAT, "session_key": LOCAL_KEY}, "")
+
+
+def test_a_desktop_key_only_in_the_environment_is_not_taken(monkeypatch):
+    session_context = pytest.importorskip("gateway.session_context")
+    if not hasattr(session_context, "bound_session_key"):
+        pytest.skip("this Hermes has no bound_session_key")
+    monkeypatch.setattr(platforms, "_session_env", lambda: session_context.get_session_env)
+    for name, value in (("PLATFORM", "local"), ("CHAT_ID", LOCAL_CHAT), ("KEY", LOCAL_KEY)):
+        monkeypatch.setenv("HERMES_SESSION_" + name, value)   # inherited by a child process, bound for no turn
+    origin, why = contextvars.Context().run(platforms.session_origin)
+    assert origin is None and "no route key bound" in why

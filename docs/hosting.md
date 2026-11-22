@@ -174,8 +174,10 @@ API `inject_message(prompt, session_key=...)`. A mention wake takes the same pat
 - The board made from that Desktop chat. Its session key is read from the chat's own session context and stored with the
   review, and only the calling chat has it. An explicit `local` origin for another chat is refused.
 - `plugins.entries.mock-review.allow_gateway_injection: true`. Hermes lets a plugin queue a turn only with this consent.
-  `hermes mockreview setup` asks for it (Enter means yes; `--yes` grants it, `--dry-run` only prints the command). The
-  setting covers the whole profile; mock-review only uses it for the Desktop chat that created a board.
+  `hermes mockreview setup` asks for it and grants it only on an explicit `y` (Enter means no). `--yes` never grants it
+  and prints the `hermes config set` command instead, the same rule as `wake_toolsets`, so an agent running setup
+  cannot grant itself a turn with every tool. `--dry-run` only prints the command. The setting covers the whole
+  profile; mock-review only uses it for the Desktop chat that created a board.
 - The board server inside the gateway, with `autostart` on and the webhook platform enabled. A board server run with
   `hermes mockreview serve` has no plugin context, so a Desktop board is refused at create there.
 - The chat served by this profile's gateway. A terminal UI or a standalone `hermes dashboard` runs its sessions in a
