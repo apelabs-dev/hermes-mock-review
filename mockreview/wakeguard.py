@@ -54,6 +54,9 @@ PIN_FIX_OWNER_ONLY = "saved for the owner; a pin fix from anyone but the owner d
 MENTION_ROLE_NO_WAKE = "saved; only the owner or a reviewer can wake Hermes with a mention"
 REVIEWER_WAKE_UNCONFIRMED = ("saved; Hermes was not woken: the owner has not confirmed that this Reviewer may wake "
                              "Hermes. Ask them to pick Reviewer again in Share.")
+REVIEWER_WAKE_ENDED = ("saved; Hermes was not woken: the share link this Reviewer joined through has ended or no longer "
+                       "admits them (stopped, regenerated, expired, or signed-in people only), so their access to this "
+                       "review is gone. Ask the owner for a new link.")
 SUBMIT_OWNER_ONLY = ("only the owner sends feedback to Hermes; your comments and pins stay on the board for them")
 
 
