@@ -513,7 +513,7 @@ def test_giving_reviewer_asks_first_and_cancel_keeps_the_old_role(env, server, r
 
 def test_share_marks_unconfirmed_reviewer_links_and_grants_and_reconfirms_them(env, server, review, chrome):
     """The stored confirmation is read-only visible: a Reviewer link or grant made before the update shows its marker
-    and one direct re-confirm action that uses the existing update path (setting Reviewer again)."""
+    and one re-confirm action that asks the Reviewer question before it sets wake_ok again."""
     rid = review["id"]
     users.share("test", rid, "create", "reviewer")
     with db.tx() as conn:
@@ -531,8 +531,28 @@ def test_share_marks_unconfirmed_reviewer_links_and_grants_and_reconfirms_them(e
         "the unconfirmed Reviewer person shows a re-confirm action"
     assert b.js("String(document.querySelectorAll('.share-dialog .share-wake-unconfirmed').length)") == "2", \
         "one marker for the link and one for the person"
+    b.js(POSTS)
 
+    # The re-confirm button asks the Reviewer question first; Cancel sends nothing and leaves wake_ok alone.
     b.press(".share-dialog > .share-wake-unconfirmed .share-reconfirm")
+    m = json.loads(b.until(MODAL) or "null")
+    assert m is not None, "the re-confirm button must ask before it sets wake_ok"
+    assert m["title"] == REVIEWER_TITLE and m["body"] == REVIEWER_BODY, m
+    assert b.js("document.querySelectorAll('.share-dialog .share-wake-unconfirmed').length === 2"), \
+        "both markers stay while the question is open"
+    assert users.share_link(rid)["wake_ok"] is False, "nothing is sent while the question is open"
+    b.press(".role-confirm-cancel")
+    assert b.until("!document.querySelector('.role-confirm')"), "Cancel closes the question"
+    assert b.js("!!document.querySelector('.share-dialog')"), "Cancel leaves the Share dialog open"
+    assert b.js("document.querySelectorAll('.share-dialog .share-wake-unconfirmed').length === 2"), \
+        "Cancel leaves both markers"
+    assert posts(b) == [], "Cancel sends nothing"
+    assert users.share_link(rid)["wake_ok"] is False, "Cancel leaves wake_ok off"
+
+    # Confirm sends the update: the link's marker goes and the person's stays.
+    b.press(".share-dialog > .share-wake-unconfirmed .share-reconfirm")
+    assert b.until("!!document.querySelector('.role-confirm')"), "the button asks before it sets wake_ok"
+    b.press(".role-confirm-ok")
     end = time.monotonic() + 10
     while time.monotonic() < end and users.share_link(rid)["wake_ok"] is not True:
         time.sleep(0.1)
@@ -540,7 +560,10 @@ def test_share_marks_unconfirmed_reviewer_links_and_grants_and_reconfirms_them(e
     assert b.until("document.querySelectorAll('.share-dialog .share-wake-unconfirmed').length === 1"), \
         "the link's marker is gone, the person's stays"
 
+    # The person's button asks the same question, and OK sets the grant's wake_ok.
     b.press(".share-dialog .share-person .share-reconfirm")
+    assert b.until("!!document.querySelector('.role-confirm')"), "the person's button asks before it sets wake_ok"
+    b.press(".role-confirm-ok")
     end = time.monotonic() + 10
     while time.monotonic() < end:
         row = db.connect().execute("SELECT wake_ok FROM grants WHERE user_id = ? AND review_id = ?",
@@ -551,3 +574,4 @@ def test_share_marks_unconfirmed_reviewer_links_and_grants_and_reconfirms_them(e
     assert row is not None and row["wake_ok"] == 1
     assert b.until("!document.querySelector('.share-dialog .share-wake-unconfirmed')"), \
         "no unconfirmed Reviewer marker is left"
+    assert b.js("!!document.querySelector('.share-dialog')"), "the Share dialog stays open"

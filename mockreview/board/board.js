@@ -4097,7 +4097,11 @@ import {paintAvatar} from './avatar.js';
             title: 'This Reviewer is saved, not woken, until you confirm Reviewer again' }));
           row.appendChild(h('button', { class: 'btn btn-ghost share-reconfirm', type: 'button',
             text: 'Confirm Reviewer',
-            onclick: function () { peoplePost({ action: 'grant', user_id: p.user_id, role: 'reviewer' }); } }));
+            onclick: function (e) {
+              confirmReviewer(e.currentTarget, function () {
+                peoplePost({ action: 'grant', user_id: p.user_id, role: 'reviewer' });
+              }, function () {});
+            } }));
         }
         if (p.direct_role) {
           row.appendChild(h('button', { class: 'btn btn-ghost btn-danger share-remove', type: 'button',
@@ -4143,7 +4147,11 @@ import {paintAvatar} from './avatar.js';
           h('span', { class: 'share-faint', text: 'Reviewer guests cannot wake Hermes until you confirm Reviewer again.' }),
           h('span', { class: 'share-spacer' }),
           h('button', { class: 'btn share-reconfirm', type: 'button', text: 'Confirm Reviewer',
-            onclick: function () { sharePost({ action: 'update', guest_role: 'reviewer' }); } })));
+            onclick: function (e) {
+              confirmReviewer(e.currentTarget, function () {
+                sharePost({ action: 'update', guest_role: 'reviewer' });
+              }, function () {});
+            } })));
       }
       box.appendChild(shareLinkRow(link.url, 'Share link'));
       var regen = h('button', { class: 'btn btn-ghost', type: 'button', text: 'Regenerate',
