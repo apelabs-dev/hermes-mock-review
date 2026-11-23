@@ -1,4 +1,4 @@
-import {anchorFor, cleanTarget, describeTarget, rangeFor, resolve, stamp, surface, installAPI} from './anchors.js';
+import {LIVE, CONTROL, controlOf, presses, anchorFor, cleanTarget, describeTarget, rangeFor, resolve, stamp, surface, installAPI} from './anchors.js';
 import {createThreads} from './threads.js';
 import {paintAvatar} from './avatar.js';
 /* mock-review board — vanilla JS, no build step, no network beyond this site.
@@ -26,7 +26,8 @@ import {paintAvatar} from './avatar.js';
     phone: { w: 390, h: 844, label: 'Phone', short: 'Phone · 390' }
   };
   var LIMIT = { pin: 600, comment: 2000, note: 3000, guidelines: 5000, choice: 2000, pins: 40, custom: 280 };
-  // Controls keep working in Comment mode: a click whose path touches one of these never starts a board pin.
+  // The board's own controls keep working in Comment mode: a click whose path touches one of these never starts a board
+  // (canvas) pin. Mocks are listed because their clicks belong to mockClick, which pins a mock's controls too.
   var PIN_SKIP = 'button,textarea,input,select,option,label,a,summary,video,audio,[contenteditable],[data-mr-no-pin],.mpin,.mock,.mock-host,.pin-layer,.ipins,.popover';
 
   var app = document.getElementById('app');
@@ -64,8 +65,10 @@ import {paintAvatar} from './avatar.js';
   // Who is looking (state.json `me`, served by the board server) and the CSRF token every POST
   // carries: the server sets the mr_csrf cookie and wants the same value back in X-CSRF-Token.
   function me() { return (S.review && S.review.me) || null; }
-  function isGuest() { var m = me(); return !!m && m.kind === 'guest'; }
   function canDo(cap) { var m = me(); return !m || (m.caps || []).indexOf(cap) >= 0; }
+  // Send and Build are the owner's alone: the board server answers 403 to anyone else. No `me` is an older board
+  // server, which keeps its own rule.
+  function ownerSends() { var m = me(); return !m || m.review_role === 'owner'; }
   // Commenting is its own capability: any round, submitted or not, and never gated on the submit role.
   function canComment() { return !!R() && canDo('comment') && pinsOn(); }
   function csrfToken() {
@@ -189,12 +192,14 @@ import {paintAvatar} from './avatar.js';
   function viewed() { return roundObj(S.view); }
   function key(suffix, n) { return 'mr:' + R().id + ':r' + (n || S.view) + ':' + suffix; }
   function localSent(n) { return lsGet(key('sent', n)); }
-  // A wake-off board saves feedback without pinging Hermes, and a guest link never wakes it: one copy for the
-  // banner, the send bar and the toast.
+  // A wake-off board saves feedback without pinging Hermes, and so does a Send the request gate held (the server's
+  // `detail` says why): one copy for the banner, the send bar and the toast.
   var STORED_GUEST_COPY = 'Saved by a share-link guest. Hermes was not pinged: tell it in chat.';
-  function savedCopy(state, otherwise) {
-    if (isGuest()) return 'Saved for the owner. A guest link never pings Hermes — the owner starts it.';
-    return state && state.wake === false ? 'Saved. This board does not ping Hermes: tell it in chat.' : otherwise;
+  var OWNER_ONLY_COPY = 'Only the owner sends this round to Hermes. Your comments and pins are on the board for them.';
+  function savedCopy(state, otherwise, sub) {
+    if (state && state.wake === false) return 'Saved. This board does not ping Hermes: tell it in chat.';
+    if (!ownerSends()) return 'Saved on the board. Hermes was not pinged: only the owner sends a round to Hermes.';
+    return (sub && sub.detail) || otherwise;
   }
 
   function submittedFeedback(r) {
@@ -728,11 +733,14 @@ import {paintAvatar} from './avatar.js';
   }
 
   // The pinned hint under the toolbar or the decision header; syncComment() rewrites it in place.
+  function hintText(on) {
+    return on
+      ? 'Click anything to pin a note, mock buttons and links too. Pick, Approve, Change, Skip and notes still work. Leave comment mode (Esc or the Comment button) to use a mock’s controls.'
+      : 'Press Comment (C) to pin a note on anything.';
+  }
   function commentHint(cls) {
     var on = !!S.commentMode;
-    var long = on
-      ? 'Click anything on the board to pin a note — text, cards, a question, the header; controls stay live. Esc or the Comment button leaves comment mode.'
-      : 'Press Comment (C) to pin a note on anything.';
+    var long = hintText(on);
     return h('p', { class: cls, 'data-comment-hint': '' }, icon(on ? 'hand' : 'pin'),
       h('span', { class: 'hint-long', text: long }), h('span', { class: 'hint-short', text: long }));
   }
@@ -770,7 +778,7 @@ import {paintAvatar} from './avatar.js';
     }
     if (!canDo('submit')) {
       return h('div', { class: 'banner banner-muted' },
-        'You can look at this review' + (canDo('comment') ? ' and comment on it' : '') + '. Only reviewers send feedback.');
+        'You can look at this review' + (canDo('comment') ? ' and comment on it' : '') + '. Only the owner sends feedback to Hermes.');
     }
     if (r.n !== st.current_round) {
       var fb = submittedFeedback(r);
@@ -785,9 +793,9 @@ import {paintAvatar} from './avatar.js';
         h('button', { class: 'link-btn', onclick: cancelAmend, text: 'Cancel amend' }));
     }
     if (submittedFeedback(r)) {
-      if (R().wake === false || (r.submission && r.submission.status === 'stored') || (isGuest() && !r.submission)) {
+      if (R().wake === false || (r.submission && r.submission.status === 'stored') || (!ownerSends() && !r.submission)) {
         return h('div', { class: 'banner banner-ok', role: 'status' },
-          h('span', { text: savedCopy(R(), STORED_GUEST_COPY) }));
+          h('span', { text: savedCopy(R(), STORED_GUEST_COPY, r.submission) }));
       }
       var pend = r.submission && r.submission.status === 'pending_notify';
       var stalled = r.submission && r.submission.stalled_notice_at;
@@ -1222,9 +1230,7 @@ import {paintAvatar} from './avatar.js';
   }
   function syncComment() {
     var on = !!S.commentMode;
-    var long = on
-      ? 'Click anything on the board to pin a note — text, cards, a question, the header; controls stay live. Esc or the Comment button leaves comment mode.'
-      : 'Press Comment (C) to pin a note on anything.';
+    var long = hintText(on);
     Array.prototype.forEach.call(document.querySelectorAll('[data-comment-toggle]'), function (b) {
       b.setAttribute('aria-pressed', on ? 'true' : 'false');
       b.setAttribute('title', on ? 'Exit comment mode (C)' : 'Comment (C)');
@@ -1424,11 +1430,15 @@ import {paintAvatar} from './avatar.js';
       return /^(\(\s*(min|max)-width\s*:\s*[\d.]+px\s*\)\s*(and\s*)?)+$/i.test(c) ? '@container mock ' + c + ' {' : m;
     });
   }
-  // Keep real hit testing and native selection in both tools. Only noninteractive taps become comments.
+  // Keep real hit testing and native selection in both tools. In comment mode a tap on anything but a LIVE element pins.
   var MOCK_BASE = ':host{display:block}.cq{container:mock/inline-size;pointer-events:auto}' +
     '.cq,.cq *{-webkit-user-select:auto;user-select:auto}' +
     '.cq a[href]{pointer-events:auto;cursor:pointer}' +
     ':host(.use) .cq{pointer-events:auto}';
+  // Comment mode (a host without .use): the pin cursor over the whole mock, buttons and links included, since a click on
+  // any of them pins; LIVE elements keep their own cursor.
+  var MOCK_PIN_CURSOR = ':host(:not(.use)) .cq,:host(:not(.use)) .cq *{cursor:crosshair!important}' +
+    ':host(:not(.use)) .cq :is(' + LIVE + '),:host(:not(.use)) .cq :is(' + LIVE + ') *{cursor:auto!important}';
   function loadAssets(r) {
     if (ASSETS[r.n]) return ASSETS[r.n];
     var base = roundBase(r), d = r.design, out = { dec: null, css: '' }, jobs = [];
@@ -1441,7 +1451,7 @@ import {paintAvatar} from './avatar.js';
     if (r.kind === 'decisions') jobs.push(get(base + 'decisions.json', 'json').then(function (j) { out.dec = j; }));
     if (d && d.mock_css) jobs.push(get(base + 'design/' + d.mock_css, 'text').then(function (t) { out.css = t; }));
     ASSETS[r.n] = Promise.all(jobs).then(function () {
-      out.css = MOCK_BASE + toContainer(out.css + '\n' + ((out.dec && out.dec.extra_css) || ''));
+      out.css = MOCK_BASE + MOCK_PIN_CURSOR + toContainer(out.css + '\n' + ((out.dec && out.dec.extra_css) || ''));
       try { out.sheet = new CSSStyleSheet(); out.sheet.replaceSync(out.css); } catch (e) { out.sheet = null; }
       return out;
     });
@@ -2370,6 +2380,15 @@ import {paintAvatar} from './avatar.js';
       draw: function () { drawPins(m); }, changed: saveDraft });
     // A mock form must never navigate the board, CSP or not.
     sr.addEventListener('submit', function (e) { e.preventDefault(); }, true);
+    // Comment mode: a press inside a native control must not focus it, open a select or drag a range (mockClick pins it
+    // and cancels its click), and Enter or Space must not activate it. Only there: a press on ordinary content keeps
+    // its text selection, and with it quote pins. Nothing stops propagating, so the board's own listeners still run.
+    sr.addEventListener('mousedown', function (e) {
+      if (canComment() && S.commentMode && !mockLive(e) && closestOf(e.composedPath()[0], CONTROL)) e.preventDefault();
+    }, true);
+    function mockKey(e) { if (canComment() && S.commentMode && !mockLive(e) && presses(e.key, e.composedPath()[0])) e.preventDefault(); }
+    sr.addEventListener('keydown', mockKey, true);
+    sr.addEventListener('keyup', mockKey, true);
     inner.addEventListener('click', function (e) { mockClick(m, e); });
     if (window.ResizeObserver) { m.ro = new ResizeObserver(function () { fit(m); }); m.ro.observe(outer); m.ro.observe(inner); }
     requestAnimationFrame(function () { fit(m); drawPins(m); });
@@ -2972,10 +2991,18 @@ import {paintAvatar} from './avatar.js';
     (pin || m.outer).scrollIntoView({ behavior: 'smooth', block: 'center' });
     if (pin) setTimeout(function () { pin.classList.add('flash'); setTimeout(function () { pin.classList.remove('flash'); }, 900); }, 350);
   }
-  function mockClick(m, e) {
-    // Events crossing the shadow root retarget to the host; inspect the actual path.
+  // LIVE (anchors.js) keeps its clicks in comment mode: a mock's own [data-mr-live] controls and the pin markers.
+  // Events crossing the shadow root retarget to the host, so this reads the composed path.
+  function mockLive(e) {
     var path = e.composedPath ? e.composedPath() : [e.target];
-    if (path.some(function (el) { return el instanceof Element && Element.prototype.closest.call(el, 'video,audio,a,button,input,select,textarea,summary,[contenteditable],[data-mr-live],.mpin'); })) return;
+    return path.some(function (el) { return el instanceof Element && Element.prototype.closest.call(el, LIVE); });
+  }
+  function mockClick(m, e) {
+    // Comment mode pins a click on anything in a mock, buttons, links, summaries and fields included, and cancels what the
+    // click would have done (follow the link, toggle the summary, flip the checkbox, press the label). With comment mode
+    // off every click is the mock's own.
+    if (!canComment() || !S.commentMode || mockLive(e)) return;
+    e.preventDefault();
     tapMock(m, e);
   }
   function tapMock(m, e) {
@@ -2986,7 +3013,11 @@ import {paintAvatar} from './avatar.js';
     var selection = m.root.getRootNode().getSelection ? m.root.getRootNode().getSelection() : window.getSelection();
     var range = selection && !selection.isCollapsed && selection.rangeCount ? selection.getRangeAt(0).cloneRange() : null;
     if (range && !m.root.contains(range.commonAncestorContainer)) range = null;
-    var target = e.mrTarget || anchorFor((e.composedPath ? e.composedPath()[0] : e.target), m.root, e.clientX, e.clientY, range);
+    // A click inside a native control pins the control. Its press was cancelled, so a selection still showing is an older
+    // one, not this click's.
+    var hit = e.composedPath ? e.composedPath()[0] : e.target;
+    if (closestOf(hit, CONTROL)) range = null;
+    var target = e.mrTarget || anchorFor(controlOf(hit, m.root), m.root, e.clientX, e.clientY, range);
     var ghost = h('div', { class: 'mpin ghost', style: { left: (x * 100) + '%', top: (y * 100) + '%' } }, h('span', { text: String(S.draft.pins.length + 1) }));
     m.ghost = ghost;
     m.pins.appendChild(ghost);
@@ -3326,7 +3357,7 @@ import {paintAvatar} from './avatar.js';
     }
     var fb = submittedFeedback(r);
     if (fb && !S.amending) {
-      var sub = r.submission, ls = localSent(r.n), quiet = st.wake === false || isGuest();
+      var sub = r.submission, ls = localSent(r.n), quiet = st.wake === false;
       var title, subline, cls;
       var built = fb.action === 'build', glabel = (r.gate && r.gate.label) || 'Build';
       if (sub && sub.status === 'notified') {
@@ -3340,7 +3371,7 @@ import {paintAvatar} from './avatar.js';
           subline = 'Sent ' + fmtDate(sub.submitted_at) + (sub.amended ? ' (amended)' : '') + ' · Hermes was notified and is working on it.';
         }
       } else if (sub && sub.status === 'stored') {
-        title = 'Saved'; cls = 'ok'; subline = savedCopy(st, STORED_GUEST_COPY);
+        title = 'Saved'; cls = 'ok'; subline = savedCopy(st, STORED_GUEST_COPY, sub);
       } else if (sub && sub.status === 'pending_notify') {
         title = 'Saved ✓ — still reaching Hermes'; cls = 'warn';
         subline = 'Your feedback is stored. Hermes hasn’t confirmed yet; the board server retries every minute.';
@@ -3357,7 +3388,13 @@ import {paintAvatar} from './avatar.js';
       }
       sendbar.classList.add('sb-' + cls);
       inner.appendChild(h('div', { class: 'sb-status' }, h('span', { class: 'sb-title', text: title }), h('span', { class: 'sb-sub', text: subline })));
-      inner.appendChild(h('button', { class: 'btn', onclick: startAmend, text: 'Amend feedback' }));
+      if (ownerSends()) inner.appendChild(h('button', { class: 'btn', onclick: startAmend, text: 'Amend feedback' }));
+      return;
+    }
+    if (!ownerSends()) {   // a reviewer who is not the owner keeps editing locally; Send and Build are not theirs
+      sendbar.classList.add('sb-reader');
+      inner.appendChild(h('div', { class: 'sb-summary' }, summaryChips()));
+      inner.appendChild(h('p', { class: 'sb-owner-only', text: OWNER_ONLY_COPY }));
       return;
     }
     var missing = missingNotes();
@@ -3385,8 +3422,8 @@ import {paintAvatar} from './avatar.js';
     }
     inner.appendChild(h('button', {
       class: 'btn btn-send btn-primary', disabled: ready ? null : true, onclick: function () { send(); },
-      title: missing.length ? 'Every Change needs a note first' : hasContent(S.draft) ? (isGuest() ? 'Send this round’s feedback. It is saved for the owner: a guest link never pings Hermes' : 'Send this round’s feedback to Hermes') : (isNew(r) ? 'Mark a decision, use the page controls, drop a pin or write a note first' : 'Pick a variant, drop a pin or write a note first')
-    }, S.sending ? h('span', { class: 'spinner' }) : icon('send'), S.sending ? 'Sending…' : (S.amending ? 'Send amendment' : isNew(r) || isGuest() ? 'Send' : 'Send to Hermes')));
+      title: missing.length ? 'Every Change needs a note first' : hasContent(S.draft) ? 'Send this round’s feedback to Hermes' : (isNew(r) ? 'Mark a decision, use the page controls, drop a pin or write a note first' : 'Pick a variant, drop a pin or write a note first')
+    }, S.sending ? h('span', { class: 'spinner' }) : icon('send'), S.sending ? 'Sending…' : (S.amending ? 'Send amendment' : isNew(r) ? 'Send' : 'Send to Hermes')));
   }
 
   function toast(msg, kind) {
@@ -3430,8 +3467,9 @@ import {paintAvatar} from './avatar.js';
       S.amending = false;
       if (res && res.state) applyState(res.state);
       loadDraft(); render();
-      var quiet = R().wake === false || isGuest();
-      toast(quiet ? savedCopy(R(), '') : res && res.notified === false ? 'Saved — Hermes will be pinged as soon as it answers.' : build ? ((r.gate && r.gate.label) || 'Build') + ' pressed ✓' : 'Sent ✓ — Hermes is on it', quiet ? 'ok' : res && res.notified === false ? 'warn' : 'ok');
+      // Saved without a wake: a wake-off board, or a Send the request gate held (from Funnel, say) with its reason.
+      var quiet = R().wake === false, held = !quiet && !!res && res.status === 'stored';
+      toast(quiet ? savedCopy(R(), '') : held ? res.detail || savedCopy(R(), STORED_GUEST_COPY) : res && res.notified === false ? 'Saved — Hermes will be pinged as soon as it answers.' : build ? ((r.gate && r.gate.label) || 'Build') + ' pressed ✓' : 'Sent ✓ — Hermes is on it', quiet ? 'ok' : held || (res && res.notified === false) ? 'warn' : 'ok');
       maybePollForNotify();
       maybeWatchForRound();
     }).catch(function (e) {
@@ -3449,7 +3487,7 @@ import {paintAvatar} from './avatar.js';
       return res.json().catch(function () { return {}; }).then(function (j) {
         if (res.status === 409) throw err('Already sent', j.error || 'This round already has feedback.', true);
         if (!res.ok) throw err('Couldn’t send', j.error || ('Server answered HTTP ' + res.status));
-        return fetchState().then(function (st) { return { notified: j.notified, state: st }; });
+        return fetchState().then(function (st) { return { notified: j.notified, status: j.status, detail: j.detail, state: st }; });
       });
     }, function () { throw err('Offline?', 'The board server didn’t answer. Your draft is saved on this device — try again in a moment.'); });
   }
@@ -3829,6 +3867,58 @@ import {paintAvatar} from './avatar.js';
     return sel;
   }
 
+  // A reviewer can wake Hermes with an @Hermes mention (wakeguard.request_gate), so giving someone Reviewer takes one
+  // more, explicit step. Every role select in the Share dialog (the link's guests, a person, a new invite) is this one.
+  var REVIEWER_CONFIRM_BODY = 'People with the Reviewer role can wake Hermes with an @Hermes mention on boards that ' +
+    'wake a messaging chat. Hermes then runs in that chat with mock-review’s own tools, which reach every review on ' +
+    'this install, so a Reviewer can read and reply on your other reviews: give Reviewer only to people you trust ' +
+    'with all of them. They can’t press Send or Build.';
+  function roleSelect(cls, value, onchange, label) {
+    var prev = String(value);
+    var sel = shareSelect(cls, SHARE_ROLES, value, function (e) {
+      var was = prev;
+      if (sel.value !== 'reviewer' || was === 'reviewer') { prev = sel.value; onchange(e); return; }
+      confirmReviewer(sel, function () { prev = sel.value; onchange(e); }, function () { sel.value = was; });
+    }, label);
+    return sel;
+  }
+
+  // Cancel, Escape and a click on the backdrop put the old role back and send nothing; the Share dialog underneath
+  // stays open (its own key handler stands aside while S.share.confirm is set).
+  function confirmReviewer(sel, yes, no) {
+    var cancel = h('button', { class: 'btn role-confirm-cancel', type: 'button', text: 'Cancel' });
+    var ok = h('button', { class: 'btn btn-primary role-confirm-ok', type: 'button', text: 'Give Reviewer access' });
+    var box = h('div', { class: 'role-confirm', role: 'dialog', 'aria-modal': 'true',
+                         'aria-labelledby': 'role-confirm-title', 'aria-describedby': 'role-confirm-body' },
+      h('h2', { class: 'role-confirm-title', id: 'role-confirm-title', text: 'Give Reviewer access?' }),
+      h('p', { class: 'role-confirm-body', id: 'role-confirm-body', text: REVIEWER_CONFIRM_BODY }),
+      h('div', { class: 'role-confirm-actions' }, cancel, ok));
+    var backdrop = h('div', { class: 'role-confirm-backdrop' }, box);
+    var share = S.share, done = false;
+    function close(confirmed) {
+      if (done) return;
+      done = true;
+      document.removeEventListener('keydown', key, true);
+      if (backdrop.parentNode) backdrop.parentNode.removeChild(backdrop);
+      if (share && share.confirm === backdrop) share.confirm = null;
+      if (confirmed) yes(); else no();
+      if (sel.isConnected) sel.focus({ preventScroll: true });
+    }
+    function key(e) {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(false); return; }
+      if (e.key !== 'Tab') return;
+      e.preventDefault();   // two buttons: Tab and Shift+Tab move between them, never behind the dialog
+      (document.activeElement === cancel ? ok : cancel).focus();
+    }
+    cancel.addEventListener('click', function () { close(false); });
+    ok.addEventListener('click', function () { close(true); });
+    backdrop.addEventListener('click', function (e) { if (e.target === backdrop) close(false); });
+    if (share) share.confirm = backdrop;
+    document.addEventListener('keydown', key, true);
+    document.body.appendChild(backdrop);
+    cancel.focus({ preventScroll: true });
+  }
+
   function shareExpiryValue(link) {
     if (!link || link.expires_at == null) return 'never';
     return (link.expires_at * 1000) - Date.now() <= 26 * 3600 * 1000 ? '24h' : '7d';
@@ -3919,7 +4009,7 @@ import {paintAvatar} from './avatar.js';
     S.share = { el: backdrop, box: box, view: null, invite: null, inviteRole: 'commenter', inviteExpiry: 'never',
       returnTo: document.activeElement };
     S.share.key = function (e) {
-      if (!S.share) return;
+      if (!S.share || S.share.confirm) return;   // "Give Reviewer access?" is open on top and handles its own keys
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeShare(); return; }
       if (e.key !== 'Tab') return;
       var f = Array.prototype.filter.call(box.querySelectorAll('button,input,select,a[href],textarea'), function (el) {
@@ -3958,7 +4048,7 @@ import {paintAvatar} from './avatar.js';
     var input = h('input', { class: 'share-input share-invite-input', type: 'text',
                              placeholder: 'Name or email to invite', maxlength: 254,
                              'aria-label': 'Name or email to invite' });
-    var inviteRole = shareSelect('share-invite-role', SHARE_ROLES, S.share.inviteRole, function (e) {
+    var inviteRole = roleSelect('share-invite-role', S.share.inviteRole, function (e) {
       S.share.inviteRole = e.target.value;
     }, 'What an invited person can do');
     var inviteExpiry = shareSelect('share-invite-expiry',
@@ -3999,9 +4089,20 @@ import {paintAvatar} from './avatar.js';
       if (p.role === 'owner') {
         row.appendChild(h('span', { class: 'share-owner', text: 'Owner' }));
       } else {
-        row.appendChild(shareSelect('share-person-role', SHARE_ROLES, p.role, function (e) {
+        row.appendChild(roleSelect('share-person-role', p.role, function (e) {
           peoplePost({ action: 'grant', user_id: p.user_id, role: e.target.value });
         }, 'Role for ' + p.name));
+        if (p.role === 'reviewer' && !p.wake_ok) {
+          row.appendChild(h('span', { class: 'share-wake-unconfirmed', text: 'Waking off',
+            title: 'This Reviewer is saved, not woken, until you confirm Reviewer again' }));
+          row.appendChild(h('button', { class: 'btn btn-ghost share-reconfirm', type: 'button',
+            text: 'Confirm Reviewer',
+            onclick: function (e) {
+              confirmReviewer(e.currentTarget, function () {
+                peoplePost({ action: 'grant', user_id: p.user_id, role: 'reviewer' });
+              }, function () {});
+            } }));
+        }
         if (p.direct_role) {
           row.appendChild(h('button', { class: 'btn btn-ghost btn-danger share-remove', type: 'button',
             text: p.inherited_role ? 'Clear override' : 'Remove',
@@ -4031,7 +4132,7 @@ import {paintAvatar} from './avatar.js';
         shareSelect('share-audience', [['anyone', 'Anyone with the link'], ['members', 'Signed-in people only']],
           link.audience, function (e) { sharePost({ action: 'update', audience: e.target.value }); },
           'Who can open it')));
-      roleSel = shareSelect('share-guest-role', SHARE_ROLES, link.guest_role, function (e) {
+      roleSel = roleSelect('share-guest-role', link.guest_role, function (e) {
         sharePost({ action: 'update', guest_role: e.target.value });
       }, 'What guests can do');
       expSel = shareSelect('share-expiry',
@@ -4041,6 +4142,17 @@ import {paintAvatar} from './avatar.js';
         }, 'When the link expires');
       box.appendChild(h('div', { class: 'share-row' },
         h('span', { class: 'share-label', text: 'Guests can' }), h('span', { class: 'share-spacer' }), roleSel, expSel));
+      if (link.guest_role === 'reviewer' && !link.wake_ok) {
+        box.appendChild(h('div', { class: 'share-row share-wake-unconfirmed' },
+          h('span', { class: 'share-faint', text: 'Reviewer guests cannot wake Hermes until you confirm Reviewer again.' }),
+          h('span', { class: 'share-spacer' }),
+          h('button', { class: 'btn share-reconfirm', type: 'button', text: 'Confirm Reviewer',
+            onclick: function (e) {
+              confirmReviewer(e.currentTarget, function () {
+                sharePost({ action: 'update', guest_role: 'reviewer' });
+              }, function () {});
+            } })));
+      }
       box.appendChild(shareLinkRow(link.url, 'Share link'));
       var regen = h('button', { class: 'btn btn-ghost', type: 'button', text: 'Regenerate',
         onclick: function () {

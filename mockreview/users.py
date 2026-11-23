@@ -24,7 +24,7 @@ import sqlite3
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import config, db, store, streams
+from . import config, db, store, streams, wakeguard
 from .store import ReviewError
 
 INSTANCE_ROLES = ("admin", "member")
@@ -308,7 +308,9 @@ def create_invite(actor: str, role: str = "member", review_id: Optional[str] = N
                   all_reviews: bool = False, expires: Any = None, label: str = "",
                   grant_expires: Any = None) -> Dict[str, Any]:
     """A single-use invite. With review_id (or all_reviews) the new account also gets that grant (review_role,
-    default commenter). Returns the link path (`/invite/<token>`) once; only a hash of its nonce is kept."""
+    default commenter). A Reviewer `review_role` at mint is the owner's confirmation that this person may wake Hermes,
+    stored on the invite and copied to the grant on redemption; any other role records no confirmation. Returns the
+    link path (`/invite/<token>`) once; only a hash of its nonce is kept."""
     if role not in INSTANCE_ROLES:
         raise AuthError("role must be admin or member")
     if review_id and all_reviews:
@@ -324,9 +326,11 @@ def create_invite(actor: str, role: str = "member", review_id: Optional[str] = N
     with db.tx() as conn:
         iid, token = _mint(conn, "invite", actor, now() + ttl, role=role, review_id=review_id,
                            all_reviews=1 if all_reviews else 0, review_role=review_role,
-                           grant_expires_at=grant_until, label=clean_name(label))
+                           grant_expires_at=grant_until, label=clean_name(label),
+                           wake_ok=1 if review_role == "reviewer" else 0)
         audit(conn, actor, "invite.create", f"invite:{iid}", role=role, review_id=review_id,
-              all_reviews=bool(all_reviews), review_role=review_role, expires_at=now() + ttl)
+              all_reviews=bool(all_reviews), review_role=review_role, expires_at=now() + ttl,
+              wake_ok=review_role == "reviewer")
     return {"ok": True, "id": iid, "path": f"/invite/{token}", "role": role, "review_id": review_id,
             "review_role": review_role, "expires_at": now() + ttl}
 
@@ -432,7 +436,7 @@ def redeem(purpose: str, token: str, name: str = "", identity: Optional[Dict[str
                           invite=row["id"])
                 if row["review_role"]:
                     _grant(conn, f"invite:{row['id']}", uid, row["review_role"], row["review_id"],
-                           bool(row["all_reviews"]), row["grant_expires_at"])
+                           bool(row["all_reviews"]), row["grant_expires_at"], wake_ok=bool(row["wake_ok"]))
                 audit(conn, f"user:{uid}", "invite.use", f"invite:{row['id']}")
             conn.execute("UPDATE invites SET used_by = ? WHERE id = ?", (uid, row["id"]))
             token_, csrf = _new_session(conn, user_id=uid, user_agent=user_agent)
@@ -537,18 +541,21 @@ def sign_out_others(user_id: int, current_hash: str = "") -> Dict[str, Any]:
 # ---------------------------------------------------------------- grants
 
 def _grant(conn: sqlite3.Connection, actor: str, user_id: int, role: str, review_id: Optional[str],
-           all_reviews: bool, expires_at: Optional[float]) -> None:
+           all_reviews: bool, expires_at: Optional[float], *, wake_ok: bool) -> None:
+    """Write one grant. `wake_ok` is the owner's confirmation and is never derived here: a fresh `users.grant`
+    supplies it, a redemption copies the invite's stored value (0 for an invite minted before the opt-in)."""
     if role not in REVIEW_ROLES:
         raise AuthError("review role must be reviewer, commenter or viewer")
     if bool(review_id) == bool(all_reviews):
         raise AuthError("a grant is for one review (--review) or for all reviews (--all-reviews)")
     conn.execute("DELETE FROM grants WHERE user_id = ? AND COALESCE(review_id, '*') = ?",
                  (user_id, review_id or "*"))
-    conn.execute("INSERT INTO grants (review_id, all_reviews, user_id, role, expires_at, granted_by, created_at) "
-                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                 (review_id, 1 if all_reviews else 0, user_id, role, expires_at, actor, now()))
+    conn.execute("INSERT INTO grants (review_id, all_reviews, user_id, role, expires_at, granted_by, created_at, "
+                 "wake_ok) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                 (review_id, 1 if all_reviews else 0, user_id, role, expires_at, actor, now(),
+                  1 if wake_ok else 0))
     audit(conn, actor, "grant.set", f"user:{user_id}", review_id=review_id, all_reviews=bool(all_reviews), role=role,
-          expires_at=expires_at)
+          expires_at=expires_at, wake_ok=bool(wake_ok))
 
 
 def grant(actor: str, user_id: int, role: str, review_id: Optional[str] = None, all_reviews: bool = False,
@@ -565,7 +572,7 @@ def grant(actor: str, user_id: int, role: str, review_id: Optional[str] = None, 
         else:
             until = None if not expires or str(expires).strip().lower() == "never" else \
                 now() + _parse_days(expires, 0)
-        _grant(conn, actor, user_id, role, review_id, all_reviews, until)
+        _grant(conn, actor, user_id, role, review_id, all_reviews, until, wake_ok=role == "reviewer")
         hashes = [r["id_hash"] for r in conn.execute("SELECT id_hash FROM sessions WHERE user_id = ?", (user_id,))]
     _close_streams(user_id, hashes)      # a re-grant can be a downgrade; closing only costs the client a reconnect
     return {"ok": True, "user_id": user_id, "review_id": review_id, "all_reviews": bool(all_reviews), "role": role,
@@ -598,6 +605,58 @@ def granted_review_ids(user_id: int) -> Tuple[bool, List[str]]:
     return any(r["all_reviews"] for r in rows), [r["review_id"] for r in rows if r["review_id"]]
 
 
+def wake_reason(review_id: str, actor: str) -> str:
+    """Why this actor's current access to the review does not include the owner's confirmation that its Reviewer role
+    may wake Hermes, or "" when it does. Read fresh from the database.
+
+    An admin is the owner. A member follows the effective live grant, the review's own winning over an all-reviews one
+    (as in grant_role). A guest needs one row that binds the guest to the review, its link generation, an active and
+    unexpired link that still admits `anyone`, and the link's confirmation; a guest row whose link stopped, rotated,
+    expired or turned members-only answers REVIEWER_WAKE_ENDED, and a live link without confirmation answers
+    REVIEWER_WAKE_UNCONFIRMED. Anything else, or an unreadable row, fails closed with REVIEWER_WAKE_UNCONFIRMED."""
+    unconfirmed = wakeguard.REVIEWER_WAKE_UNCONFIRMED
+    if not isinstance(actor, str):
+        return unconfirmed
+    try:
+        conn = db.connect()
+        if actor.startswith("guest:"):
+            row = conn.execute(
+                "SELECT g.generation AS guest_generation, l.generation AS link_generation, l.active, l.expires_at, "
+                "l.audience, l.wake_ok FROM guests g JOIN share_links l ON l.review_id = g.review_id "
+                "WHERE g.id = ? AND g.review_id = ?", (actor[6:], review_id)).fetchone()
+            if row is None:
+                return wakeguard.REVIEWER_WAKE_ENDED
+            if (int(row["active"] or 0) != 1
+                    or int(row["guest_generation"]) != int(row["link_generation"])
+                    or (row["expires_at"] is not None and float(row["expires_at"]) <= now())
+                    or row["audience"] != "anyone"):
+                return wakeguard.REVIEWER_WAKE_ENDED
+            return "" if int(row["wake_ok"] or 0) == 1 else unconfirmed
+        if actor.startswith("user:"):
+            uid = actor[5:]
+            if not uid.isdigit():
+                return unconfirmed
+            user = conn.execute("SELECT role FROM users WHERE id = ?", (int(uid),)).fetchone()
+            if user is None:
+                return unconfirmed
+            if user["role"] == "admin":
+                return ""
+            grant = conn.execute(
+                "SELECT wake_ok FROM grants WHERE user_id = ? AND (review_id = ? OR all_reviews = 1) "
+                "AND (expires_at IS NULL OR expires_at > ?) ORDER BY review_id IS NULL",
+                (int(uid), review_id, now())).fetchone()
+            return "" if grant is not None and int(grant["wake_ok"] or 0) == 1 else unconfirmed
+    except (sqlite3.Error, OSError, TypeError, ValueError):
+        return unconfirmed
+    return unconfirmed
+
+
+def wake_ok_for(review_id: str, actor: str) -> bool:
+    """Whether this actor's current access to the review includes the owner's confirmation that its Reviewer role may
+    wake Hermes (`wake_reason` is empty)."""
+    return wake_reason(review_id, actor) == ""
+
+
 # ---------------------------------------------------------------- share links and guests
 
 def _live_guest_seats(conn: sqlite3.Connection, review_id: str) -> int:
@@ -627,10 +686,10 @@ def review_people(review_id: str) -> List[Dict[str, Any]]:
     listed = {int(r["id"]) for r in admins}
     people = [{"user_id": int(r["id"]), "name": r["name"], "email": r["email"], "role": "owner",
                "expires_at": None, "all_reviews": False, "direct_role": None, "direct_expires_at": None,
-               "inherited_role": None, "inherited_expires_at": None} for r in admins]
+               "inherited_role": None, "inherited_expires_at": None, "wake_ok": True} for r in admins]
     grants = conn.execute(
-        "SELECT g.user_id, g.role, g.expires_at, g.all_reviews, g.review_id, u.name, u.email FROM grants g "
-        "JOIN users u ON u.id = g.user_id WHERE (g.review_id = ? OR g.all_reviews = 1) "
+        "SELECT g.user_id, g.role, g.expires_at, g.all_reviews, g.review_id, g.wake_ok, u.name, u.email "
+        "FROM grants g JOIN users u ON u.id = g.user_id WHERE (g.review_id = ? OR g.all_reviews = 1) "
         "AND (g.expires_at IS NULL OR g.expires_at > ?) ORDER BY g.review_id IS NULL, u.name COLLATE NOCASE, u.id",
         (review_id, now())).fetchall()
     by_user: Dict[int, Dict[str, Any]] = {}
@@ -640,10 +699,11 @@ def review_people(review_id: str) -> List[Dict[str, Any]]:
             continue
         entry = by_user.setdefault(uid, {"user_id": uid, "name": r["name"], "email": r["email"],
                                          "direct": None, "inherited": None})
+        grant_ = {"role": r["role"], "expires_at": r["expires_at"], "wake_ok": bool(int(r["wake_ok"] or 0))}
         if r["all_reviews"]:
-            entry["inherited"] = {"role": r["role"], "expires_at": r["expires_at"]}
+            entry["inherited"] = grant_
         elif r["review_id"] == review_id:
-            entry["direct"] = {"role": r["role"], "expires_at": r["expires_at"]}
+            entry["direct"] = grant_
     for entry in by_user.values():
         direct, inherited = entry.pop("direct"), entry.pop("inherited")
         effective = direct or inherited
@@ -653,7 +713,8 @@ def review_people(review_id: str) -> List[Dict[str, Any]]:
                        "direct_role": direct["role"] if direct else None,
                        "direct_expires_at": direct["expires_at"] if direct else None,
                        "inherited_role": inherited["role"] if inherited else None,
-                       "inherited_expires_at": inherited["expires_at"] if inherited else None})
+                       "inherited_expires_at": inherited["expires_at"] if inherited else None,
+                       "wake_ok": effective["wake_ok"]})
     return people
 
 
@@ -698,7 +759,8 @@ def _link_path(conn: sqlite3.Connection, review_id: str, generation: int) -> str
 def _link_row_dict(conn: sqlite3.Connection, r: sqlite3.Row, url: bool = True) -> Dict[str, Any]:
     path = _link_path(conn, r["review_id"], r["generation"])
     row = {"review_id": r["review_id"], "guest_role": r["guest_role"], "generation": r["generation"],
-           "expires_at": r["expires_at"], "audience": r["audience"], "round": r["round"], "path": path}
+           "expires_at": r["expires_at"], "audience": r["audience"], "round": r["round"],
+           "wake_ok": bool(int(r["wake_ok"] or 0)), "path": path}
     if url:
         row["url"] = share_url(r["review_id"], path)
     return row
@@ -732,7 +794,9 @@ def _set_link(actor: str, review_id: str, action: str, guest_role: Optional[str]
 
     `expires` absent (UNSET) leaves the stored expiry alone; present and None / "" / "never" means it never expires.
     `audience` and `round` are validated here; the server also checks the round exists in the review. A change to the
-    stored `guest_role` or `round` closes the review's open guest streams, so the board reconnects under the new scope."""
+    stored `guest_role` or `round` closes the review's open guest streams, so the board reconnects under the new scope.
+    Passing `guest_role` also records the owner's confirmation that a Reviewer link may wake Hermes (and clears it for
+    any other role); leaving it out keeps the stored role and its confirmation."""
     if guest_role is not None and guest_role not in REVIEW_ROLES:
         raise AuthError("guest role must be reviewer, commenter or viewer")
     if audience is not None:
@@ -756,10 +820,11 @@ def _set_link(actor: str, review_id: str, action: str, guest_role: Optional[str]
                 aud = audience or "anyone"
                 revoke_guests = aud == "members"
                 version = round or "latest"
+                wake = 1 if role == "reviewer" else 0
                 conn.execute("INSERT OR REPLACE INTO share_links (review_id, active, audience, guest_role, "
-                             "expires_at, generation, round, created_by, created_at) "
-                             "VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?)",
-                             (review_id, aud, role, until, gen, version, actor, now()))
+                             "expires_at, generation, round, created_by, created_at, wake_ok) "
+                             "VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?)",
+                             (review_id, aud, role, until, gen, version, actor, now(), wake))
                 audit(conn, actor, "share.create", f"review:{review_id}", guest_role=role, generation=gen,
                       expires_at=until, audience=aud, round=version)
             elif r is None or not r["active"]:
@@ -771,9 +836,10 @@ def _set_link(actor: str, review_id: str, action: str, guest_role: Optional[str]
                 aud = audience or r["audience"]
                 revoke_guests = aud == "members"
                 version = round or r["round"]
+                wake = (1 if role == "reviewer" else 0) if guest_role is not None else int(r["wake_ok"])
                 conn.execute("UPDATE share_links SET generation = generation + 1, guest_role = ?, expires_at = ?, "
-                             "audience = ?, round = ? WHERE review_id = ?",
-                             (role, stored_expiry, aud, version, review_id))
+                             "audience = ?, round = ?, wake_ok = ? WHERE review_id = ?",
+                             (role, stored_expiry, aud, version, wake, review_id))
                 audit(conn, actor, "share.regenerate", f"review:{review_id}", generation=r["generation"] + 1,
                       guest_role=role, expires_at=stored_expiry, audience=aud, round=version)
             elif action == "update":
@@ -782,8 +848,9 @@ def _set_link(actor: str, review_id: str, action: str, guest_role: Optional[str]
                 aud = audience or r["audience"]
                 revoke_guests = aud == "members"
                 version = round or r["round"]
-                conn.execute("UPDATE share_links SET guest_role = ?, expires_at = ?, audience = ?, round = ? "
-                             "WHERE review_id = ?", (role, stored_expiry, aud, version, review_id))
+                wake = (1 if role == "reviewer" else 0) if guest_role is not None else int(r["wake_ok"])
+                conn.execute("UPDATE share_links SET guest_role = ?, expires_at = ?, audience = ?, round = ?, "
+                             "wake_ok = ? WHERE review_id = ?", (role, stored_expiry, aud, version, wake, review_id))
                 audit(conn, actor, "share.update", f"review:{review_id}", guest_role=role, expires_at=stored_expiry,
                       audience=aud, round=version)
             elif action == "stop":

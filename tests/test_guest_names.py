@@ -12,7 +12,7 @@ import pytest
 
 from authkit import account, signed_in, token_of
 from conftest import http
-from mockreview import db, threads, users
+from mockreview import db, threads, users, wakeguard
 from test_cux_send_to_hermes import make_review, on, open_new_pin, save_new_pin
 from test_live_round_tool import Board, chrome  # noqa: F401  (chrome is the fixture)
 
@@ -512,9 +512,13 @@ def test_wake_on_board_picker_still_offers_hermes(env, server, chrome, tmp_path)
 
 
 @pytest.mark.browser
-def test_share_guest_reviewer_has_no_hermes_surface(env, server, chrome, tmp_path, monkeypatch):
+@pytest.mark.parametrize("role", ["reviewer", "commenter"])
+def test_a_share_guest_is_offered_hermes_only_as_a_reviewer(env, server, chrome, tmp_path, monkeypatch, role):
+    """A reviewer-role guest may wake Hermes with a mention (wakeguard.request_gate), so the @ picker and the
+    Send-to-Hermes box offer it at 1440 and 390; a commenter-role guest never wakes Hermes and is offered neither."""
+    offered = role == "reviewer"
     rid = make_review(tmp_path, wake=True)
-    made = users.share("test", rid, "create", "reviewer")
+    made = users.share("test", rid, "create", role)
     token = token_of(made["path"])
     monkeypatch.setenv("MOCKREVIEW_LOOPBACK_OWNER", "false")
     b = Board(chrome, f"{server}/s/{token}", wait=BOARD_WAIT, width=1440, height=900)
@@ -523,20 +527,20 @@ def test_share_guest_reviewer_has_no_hermes_surface(env, server, chrome, tmp_pat
         open_new_pin(b)
         type_at(b, ".popover textarea")
         names = mention_names(b)
-        assert "Hermes" not in names, f"a share-link guest was offered Hermes in the new-pin picker: {names}"
-        assert not b.js("!!document.querySelector('.popover .hermes-box')"), \
-            "a share-link guest got the new-pin Send-to-Hermes box"
+        assert ("Hermes" in names) is offered, f"a {role} guest's new-pin picker: {names}"
+        assert b.js("!!document.querySelector('.popover .hermes-box')") is offered, \
+            f"a {role} guest's new-pin Send-to-Hermes box"
         b.js("document.querySelector('.popover textarea').blur()")
         time.sleep(0.3)
         save_new_pin(b, "Guest note")
         thread = threads.list_threads(rid)[0]
         b.press('.mpin[data-thread="%s"]' % thread["id"])
         assert b.until("!!document.querySelector('.tpop textarea')")
-        assert not b.js("!!document.querySelector('.tpop .hermes-box')"), \
-            "a share-link guest got the reply Send-to-Hermes box"
+        assert b.js("!!document.querySelector('.tpop .hermes-box')") is offered, \
+            f"a {role} guest's reply Send-to-Hermes box"
         type_at(b, ".tpop .tp-input")
         names = mention_names(b)
-        assert "Hermes" not in names, f"a share-link guest was offered Hermes in the reply picker: {names}"
+        assert ("Hermes" in names) is offered, f"a {role} guest's reply picker: {names}"
 
         b.press(".tpop .tp-close")
         assert b.until("!document.querySelector('.tpop')", timeout=10), "the reply composer did not close"
@@ -547,9 +551,9 @@ def test_share_guest_reviewer_has_no_hermes_surface(env, server, chrome, tmp_pat
         assert b.js("!!document.querySelector('.popover textarea')"), "the 390 new-pin composer never rendered"
         type_at(b, ".popover textarea")
         names = mention_picker(b)
-        assert "Hermes" not in names, f"a 390 share-link guest was offered Hermes in the new-pin picker: {names}"
-        assert not b.js("!!document.querySelector('.popover .hermes-box')"), \
-            "a 390 share-link guest got the new-pin Send-to-Hermes box"
+        assert ("Hermes" in names) is offered, f"a 390 {role} guest's new-pin picker: {names}"
+        assert b.js("!!document.querySelector('.popover .hermes-box')") is offered, \
+            f"a 390 {role} guest's new-pin Send-to-Hermes box"
         b.press(".popover .pop-close")
         assert b.until("!document.querySelector('.popover')", timeout=10), \
             "the 390 new-pin composer did not close"
@@ -557,18 +561,18 @@ def test_share_guest_reviewer_has_no_hermes_surface(env, server, chrome, tmp_pat
         b.press('.mpin[data-thread="%s"]' % thread["id"])
         assert b.until("!!document.querySelector('.tpop textarea')", timeout=15), \
             "the 390 reply composer never rendered"
-        assert not b.js("!!document.querySelector('.tpop .hermes-box')"), \
-            "a 390 share-link guest got the reply Send-to-Hermes box"
+        assert b.js("!!document.querySelector('.tpop .hermes-box')") is offered, \
+            f"a 390 {role} guest's reply Send-to-Hermes box"
         type_at(b, ".tpop .tp-input")
         names = mention_picker(b)
-        assert "Hermes" not in names, f"a 390 share-link guest was offered Hermes in the reply picker: {names}"
+        assert ("Hermes" in names) is offered, f"a 390 {role} guest's reply picker: {names}"
         b.press(".tpop .tp-close")
         at_width(b, DESKTOP)
     finally:
         b.js("localStorage.clear()")
 
 
-def test_share_guest_reviewer_mention_never_activates(env, server, review):
+def test_a_share_guest_reviewers_mention_activates_and_a_commenters_never_does(env, server, review):
     rid = review["id"]
     _made, guest = join_guest(rid, "reviewer")
     code, _headers, body = http("POST", f"{server}/r/{rid}/api/threads",
@@ -576,10 +580,19 @@ def test_share_guest_reviewer_mention_never_activates(env, server, review):
                                signed_in(guest))
     assert code == 201, body
     thread = json.loads(body)["thread"]
-    assert thread["activated"] is False, "a share-link guest activated Hermes"
+    assert thread["activated"] is True, "a reviewer-role guest's mention did not activate Hermes"
     comment = thread["comments"][0]
-    assert comment["sent_to_hermes"] is False, "a share-link guest's comment was sent to Hermes"
+    assert comment["sent_to_hermes"] is True, comment
     assert comment["mentions"] == [{"kind": "hermes", "target": "hermes"}], comment["mentions"]
+
+    users.share("test", rid, "update", "commenter")
+    code, _headers, body = http("POST", f"{server}/r/{rid}/api/threads",
+                               {"text": "@Hermes and this", "mentions": ["hermes"]}, signed_in(guest))
+    assert code == 201, body
+    res = json.loads(body)
+    assert res["thread"]["activated"] is False, "a commenter-role guest activated Hermes"
+    assert res["thread"]["comments"][0]["sent_to_hermes"] is False
+    assert res["wake"] == {"status": "stored", "notified": False, "detail": wakeguard.MENTION_ROLE_NO_WAKE}, res
 
 
 def test_signed_in_reviewer_still_activates_hermes(env, server, review):

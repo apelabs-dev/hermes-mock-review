@@ -20,20 +20,25 @@ A thread is one anchored conversation:
   on the board and still opens the thread; set `hide_resolved_pins` to true to hide the marker instead. Replying to
   a resolved thread is refused until it is reopened.
 - **Comments.** Plain text, in order, each with the author's actor key and the display name at the time of posting.
-- **Activation.** `activated` means someone with the `submit` capability mentioned `@Hermes` in it. An activating
-  comment wakes Hermes once through the same wake route Send uses; the payload names the review, round, thread, comment
+- **Activation.** `activated` means the owner or a reviewer mentioned `@Hermes` in it and the request gate let that
+  mention wake Hermes (see "Who" below). An activating comment wakes Hermes once through the same wake route Send uses; the payload names the review, round, thread, comment
   and block. The POST answers without waiting for the gateway: the worker tick delivers the wake, a burst inside the
   spacing window becomes one wake carrying every mention, and a request on an editable block shows live Hermes
-  activity. Replaying the same `idem` is a duplicate and never wakes twice. A guest, an agent's token and a wake-off
-  board never activate, so they never wake anyone.
+  activity. Replaying the same `idem` is a duplicate and never wakes twice. A commenter, an agent's token and a
+  wake-off board never activate, so they never wake anyone.
 
 ## Waking Hermes from a thread
 
 An `@Hermes` mention in a comment starts a Hermes session without anyone pressing Send.
 
-- **Who.** The owner, or a signed-in member whose role carries `submit` (owner or reviewer). A guest, an agent's
-  token and a viewer never wake it, and neither does a board created with wake-up off or a closed review. Their comment
-  is stored and shown as a plain mention.
+- **Who.** The owner from this computer or the tailnet, or a reviewer who is not the owner (a member with the
+  Reviewer role or a reviewer-role guest) on a board that wakes a messaging chat while `wake_toolsets` is empty, from
+  any ingress, the Funnel link included. The owner's mention from the Funnel link or another public path, a reviewer's
+  on a board that wakes a Desktop chat or a route with tools, and a commenter's are stored and not activated: the POST
+  answer carries `"wake": {"status": "stored", "notified": false, "detail": "<why>"}` and the board shows the reason.
+  An agent's token and a viewer never wake it, and neither does a board created with wake-up off or a closed review;
+  their comment is stored and shown as a plain mention. The full rule is in
+  [security.md](security.md#who-may-wake-hermes).
 - **Where.** The wake goes to the chat the review was created from, through the same signed webhook route Send uses
   (see [hosting.md](hosting.md#waking-the-agent)). The payload is a `review.thread_mention` event with the review,
   thread, comment, anchored block and the comment text.
@@ -121,9 +126,9 @@ double-clicked board needs. The board sends one per composer session.
 
 A viewer gets 403 on every writing route. A guest posts with the share link's role; a guest viewer cannot post at all.
 Commenting needs only the `comment` capability: a commenter can open the Comment toggle and post on any round, including
-a round whose feedback was already sent. Sending feedback still needs `submit`, the current round and an unsubmitted (or
-amending) board. A reviewer-role guest may Send and request a pin fix: both are stored for the owner and neither ever
-wakes Hermes (tell it in chat).
+a round whose feedback was already sent. Sending feedback (Send, Amend, Build) is the owner's alone and needs the
+current round and an unsubmitted (or amending) board; anyone else gets 403 and sees no Send or Build button. A
+reviewer's pin fix, from a guest or a member, is stored for the owner and never wakes Hermes.
 Resolving and reopening are open to anyone who may comment: a comment is input, and which threads are done is a
 judgement call its readers make.
 
@@ -229,8 +234,17 @@ feed has its own cursor, moved by `activity/read`. More shows the open-thread an
   coordinates. A mock pin stays with the width it was made at. A round
   stored without a section index (or whose block count changed after it was created) gets its block refs derived at
   render time: the block id, else `s<N>` in file order, with the reserved `page`, `else` and `doc` refs excluded, so
-  nothing about the stored round changes. Controls stay live in comment mode: approve/change/skip, links, fields,
-  native media and the pin markers themselves are never turned into a new pin.
+  nothing about the stored round changes.
+- In comment mode a click on anything in a mock or a framed page becomes a pin, its buttons, links, summaries, fields,
+  labels and native media included. The pin is anchored to the control itself (a click on a button's label text pins
+  the button), and the click does nothing else: no page handler, no navigation, no toggle, no focus, no checkbox flip.
+  Enter or Space on a focused control does nothing either, and makes no pin. Three things keep their clicks and never
+  pin: the board's own decision controls (Pick, Approve, Change, Skip and the note field), anything a page marks
+  `[data-mr-live]`, and the pin markers. To use a mock's controls, leave comment mode (Esc, `C` or the Comment button).
+- `data-mr-live` is the page's way to keep a control working in comment mode, in an inline mock or a framed page. Put it
+  on the control or on an element around it: a click on that element or anything inside it is the page's own, the
+  hover does not outline it, and the cursor stays the page's. A radio wrapped in a `<label>` needs the attribute on the
+  label (or an element around both), since the label is what takes the click.
 - A pin opens its thread in a popover next to it. The header row is the first commenter's avatar, name and time on the
   left, and three ghost icon buttons on the right, on desktop and in the phone sheet alike: Resolve (a pressed, green
   check means the thread is resolved; the same slot becomes Reopen), More (Edit, Copy link and Delete for the root

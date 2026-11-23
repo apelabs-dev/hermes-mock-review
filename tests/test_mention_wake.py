@@ -1,8 +1,9 @@
-"""@Hermes wakes: one queued wake per activating comment, delivered by the worker tick, and none for a guest, a token
-or a wake-off board.
+"""@Hermes wakes: one queued wake per activating comment, delivered by the worker tick, and none for a commenter, a
+token or a wake-off board.
 
-An activating comment is one that sets `activated`: the author's role carries `submit`, they are not a share-link
-guest and not a token, and the board was created with wake-up on. The POST only records the wake; the 5 s worker tick
+An activating comment is one that sets `activated`: the request gate let it through (wakeguard.request_gate: the owner
+from private ingress, or a reviewer on a messaging board whose chat has no wake_toolsets), it is not a token, and the
+board was created with wake-up on. The POST only records the wake; the 5 s worker tick
 coalesces the due ones into one signed request that carries the review thread, the comments and their blocks. Every
 delivered mention also opens a pin request on the anchored block, which is the board's "working" chip.
 """
@@ -15,7 +16,7 @@ import pytest
 
 from authkit import signed_in, token_of
 from conftest import http, load_plugin
-from mockreview import api, db, service, store, threads, users
+from mockreview import api, db, service, store, threads, users, wakeguard
 from test_plugin import FakeCtx
 
 ORIGIN = {"platform": "discord", "chat_id": "test-chat"}
@@ -624,9 +625,9 @@ def test_plugin_list_comments_reads_counts_and_filters(env, server, tmp_path):
 # ---------------------------------------------------------------- who never wakes Hermes
 
 
-def test_a_guest_mention_never_wakes(env, server, tmp_path):
+def test_a_guest_commenters_mention_and_a_reviewers_on_a_tools_board_never_wake(env, server, tmp_path, monkeypatch):
     rid = board(tmp_path)["id"]
-    made = users.share("test", rid, "create", "reviewer")
+    made = users.share("test", rid, "create", "commenter")
     guest = users.join_as_guest(users.resolve_share_token(token_of(made["path"])))
 
     code, _, out = post(server, rid, "@Hermes from the owner", idem="owner")
@@ -635,20 +636,29 @@ def test_a_guest_mention_never_wakes(env, server, tmp_path):
     assert len(env["receiver"].wakes) == 1
     before = len(env["receiver"].wakes)
 
-    code, _, out = http("POST", f"{server}/r/{rid}/api/threads",
-                        {"anchor": {"block": "m1", "x": 0.2, "y": 0.3},
-                         "text": "@Hermes from a guest", "mentions": ["hermes"]}, signed_in(guest))
-    assert code == 201, out
-    thread = json.loads(out)["thread"]
-    assert thread["activated"] is False
-    tick()
-    assert len(env["receiver"].wakes) == before
+    def guest_mentions(why):
+        code, _, out = http("POST", f"{server}/r/{rid}/api/threads",
+                            {"anchor": {"block": "m1", "x": 0.2, "y": 0.3},
+                             "text": "@Hermes from a guest", "mentions": ["hermes"]}, signed_in(guest))
+        assert code == 201, out
+        res = json.loads(out)
+        assert res["thread"]["activated"] is False
+        assert res["wake"] == {"status": "stored", "notified": False, "detail": why}
+        tick()
+        assert len(env["receiver"].wakes) == before
 
-    code, _, out = http("POST", f"{server}/r/{rid}/api/threads/{thread['id']}/reply",
-                        {"text": "@Hermes again", "mentions": ["hermes"]}, signed_in(guest))
-    assert code == 200, out
-    tick()
-    assert len(env["receiver"].wakes) == before
+        code, _, out = http("POST", f"{server}/r/{rid}/api/threads/{res['thread']['id']}/reply",
+                            {"text": "@Hermes again", "mentions": ["hermes"]}, signed_in(guest))
+        assert code == 200, out
+        assert json.loads(out)["wake"]["detail"] == why
+        tick()
+        assert len(env["receiver"].wakes) == before
+
+    guest_mentions(wakeguard.MENTION_ROLE_NO_WAKE)       # a commenter never wakes Hermes
+    users.share("test", rid, "update", "reviewer")
+    monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
+    guest_mentions(wakeguard.TOOLS_NO_WAKE)              # a reviewer does not either while the chat has tools
+    assert all(r["author"].startswith("user:") for r in wake_records(rid).values())
 
 
 def test_a_token_reply_mention_never_wakes(env, server, tmp_path):

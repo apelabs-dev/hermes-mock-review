@@ -123,8 +123,9 @@ SPEC: List[Setting] = [
             "ping names the longer wait. 1 = the same wait as Send. A wait of 0 stays off.", "feedback", lo=1, hi=24),
     Setting("wake_toolsets", "list", [], "Hermes toolsets the session woken by Send may use, for example mock-review, "
             "terminal, file (the list replaces Hermes's webhook default). hermes mockreview setup prints the toolsets line to add by hand to the wake "
-            "route in webhook_subscriptions.json; add it again after every setup run. Empty: Hermes's safe webhook tools only, and "
-            "the build continues in the origin chat's session. Refused for a waking board whose Send is ungated "
+            "route in webhook_subscriptions.json; add it again after every setup run. Empty: Hermes's safe webhook tools and "
+            "the mock-review toolset Hermes enables by default (the mock_review tools for every review on this install), but "
+            "no terminal or files; the build continues in the origin chat's session. Refused for a waking board whose Send is ungated "
             "(any board while host listens beyond loopback), because that board text would reach these tools.",
             "feedback"),
     # hosting

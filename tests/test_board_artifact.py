@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from conftest import http
-from mockreview import server as board_server
+from mockreview import server as board_server, store
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = (ROOT / 'mockreview/board/board.js').read_text(encoding='utf-8')
@@ -274,6 +274,25 @@ def test_the_board_source_never_loosens_the_artifact_sandbox():
     # the messages the board reads from an artifact frame, and nothing that submits
     assert set(re.findall(r"d\.type === '(\w+)'", code)) == {'hello', 'click', 'pin', 'data', 'mark'}
     assert not re.search(r'\bfetch\(|XMLHttpRequest|sendBeacon|submit', code)
+
+
+def test_a_crlf_artifact_page_is_upgraded_to_the_current_probe():
+    """A Windows install's write_text turns every \\n into \\r\\n. The serve-time upgrade matches the probe by its
+    marker, so a page already written with CRLF gets the current probe in memory and its file is left alone."""
+    page = store.artifact_page("<p>Subtotal</p>")
+    fresh = page.encode()
+    old = page.replace("if (p.hermes) {", "if (false) {", 1)
+    assert old != page
+    crlf = old.encode().replace(b"\n", b"\r\n")
+    before = bytes(crlf)
+    upgraded = store.artifact_board_page(crlf)
+    assert upgraded is not crlf
+    assert crlf == before, "the bytes passed in are never modified"
+    assert b"if (false) {" not in upgraded and b"if (p.hermes) {" in upgraded, "the current probe replaces the old one"
+    assert upgraded.startswith(fresh[:fresh.index(b"</script>") + len(b"</script>")])
+    assert upgraded.endswith(crlf[crlf.index(b"</script>") + len(b"</script>"):])
+    assert store.artifact_board_page(fresh) == fresh, "an already-current page is returned unchanged"
+
 
 
 # ---------------------------------------------------------------- DOMPurify, vendored

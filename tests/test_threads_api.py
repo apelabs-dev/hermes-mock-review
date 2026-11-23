@@ -207,7 +207,7 @@ def test_the_wake_up_guard_reads_the_review_only_in_the_branches_that_use_it(ser
     guard_loads = []
 
     def counting(review_id):
-        if sys._getframe(1).f_code.co_name == "_thread_post":
+        if sys._getframe(1).f_code.co_name in ("_thread_post", "_mention_gate"):
             guard_loads.append(review_id)
         return real_load(review_id)
 

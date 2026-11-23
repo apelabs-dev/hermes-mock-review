@@ -10,9 +10,9 @@ import time
 
 import pytest
 
-from authkit import account, signed_in
+from authkit import account, signed_in, token_of
 from conftest import http
-from mockreview import service, store, threads, users
+from mockreview import service, store, threads, users, wakeguard
 from test_live import Stream
 from test_live_round_tool import Board, chrome  # noqa: F401  (chrome is the fixture)
 
@@ -500,5 +500,60 @@ def test_a_wake_off_board_keeps_the_old_composer(wake_off_review, server, chrome
         assert b.until("!!document.querySelector('.tpop textarea')")
         assert not b.js("!!document.querySelector('.tpop .hermes-box')"), "a wake-off board got the reply box"
         assert b.js("document.querySelector('.tpop textarea').value") == ""
+    finally:
+        b.js("localStorage.clear()")
+
+
+TOASTS = ("window.__toasts=[];new MutationObserver(function(ms){ms.forEach(function(m){m.addedNodes.forEach("
+          "function(n){if(n.classList&&n.classList.contains('toast'))window.__toasts.push("
+          "{text:n.textContent,cls:n.className})})})}).observe(document.body,{childList:true});1")
+
+
+def test_a_guest_reviewer_gets_the_box_and_hears_why_a_mention_was_saved(hermes_review, server, chrome, monkeypatch):
+    """A share-link guest with the Reviewer role may wake Hermes with a mention (wakeguard.request_gate), so the
+    composer offers them the box; when the board's chat holds tools a guest may not trigger, the mention is saved and
+    the board says why instead of showing Hermes at work."""
+    rid = hermes_review
+    made = users.share("test", rid, "create", "reviewer")
+    guest = users.join_as_guest(users.resolve_share_token(token_of(made["path"])))
+    b = open_board(chrome, server, rid)
+    try:
+        monkeypatch.setenv("MOCKREVIEW_LOOPBACK_OWNER", "false")
+        b.cdp.call("Network.enable", session=b.sid)
+        for key, value in [("mr_session", guest["session"]), ("mr_csrf", guest["csrf"])]:
+            b.cdp.call("Network.setCookie", {"name": key, "value": value, "url": server, "path": "/"},
+                       session=b.sid)
+        b.cdp.call("Page.navigate", {"url": f"{server}/r/{rid}/"}, session=b.sid)
+        assert b.until("!!(document.querySelector('.mock-host') && document.querySelector('.mock-host').shadowRoot"
+                       " && document.querySelector('.mock-host').shadowRoot.querySelector('#copy'))", timeout=60)
+        on(b)
+        capture_posts(b)
+        b.js(TOASTS)
+        open_new_pin(b)
+        assert b.js("!!document.querySelector('.popover .hermes-box')"), "a reviewer guest must get the box"
+        assert b.js("document.querySelector('.popover .hermes-box').checked") is True
+        save_new_pin(b, "Make this clearer")
+        assert json.loads(posts(b)[0]["body"])["mentions"] == ["hermes"]
+        first = server_threads(server, rid, guest)[0]
+        assert first["activated"] is True, first
+        assert not [t for t in json.loads(b.js("JSON.stringify(window.__toasts)")) if "warn" in t["cls"]]
+
+        monkeypatch.setenv("MOCKREVIEW_WAKE_TOOLSETS", "terminal")
+        b.press('.mpin[data-thread="%s"]' % first["id"])
+        assert b.until("!!document.querySelector('.tpop textarea')")
+        assert b.js("document.querySelector('.tpop .hermes-box').checked") is True
+        b.js("(function(t){t.focus();t.setSelectionRange(t.value.length,t.value.length);return 1})"
+             "(document.querySelector('.tpop textarea'))")
+        b.cdp.call("Input.insertText", {"text": "And the total"}, session=b.sid)
+        b.press(".tpop .tp-send")
+        assert b.until("(window.__toasts||[]).some(function(t){return t.cls.indexOf('warn')>=0})", timeout=15), \
+            "a saved mention must say why"
+        warn = [t for t in json.loads(b.js("JSON.stringify(window.__toasts)")) if "warn" in t["cls"]]
+        assert warn[0]["text"] == wakeguard.TOOLS_NO_WAKE, warn
+        reply = json.loads(posts(b)[-1]["body"])
+        assert reply["mentions"] == ["hermes"], reply
+        got = [t for t in server_threads(server, rid, guest) if t["id"] == first["id"]][0]
+        assert got["comments"][-1]["text"] == "@Hermes And the total"
+        assert len(got["comments"]) == 2
     finally:
         b.js("localStorage.clear()")

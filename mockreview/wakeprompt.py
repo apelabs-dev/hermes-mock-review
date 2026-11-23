@@ -12,8 +12,9 @@ import json
 import re
 from typing import Any, Dict
 
-# The one line a woken session without the tools to build posts instead (Hermes runs webhook sessions with its safe
-# webhook tools unless wake_toolsets grants more). The origin chat's own session builds the round.
+# The one line a woken session without the tools to build posts instead (a webhook session has its safe webhook tools
+# and, by default, the mock-review plugin toolset, but no terminal or files unless wake_toolsets grants them). The origin
+# chat's own session builds the round.
 HANDOFF_LINE = "Round {round} feedback is saved; the build continues in this thread's chat session."
 
 # The wake prompt Hermes renders for an inbound round or an @Hermes thread mention. `{...}` placeholders are filled

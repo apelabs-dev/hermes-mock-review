@@ -78,10 +78,10 @@ def _write_routes(review, admin_target):
     }
 
 
-EXPECTED = {   # role -> route -> allowed?
+EXPECTED = {   # role -> route -> allowed? Send (api/submit) is the owner's alone, a reviewer grant included.
     "viewer": {"submit": False, "share": False, "guest-name": False},
     "commenter": {"submit": False, "share": False, "guest-name": False},
-    "reviewer": {"submit": True, "share": False, "guest-name": False},
+    "reviewer": {"submit": False, "share": False, "guest-name": False},
 }
 
 
@@ -118,11 +118,13 @@ def test_a_read_only_role_sees_its_capabilities_in_state(env, server, review):
 
 def test_roles_are_read_fresh_on_every_request(env, server, review):
     member = account(review_id=review["id"], role="viewer")
-    url = server + "/r/{}/api/submit".format(review["id"])
-    body = {"round": 1, "token": review["token"], "feedback": FEEDBACK}
-    assert http("POST", url, body, signed_in(member))[0] == 403
+    url = server + "/r/{}/api/threads".format(review["id"])
+
+    def body(n):
+        return {"text": "a note", "idem": f"fresh-{n}"}
+    assert http("POST", url, body(1), signed_in(member))[0] == 403
     users.grant("test", member["user_id"], "reviewer", review_id=review["id"])
-    assert http("POST", url, body, signed_in(member))[0] == 200
+    assert http("POST", url, body(2), signed_in(member))[0] == 201
     users.revoke_grant("test", member["user_id"], review_id=review["id"])
     assert http("GET", server + "/r/{}/".format(review["id"]), headers=signed_in(member, False))[0] == 404
 
@@ -233,7 +235,7 @@ def test_every_post_needs_the_csrf_token(env, server, review, csrf):
 
 
 def test_a_session_post_needs_that_sessions_own_token(env, server, review):
-    member = account(review_id=review["id"], role="reviewer")
+    member = account(instance="admin", name="Admin")      # Send is the owner's: an admin account is an owner
     url = server + "/r/{}/api/submit".format(review["id"])
     body = {"round": 1, "token": review["token"], "feedback": FEEDBACK}
     forged = {"Cookie": "mr_session={}; mr_csrf=chosen".format(member["session"]), "X-CSRF-Token": "chosen"}

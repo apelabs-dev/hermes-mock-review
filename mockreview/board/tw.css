@@ -1495,6 +1495,52 @@
     font-size: 13px;
     overflow-wrap: anywhere;
   }
+  .sb-owner-only {
+    margin: 0;
+    flex: 0 1 340px;
+    min-width: 0;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.35;
+    text-align: right;
+    overflow-wrap: anywhere;
+  }
+  .sendbar-inline .sb-owner-only {
+    flex: 1 1 220px;
+    max-width: 340px;
+  }
+  .ft-row > .sendbar.sendbar-inline.sb-reader, .dzfoot.proto-dock .proto-row > .sendbar.sb-reader {
+    flex: 1 1 220px;
+    min-width: 0;
+  }
+  .sendbar-inline.sb-reader .sendbar-inner {
+    min-width: 0;
+    justify-content: flex-end;
+  }
+  @media (max-width: 760px) {
+    .ft-row:has(> .sb-reader) {
+      flex-wrap: wrap;
+    }
+    .ft-row > .sendbar.sendbar-inline.sb-reader, .dzfoot.proto-dock .proto-row > .sendbar.sb-reader {
+      flex: 1 1 100%;
+      order: 3;
+      margin-left: 0;
+    }
+    .sendbar-inline.sb-reader .sb-owner-only {
+      max-width: none;
+      text-align: left;
+    }
+  }
+  .sendbar.sb-reader:not(.sendbar-inline) .sendbar-inner {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+  .sendbar.sb-reader:not(.sendbar-inline) .sb-summary {
+    flex: 1 1 auto;
+  }
+  .sendbar.sb-reader:not(.sendbar-inline) .sb-summary > span {
+    flex-shrink: 0;
+  }
   .sb-ok .sb-title {
     color: var(--ok);
   }
@@ -1541,6 +1587,16 @@
     }
     .btn-send {
       padding: 0 14px;
+    }
+    .sb-owner-only {
+      font-size: 12px;
+    }
+    .sendbar.sb-reader:not(.sendbar-inline) .sb-summary {
+      flex-grow: 0;
+    }
+    .sendbar.sb-reader:not(.sendbar-inline) .sb-owner-only {
+      flex-grow: 1;
+      text-align: left;
     }
   }
   .popover {
@@ -4083,6 +4139,18 @@
     padding: 0 8px;
     font-size: 12px;
   }
+  .share-wake-unconfirmed {
+    flex: none;
+    font-size: 12px;
+    color: var(--warn);
+    font-weight: 600;
+  }
+  .share-reconfirm {
+    flex: none;
+    height: 28px;
+    padding: 0 8px;
+    font-size: 12px;
+  }
   .share-owner {
     flex: none;
     font-size: 12px;
@@ -5396,6 +5464,67 @@
     .share-input, .share-select, .share-copy, .share-remove, .share-invite-btn {
       height: 44px;
       min-height: 44px;
+    }
+  }
+  .role-confirm-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 75;
+    background: rgba(10, 10, 20, 0.45);
+    display: grid;
+    place-items: center;
+    padding: 24px 12px;
+    overflow: auto;
+  }
+  .role-confirm {
+    width: 420px;
+    max-width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--rc);
+    box-shadow: var(--shadow-lg);
+    padding: 16px;
+    display: grid;
+    gap: 12px;
+  }
+  .role-confirm-title {
+    margin: 0;
+    font-size: 16px;
+    line-height: 1.25;
+  }
+  .role-confirm-body {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--text);
+  }
+  .role-confirm-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .role-confirm-actions .btn {
+    height: var(--hit);
+  }
+  @media (max-width: 640px) {
+    .role-confirm-backdrop {
+      padding: 0;
+      place-items: end stretch;
+      overflow: hidden;
+    }
+    .role-confirm {
+      width: 100%;
+      max-width: none;
+      border-radius: 16px 16px 0 0;
+      padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+    }
+    .role-confirm-actions {
+      flex-direction: column-reverse;
+    }
+    .role-confirm-actions .btn {
+      width: 100%;
+      height: 44px;
     }
   }
   .header-tools {

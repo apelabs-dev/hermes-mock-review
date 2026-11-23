@@ -17,7 +17,7 @@ import time
 import pytest
 
 from conftest import http, load_plugin
-from mockreview import (api, autostart, config, notify, owner, platforms, service, sessionwake, setup, store,
+from mockreview import (api, autostart, notify, owner, platforms, service, sessionwake, setup, store,
                         wakeguard, wakeprompt)
 from mockreview.store import ReviewError
 from test_owner import DEC_FB
@@ -244,8 +244,10 @@ def test_an_explicit_desktop_origin_without_its_session_key_is_refused(env, tmp_
     assert "needs that session's key" in err and store.list_ids() == []
 
 
-@pytest.mark.parametrize("ungate", ["public_url", "public_mode", "funnel", "lan"])
+@pytest.mark.parametrize("ungate", ["public_url", "public_mode", "lan"])
 def test_an_ungated_desktop_board_is_refused_at_create(env, tmp_path, monkeypatch, gateway, ungate):
+    """A Funnel mapping is not on this list: every request through it is held by the request gate instead (see
+    test_owner_wake_gate.py)."""
     ctx, _ = gateway
     bind_session(monkeypatch, platform="local", chat_id=LOCAL_CHAT, key=LOCAL_KEY)
     args = {"title": "Ungated", "decisions": str(_decisions(tmp_path))}
@@ -253,8 +255,6 @@ def test_an_ungated_desktop_board_is_refused_at_create(env, tmp_path, monkeypatc
         monkeypatch.setenv("MOCKREVIEW_PUBLIC_URL", "https://reviews.example.test")
     elif ungate == "public_mode":
         args["mode"] = "public"
-    elif ungate == "funnel":                              # `mockreview public on` maps Funnel, public_url stays unset
-        monkeypatch.setattr(config, "funnel_url", lambda: "https://board.example.test")
     else:
         monkeypatch.setattr(wakeguard, "bound_host", lambda: "0.0.0.0")
     assert not wakeguard.granted()                        # the gate holds for a Desktop chat without wake_toolsets
@@ -262,15 +262,15 @@ def test_an_ungated_desktop_board_is_refused_at_create(env, tmp_path, monkeypatc
     assert "refusing a board that wakes a Desktop chat" in err and store.list_ids() == [] and ctx.injected == []
 
 
-@pytest.mark.parametrize("later", ["public_url", "funnel"])
+@pytest.mark.parametrize("later", ["public_url", "lan"])
 def test_a_desktop_board_ungated_after_create_is_held_at_send(env, tmp_path, monkeypatch, gateway, later):
     ctx, _ = gateway
     bind_session(monkeypatch, platform="local", chat_id=LOCAL_CHAT, key=LOCAL_KEY)
     rid = create_tool(ctx, title="Later public", decisions=str(_decisions(tmp_path)))["review_id"]
     if later == "public_url":
         monkeypatch.setenv("MOCKREVIEW_PUBLIC_URL", "https://reviews.example.test")
-    else:                                                 # `mockreview public on` after the board was made
-        monkeypatch.setattr(config, "funnel_url", lambda: "https://board.example.test")
+    else:                                                 # the server was moved off loopback after the board was made
+        monkeypatch.setattr(wakeguard, "bound_host", lambda: "0.0.0.0")
     res = service.submit(rid, 1, DEC_FB, store.load(rid)["token"])
     assert not res["notified"]
     assert store.load(rid)["rounds"][0]["submission"]["last_error"].startswith("held, not woken: ")

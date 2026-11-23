@@ -747,7 +747,14 @@ JSON.stringify({
     ? document.querySelector('.export-comments').getAttribute('aria-checked') : null,
   popover: (document.querySelector('.popover') || {}).textContent || '',
   pins: document.querySelectorAll('.pin, .mpin, #pins-proto li').length,
-  draft: (document.querySelector('.sendbar') || {}).textContent || ''
+  // the draft summary only: a non-owner's footer also carries the owner-only line, whose copy names "pins"
+  draft: (function () {
+    var bar = document.querySelector('.sendbar');
+    if (!bar) return '';
+    bar = bar.cloneNode(true);
+    [].forEach.call(bar.querySelectorAll('.sb-owner-only'), function (n) { n.remove(); });
+    return bar.textContent || '';
+  })()
 })"""
 
 

@@ -254,7 +254,7 @@ const round = {n: 1, decisions: I, gate: g};
 let sent = [], toasts = []; let ed = true;
 global.sendbar = document.createElement('footer'); global.footMsg = null;
 global.S = {draft: {marks: {}}, sending: false, amending: false, error: null}; global.DOC = {dec: {gate: g}};
-global.isGuest = () => false;
+global.ownerSends = () => true;
 global.R = () => ({status: 'open', current_round: 1, submit: {kind: 'local'}}); global.viewed = () => round;
 global.isNew = () => true; global.isEditable = () => ed; global.submittedFeedback = () => null;
 global.missingNotes = () => []; global.hasContent = d => Object.keys(d.marks).length > 0;
@@ -280,6 +280,42 @@ global.footerButton = () => 'send'; S.draft.marks = DONE; updateSendbar(); asser
 global.footerButton = () => 'build'; ed = false; updateSendbar(); assert.notEqual(only().textContent.trim(), 'Build');   // a locked round never offers Build
 round.gate = null; ed = true; updateSendbar(); assert.equal(only().textContent.trim(), 'Send');                          // no gate: Send
 ''')
+
+
+def test_only_the_owner_gets_send_or_build_in_the_footer():
+    copy = re.search(r"^  var OWNER_ONLY_COPY = '([^']*)';$", SRC, re.M).group(1)
+    assert copy == "Only the owner sends this round to Hermes. Your comments and pins are on the board for them."
+    run('''
+global.ICONS = {lock: '', send: '', check: ''};
+global.OWNER_ONLY_COPY = %s;
+const I = [{id: 'p1', kind: 'piece', group: 'A'}, {id: 'q1', kind: 'question', group: 'Q'}];
+const g = {label: 'Build'};
+const round = {n: 1, decisions: I, gate: g};
+let sent = [], toasts = [];
+global.sendbar = document.createElement('footer'); global.footMsg = null;
+global.S = {draft: {marks: {p1: {status: 'approve'}, q1: {choice: 'recommended'}}}, sending: false, amending: false,
+            error: null};
+global.DOC = {dec: {gate: g}};
+global.R = () => ({status: 'open', current_round: 1, submit: {kind: 'local'}}); global.viewed = () => round;
+global.isNew = () => true; global.isEditable = () => true; global.submittedFeedback = () => null;
+global.missingNotes = () => []; global.hasContent = d => Object.keys(d.marks).length > 0;
+global.setFootMsg = () => {}; global.summaryChips = () => [];
+global.send = a => sent.push(a || 'send'); global.toast = m => toasts.push(m);
+const buttons = () => Array.from(sendbar.querySelectorAll('button'));
+global.ownerSends = () => false;   // a share-link guest or a member, Reviewer role included: not the owner
+for (const slot of ['build', 'send']) {
+  global.footerButton = () => slot; updateSendbar();
+  assert.equal(buttons().length, 0, slot);                          // no Send, no Build, ready to build or not
+  assert.equal(sendbar.querySelectorAll('.sb-owner-only').length, 1, slot);
+  assert.equal(sendbar.querySelector('.sb-owner-only').textContent, OWNER_ONLY_COPY);
+  assert.ok(sendbar.classList.contains('sb-reader'));
+}
+assert.deepEqual(sent, []);
+global.ownerSends = () => true;    // the owner keeps the one button
+global.footerButton = () => 'build'; updateSendbar();
+assert.equal(buttons().length, 1); assert.equal(buttons()[0].textContent.trim(), 'Build');
+assert.equal(sendbar.querySelectorAll('.sb-owner-only').length, 0);
+''' % json.dumps(copy))
 
 
 def test_the_gate_has_no_card_only_its_lists():
@@ -308,7 +344,7 @@ assert.equal(el.querySelectorAll('button').length, 0);
 
 def test_the_saved_copy_says_a_wake_off_board_does_not_ping_hermes():
     run('''
-global.isGuest = () => false;
+global.ownerSends = () => true;
 assert.equal(savedCopy({wake: true}, 'Sent - Hermes is on it'), 'Sent - Hermes is on it');
 assert.equal(savedCopy({wake: false}, 'Sent - Hermes is on it'), 'Saved. This board does not ping Hermes: tell it in chat.');
 assert.equal(savedCopy(null, 'old'), 'old');

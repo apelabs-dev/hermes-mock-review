@@ -267,6 +267,23 @@ button:disabled { cursor: default; }
 .sb-title { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; font-size: 16px; }
 .sb-title .ico { width: 17px; height: 17px; }
 .sb-sub { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+/* where Send and Build would be for a reviewer who is not the owner: one plain line, never a button */
+.sb-owner-only { margin: 0; flex: 0 1 340px; min-width: 0; color: var(--muted); font-size: 13px; line-height: 1.35; text-align: right; overflow-wrap: anywhere; }
+.sendbar-inline .sb-owner-only { flex: 1 1 220px; max-width: 340px; }
+/* In a docked footer that line may shrink and wrap, never push the row past the screen; under 760 px it takes a row
+   of its own below the round tabs and the tally. */
+.ft-row > .sendbar.sendbar-inline.sb-reader, .dzfoot.proto-dock .proto-row > .sendbar.sb-reader { flex: 1 1 220px; min-width: 0; }
+.sendbar-inline.sb-reader .sendbar-inner { min-width: 0; justify-content: flex-end; }
+@media (max-width: 760px) {
+  .ft-row:has(> .sb-reader) { flex-wrap: wrap; }
+  .ft-row > .sendbar.sendbar-inline.sb-reader, .dzfoot.proto-dock .proto-row > .sendbar.sb-reader { flex: 1 1 100%; order: 3; margin-left: 0; }
+  .sendbar-inline.sb-reader .sb-owner-only { max-width: none; text-align: left; }
+}
+/* The floating bar of a variants round wraps instead: the tally keeps its natural width (never squeezed under the
+   line), and the line sits beside it while its 340 px fit and on a row of its own below it when they do not. */
+.sendbar.sb-reader:not(.sendbar-inline) .sendbar-inner { flex-wrap: wrap; row-gap: 6px; }
+.sendbar.sb-reader:not(.sendbar-inline) .sb-summary { flex: 1 1 auto; }
+.sendbar.sb-reader:not(.sendbar-inline) .sb-summary > span { flex-shrink: 0; }
 .sb-ok .sb-title { color: var(--ok); }
 .sb-warn .sb-title { color: var(--warn); }
 .sb-err .sb-title { color: var(--err); }
@@ -279,6 +296,10 @@ button:disabled { cursor: default; }
   .sb-summary > span.sum-count { display: none; }
   .sb-summary > span.sum-count:first-of-type { display: inline-flex; }
   .btn-send { padding: 0 14px; }
+  .sb-owner-only { font-size: 12px; }
+  /* on a phone the line starts right after the tally, or under it, and reads left to right like the docked footers */
+  .sendbar.sb-reader:not(.sendbar-inline) .sb-summary { flex-grow: 0; }
+  .sendbar.sb-reader:not(.sendbar-inline) .sb-owner-only { flex-grow: 1; text-align: left; }
 }
 
 /* popover / bottom sheet */
@@ -884,6 +905,8 @@ select:focus {
 .share-person-info { flex: 1; min-width: 0; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .share-person-role { flex: none; }
 .share-remove { flex: none; height: 28px; padding: 0 8px; font-size: 12px; }
+.share-wake-unconfirmed { flex: none; font-size: 12px; color: var(--warn); font-weight: 600; }
+.share-reconfirm { flex: none; height: 28px; padding: 0 8px; font-size: 12px; }
 .share-owner { flex: none; font-size: 12px; color: var(--muted); font-weight: 600; }
 .share-inherited { flex: none; font-size: 12px; color: var(--muted); }
 .share-seats { margin-top: 2px; flex-wrap: wrap; }
@@ -1233,6 +1256,20 @@ figure.opt.picked .mock { outline: 2px solid var(--accent); }
 @media (max-width: 640px) {
   .share-dialog { width: 100%; max-width: none; border-radius: 16px 16px 0 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); }
   .share-input, .share-select, .share-copy, .share-remove, .share-invite-btn { height: 44px; min-height: 44px; }
+}
+
+/* "Give Reviewer access?": the share dialog's card, one step above it; a bottom sheet on a phone */
+.role-confirm-backdrop { position: fixed; inset: 0; z-index: 75; background: rgba(10, 10, 20, 0.45); display: grid; place-items: center; padding: 24px 12px; overflow: auto; }
+.role-confirm { width: 420px; max-width: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: var(--rc); box-shadow: var(--shadow-lg); padding: 16px; display: grid; gap: 12px; }
+.role-confirm-title { margin: 0; font-size: 16px; line-height: 1.25; }
+.role-confirm-body { margin: 0; font-size: 13px; line-height: 1.45; color: var(--text); }
+.role-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.role-confirm-actions .btn { height: var(--hit); }
+@media (max-width: 640px) {
+  .role-confirm-backdrop { padding: 0; place-items: end stretch; overflow: hidden; }
+  .role-confirm { width: 100%; max-width: none; border-radius: 16px 16px 0 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); }
+  .role-confirm-actions { flex-direction: column-reverse; }
+  .role-confirm-actions .btn { width: 100%; height: 44px; }
 }
 
 /* the live comments/activity group waits in the header, out of the way, until More opens */

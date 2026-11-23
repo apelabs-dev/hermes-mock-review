@@ -286,14 +286,19 @@ def test_pins_paint_above_z_indexed_mock_content(board):
     assert c3["isPin"], c3
     assert not c3["isSurface"], c3
 
-    # C6: the pin layer is not a click shield. In Comment mode a native control inside the mock and a board control
-    # under no pin both take a real click.
+    # C6: the pin layer is not a click shield. In Comment mode a real click on the mock's native summary pins the
+    # summary itself (it does not open), and a board control under no pin still takes its click.
     b.press('#comment-toggle')
     assert b.until("document.querySelector('#comment-toggle').getAttribute('aria-pressed')==='true'")
     b.click(*shadow_centre(b, "#more-sum"))
-    assert b.until("document.querySelector('.mock-host').shadowRoot.querySelector('details#more').open"), \
-        "a real click on the mock's summary was swallowed"
-    assert not b.popover(), "the summary click must not become a pin"
+    assert b.until("!!document.querySelector('.popover .pop-where')", timeout=5), \
+        "a Comment-mode click on the mock's summary did not open the composer"
+    where = b.js("document.querySelector('.popover .pop-where').textContent")
+    assert where == "on summary \u201cMore\u201d", where
+    assert not b.js("document.querySelector('.mock-host').shadowRoot.querySelector('details#more').open"), \
+        "a Comment-mode click on the mock's summary must not also open it"
+    b.press('.popover .pop-close')
+    assert b.until("!document.querySelector('.popover')", timeout=5)
     b.click(*centre(b, "#dz-df .sbtn.s-approve"))
     assert b.until("document.querySelector('#dz-df .sbtn.s-approve').getAttribute('aria-pressed')==='true'"), \
         "a real click on a board control under no pin was swallowed"
@@ -312,8 +317,23 @@ def test_ghost_marker_paints_above_z_indexed_mock_content(board):
     assert after == {"ghost": 1, "composer": True}, "a redraw dropped the ghost of the pin being written: %s" % after
 
 
-def test_mock_link_and_controls_take_clicks_in_tap_mode(board):
-    """In Tap mode a real mock link, the z-indexed layer and the mock's summary take clicks; none becomes a pin."""
+def composer_on(b, label):
+    """The new-pin composer is open and anchored to `label`. Returns the composer's `on ...` line."""
+    assert b.until("!!document.querySelector('.popover .pop-where')", timeout=5), "the new-pin composer did not open"
+    where = b.js("document.querySelector('.popover .pop-where').textContent")
+    assert where == "on " + label, where
+    return where
+
+
+def close_composer(b):
+    b.press('.popover .pop-close')
+    assert b.until("!document.querySelector('.popover')", timeout=5)
+
+
+def test_mock_link_layer_and_summary_pin_in_comment_mode_and_work_without_it(board):
+    """With Comment mode off a real mock link, the z-indexed layer and the mock's summary take clicks and none becomes a
+    pin. With it on each of them opens the new-pin composer anchored to that element and does not act: the link's
+    default is cancelled and no tab opens, the summary does not toggle."""
     b = board
     b.click(*shadow_centre(b, "#stacked"))
     save(b, "Stacked layer note", 1)
@@ -331,23 +351,61 @@ def test_mock_link_and_controls_take_clicks_in_tap_mode(board):
     b.js("(function(){"
          "var r = document.querySelector('.mock-host').shadowRoot;"
          "window.__hits = {lnk: 0, layer: 0};"
-         "r.querySelector('#lnk').addEventListener('click', function(e){ e.preventDefault(); window.__hits.lnk++; });"
+         "window.__lnkStop = function(e){ e.preventDefault(); window.__hits.lnk++; };"
+         "r.querySelector('#lnk').addEventListener('click', window.__lnkStop);"
          "r.querySelector('#stacked').addEventListener('click', function(){ window.__hits.layer++; });"
          "return 1;"
          "})()")
 
     b.click(*shadow_centre(b, "#lnk"))
     assert b.until("window.__hits.lnk === 1", timeout=5), b.js("JSON.stringify(window.__hits)")
-    assert not b.popover(), "a Tap-mode click on a mock link must not become a pin"
+    assert not b.popover(), "with Comment mode off a click on a mock link must not become a pin"
 
     b.click(*point_in(b, "#stacked", 0.22, 0.28))
     assert b.until("window.__hits.layer === 1", timeout=5), b.js("JSON.stringify(window.__hits)")
-    assert not b.popover(), "a Tap-mode click on the mock's z-indexed layer must not become a pin"
+    assert not b.popover(), "with Comment mode off a click on the mock's z-indexed layer must not become a pin"
 
     b.click(*shadow_centre(b, "#more-sum"))
     assert b.until("document.querySelector('.mock-host').shadowRoot.querySelector('#more').open"), \
         "a real click on the mock's summary was swallowed"
-    assert not b.popover(), "a Tap-mode click on the mock's summary must not become a pin"
+    assert not b.popover(), "with Comment mode off a click on the mock's summary must not become a pin"
+
+    # Comment mode on: the same three clicks each pin the element and do not act. The test's own link handler goes,
+    # so only the board can cancel the link. A window listener (it runs after the board's) records whether the click
+    # reached it already cancelled, then cancels it itself so a failing run cannot open a real tab.
+    b.press('#comment-toggle')
+    assert b.until("document.querySelector('#comment-toggle').getAttribute('aria-pressed')==='true'")
+    b.js("(function(){"
+         "var r = document.querySelector('.mock-host').shadowRoot;"
+         "r.querySelector('#more').open = false;"
+         "r.querySelector('#lnk').removeEventListener('click', window.__lnkStop);"
+         "window.__seen = [];"
+         "addEventListener('click', function(e){ var t = e.composedPath()[0];"
+         "  if (t && t.closest && t.closest('#lnk')) { window.__seen.push(e.defaultPrevented); e.preventDefault(); } });"
+         "return 1;"
+         "})()")
+    def tabs():
+        return {t["targetId"] for t in b.cdp.call("Target.getTargets")["targetInfos"] if t["type"] == "page"}
+    before = tabs()
+
+    b.click(*shadow_centre(b, "#lnk"))
+    composer_on(b, "a \u201cA mock link\u201d")
+    assert b.js("JSON.stringify(window.__seen)") == "[true]", \
+        "a Comment-mode click on a mock link must cancel the link: %s" % b.js("JSON.stringify(window.__seen)")
+    assert b.js("window.__hits.lnk") == 1
+    b.cdp.pump(0.3)
+    assert tabs() == before, "a Comment-mode link click opened a tab"
+    close_composer(b)
+
+    b.click(*point_in(b, "#stacked", 0.22, 0.28))
+    composer_on(b, "div \u201cStacked layer\u201d")
+    close_composer(b)
+
+    b.click(*shadow_centre(b, "#more-sum"))
+    composer_on(b, "summary \u201cMore\u201d")
+    assert not b.js("document.querySelector('.mock-host').shadowRoot.querySelector('#more').open"), \
+        "a Comment-mode click on the mock's summary must not also open it"
+    close_composer(b)
 
 
 def test_pins_paint_above_z_indexed_canvas_content(board):

@@ -627,12 +627,12 @@ def frames_browser(tmp_path_factory):
                                      store.parse_round_spec(prototype=str(d_page)))
         guest_d = _guest(data_d["id"])
 
-        # F: a guest reviewer opens round 1, then round 2 arrives while the board is open (defect 1).
+        # F: a signed-in owner opens round 1, then round 2 arrives while the board is open (defect 1). The owner,
+        # because only the review's owner gets Send, and that Send's 409 is the state replacement under test.
         f1_page = _proto_tree(tmp, name="f1")
         data_f = store.create_review("Live round", "", ORIGIN, "tailscale",
                                      store.parse_round_spec(prototype=str(f1_page)), wake=False)
-        made_f = users.share("test", data_f["id"], "create", "reviewer")
-        guest_f = users.join_as_guest(users.resolve_share_token(token_of(made_f["path"])))
+        owner_f = account(instance="admin", name="Owner")
         f2_page = _proto_tree(tmp, name="f2")
 
         httpd = board_server.make_server("127.0.0.1", 0)
@@ -729,7 +729,7 @@ def frames_browser(tmp_path_factory):
                 # (F) a round that arrives after boot: a state replacement must refresh S.frameTokens (defect 1)
                 state["peer"] = "192.0.2.10"
                 f = Tab(cdp, board, f"{board}/r/{data_f['id']}/",
-                        cookies=(("mr_session", guest_f["session"]), ("mr_csrf", guest_f["csrf"])),
+                        cookies=(("mr_session", owner_f["session"]), ("mr_csrf", owner_f["csrf"])),
                         clear_cookies=True, init=RECORD_MESSAGES)
                 f.until("!!document.querySelector('.proto iframe')", 60)
                 out["f_before_src"] = f.js("(document.querySelector('.proto iframe')||{}).src || ''")

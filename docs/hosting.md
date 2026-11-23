@@ -191,10 +191,14 @@ context compression (Hermes keeps the key and moves the session to the new segme
 There is no ack or stalled ping in a Desktop chat. The wake itself shows as a turn in that chat, and Hermes has no
 plugin API that posts a notice into a named session without starting a turn. Both notices are stored as `skipped`.
 
-**Send stays gated for a Desktop chat, always.** A messaging wake runs with the route's safe webhook tools only (unless
-`wake_toolsets` widens them). A Desktop wake runs inside the chat's own session, with every tool that session has, on
-text a reviewer typed. So a board that wakes a Desktop chat is refused while Send is not gated: the server listens
-beyond loopback, `public_url` is set, Tailscale Funnel maps the board (`mockreview public on`), or the board is
+**Send stays gated for a Desktop chat, always.** A messaging wake runs with the route's safe webhook tools plus
+mock-review's own tools for every review on this install (unless `wake_toolsets` replaces that set). A Desktop wake runs
+inside the chat's own session, with every tool that session has, on text a reviewer typed. So a board that wakes a
+Desktop chat is refused while it is not gated: the server listens beyond loopback, `public_url` is set, or the board is
 `public`. This applies whatever `wake_toolsets` says. The check
 runs when the board is created and again at every wake. On a board that became reachable later, Send is held (`held,
-not woken`) and retried until the gate is back, and an `@Hermes` mention wake fails with the same reason.
+not woken`) and retried until the gate is back, and an `@Hermes` mention wake fails with the same reason. A Tailscale
+Funnel mapping (`mockreview public on`) does not refuse it: Tailscale marks every Funnel request, and only the owner
+wakes a Desktop chat, from this computer or the tailnet. The owner's Send or mention through the Funnel link is saved
+with the reason on the board (send it with Amend from the tailnet), and a reviewer's mention on such a board is saved
+too (see [security.md](security.md#who-may-wake-hermes)).

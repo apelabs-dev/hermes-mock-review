@@ -354,12 +354,22 @@ def test_the_board_screen_at_every_width(env, server, tmp_path, chrome, monkeypa
 
         # The phone bottom bar is the one control strip under 600 px; the header Comment stays at desktop widths.
         # A prototype round's footer carries the round strip, not the header round picker, inside that bar.
+        # Send is the owner's alone: a commenter guest's bar has the owner-only line where Send would be.
         if width <= 600:
             round_control = "#dzfoot .rounds .round-tab.on" if kind == "prototype" else ".round-picker"
-            bar = metric_report(page, [".foot-comment", round_control, ".btn-send"])
+            controls = [".foot-comment", round_control] + ([".btn-send"] if role == "owner" else [])
+            bar = metric_report(page, controls)
             for item in bar["items"]:
                 assert not item.get("missing") and item["hittable"], f"{label}: phone bar item is not hittable: {item}"
                 assert item["height"] + 0.5 >= 44, f"{label}: phone bar item below 44 px: {item}"
+            if role != "owner":
+                assert page.js("!document.querySelector('.btn-send') && !document.querySelector('#gate-btn')"), \
+                    f"{label}: a commenter guest got Send or Build"
+                seen = metric_report(page, [".sb-owner-only"])
+                line = seen["items"][0]
+                assert not line.get("missing") and line["width"] > 0 and line["height"] > 0 and \
+                    line["left"] >= 0 and line["right"] <= width + 0.5 and line["bottom"] <= seen["vh"] + 0.5, \
+                    f"{label}: the owner-only line is missing or off screen: {line}"
         else:
             top = metric_report(page, [".bar-comment"])
             assert top["items"][0]["hittable"], f"{label}: the desktop Comment control is not hittable"

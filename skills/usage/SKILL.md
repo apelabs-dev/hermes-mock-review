@@ -29,8 +29,9 @@ it" message. Go straight to reading the feedback and building the next round.
 
 A wake in a Desktop chat runs in that chat's own session, with your usual tools, so build the round there directly.
 
-The session Send wakes runs with Hermes's safe webhook tools unless the user granted more (`wake_toolsets`). If that
-session has no mock_review tools or cannot write files, reply with exactly the one line the wake prompt gives
+The session Send wakes runs with Hermes's safe webhook tools plus the plugin toolsets that are on by default, so it has
+the mock_review tools for every review on this install unless the route's `toolsets` replaces that set (`wake_toolsets`).
+If that session has no mock_review tools or cannot write files, reply with exactly the one line the wake prompt gives
 ("Round N feedback is saved; the build continues in this thread's chat session.") and stop. Do not say you cannot
 build, and do not list what is missing.
 
@@ -44,8 +45,10 @@ When a wake says `review.thread_mention`, a reviewer mentioned `@Hermes` in a co
 then answer in the same thread with `mock_review_reply`, passing the wake payload's `request_id` so the block's
 live activity clears. The board shows the work on the pin, block, open thread, Comments list and header. Answer
 questions in the thread and resolve it with `mock_review_resolve` when you are done. Start a new round only if the
-comment asks for one. Mentions wake you from an owner or reviewer on a wake-on board. Guest mentions, agent mentions
-and wake-off boards store the comment without sending a wake, so answer those in chat instead.
+comment asks for one. Mentions wake you on a wake-on board from the owner (on their own computer or the tailnet) or
+from a reviewer, a member or a reviewer-role guest, when the board wakes a messaging chat with no extra
+`wake_toolsets`. Commenter mentions, agent mentions, the owner's mention from a public link and wake-off boards store
+the comment without sending a wake, so answer those in chat instead.
 
 The next round asks only what is still open: blocks marked Change (set `revised` on them to a short string label such
 as `Revised`, not a flag), skipped or unanswered ones, and anything new. Approved blocks and answered questions go in
@@ -99,10 +102,10 @@ list, and put your best answer in `recommendation`. Never make the user type an 
   up to 6 options. Prefer 2 or 3, and use more only when they are distinct.
 
 Example: `{"type":"callout","tone":"warn","title":"Constraint","text":"Must fit one phone screen."}`.
-Safe absolute HTTP(S) links in mock/option HTML open in a new tab without creating pins; other hrefs are removed.
+Safe absolute HTTP(S) links in mock/option HTML open in a new tab (in comment mode a click pins them instead); other hrefs are removed.
 `interactive_elements` is on by default: build every control a mock shows so it works without script. Use `<select>` or
 `<details>` for a dropdown, a checkbox with `:checked` for a switch, radios with `:checked` for tabs, and real
-`<input>`/`<textarea>` fields. The board opens usable; pressing Comment (or `C`) pins a note on noninteractive content; native controls and text selection stay live. Pass
+`<input>`/`<textarea>` fields. The board opens usable; in comment mode (Comment or `C`) a tap on anything, controls included, pins a note and does not work the control, so the reviewer leaves comment mode to use them. Mark an element `data-mr-live` only if it must keep working in comment mode. Pass
 `interactive_elements: false` only for mocks that are meant as static pictures.
 A plan board's footer has one button, set by `footer_button`: `build` (the default; Build is locked until nothing is
 open or on Change, and turns into Send while a block is on Change) or `send` (notes only, never Build).
@@ -152,6 +155,13 @@ board). From the shell the same settings are `hermes mockreview share`:
   the URL and signs every guest out, `stop` ends sharing.
 - A viewer link is read-only and cannot send feedback or wake you. If the user asks for a link to collect feedback, use
   the default commenter role; if they only want someone to look, use viewer and say which round it shows.
+- Only the owner sends feedback: Send and Build answer 403 to everyone else, and their board shows a line saying so.
+  A reviewer (link role or grant) can comment, ask for a pin fix (saved for the owner) and wake you with an
+  `@Hermes` mention on a board that wakes a messaging chat with no extra `wake_toolsets`; the Share dialog asks the
+  owner to confirm before it gives Reviewer.
+- The owner wakes you only from their own computer or the tailnet. Their Send, pin fix or mention through the public
+  Funnel link (or another proxy) is saved and the board says why; tell them to open the board on the tailnet and
+  press Amend to send it.
 
 ## First-run sign-in
 

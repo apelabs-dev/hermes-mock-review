@@ -143,6 +143,11 @@ check is [public-hosting-live-checks.md](public-hosting-live-checks.md); it requ
 - `/healthz` is `{"ok": true}` on a public Host; the service name appears only on loopback and private requests.
 - Share links are credentials. Anyone holding a live link can open its review; regenerate or stop it from Settings or
   `hermes mockreview share <review id> regenerate|stop`, and check the audit trail.
-- Wake-ups. `wake_toolsets` is refused (409) or held for a public board, because anyone with the link could press Send
-  into a session holding tools.
+- Wake-ups. A board that wakes a session with tools (`wake_toolsets`) or a Desktop chat is refused (409) or held while
+  it is `public` or `public_url` is set, because such a proxy leaves no marker the server can trust on each request. A
+  Tailscale Funnel mapping alone does not refuse it: Tailscale marks every Funnel request, and a request through it
+  never wakes such a board. On every board Send and Build are the owner's, and the owner wakes Hermes only from this
+  computer or the tailnet: through Funnel or another proxy the owner's Send, pin fix or mention is saved with the
+  reason, and Amend from the tailnet sends it. A reviewer's `@Hermes` mention wakes a messaging chat with no
+  `wake_toolsets` from any ingress. See [security.md](security.md#who-may-wake-hermes).
 - The proxy holds the certificate and private key; the board keeps speaking plain HTTP on loopback only.

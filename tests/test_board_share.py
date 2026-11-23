@@ -211,6 +211,8 @@ def test_invite_permissions_are_independent_of_the_guest_link(env, server, revie
     assert b.js("document.querySelector('.share-invite-expiry') !== document.querySelector('.share-expiry')")
 
     pick(b, ".share-invite-role", "reviewer")
+    assert b.until("!!document.querySelector('.role-confirm-ok')"), "Reviewer asks before it is given"
+    b.press(".role-confirm-ok")
     pick(b, ".share-invite-expiry", "7d")
     pick(b, ".share-guest-role", "commenter")
     end = time.monotonic() + 10
@@ -353,3 +355,223 @@ def test_direct_override_removal_is_clear_without_hover(env, server, review, chr
     assert b.until(f"!{row('Cal')}"), "a direct-only person must leave the list when removed"
     assert fits(), "the dialog must still fit after removing a direct-only person"
     shot(b, "share-390-after-remove.png")
+
+
+# ---------------------------------------------------------------- "Give Reviewer access?"
+
+REVIEWER_TITLE = "Give Reviewer access?"
+REVIEWER_BODY = ("People with the Reviewer role can wake Hermes with an @Hermes mention on boards that wake a messaging "
+                 "chat. Hermes then runs in that chat with mock-review’s own tools, which reach every review on this "
+                 "install, so a Reviewer can read and reply on your other reviews: give Reviewer only to people you "
+                 "trust with all of them. They can’t press Send or Build.")
+POSTS = ("window.__posts=[];(function(f){window.fetch=function(u,o){if(o&&o.method==='POST')"
+         "window.__posts.push({url:String(u),body:JSON.parse(o.body||'null')});return f.apply(this,arguments)}})"
+         "(window.fetch);1")
+MODAL = ("JSON.stringify((function(){var d=document.querySelector('.role-confirm');if(!d)return null;"
+         "var t=document.getElementById(d.getAttribute('aria-labelledby')),"
+         "x=document.getElementById(d.getAttribute('aria-describedby')),r=d.getBoundingClientRect(),"
+         "a=document.activeElement;return {role:d.getAttribute('role'),modal:d.getAttribute('aria-modal'),"
+         "title:t&&t.textContent,body:x&&x.textContent,titleInside:!!t&&d.contains(t),"
+         "buttons:Array.prototype.map.call(d.querySelectorAll('button'),function(e){return e.textContent}),"
+         "focus:a&&a.className,left:r.left,right:r.right,top:r.top,bottom:r.bottom,w:innerWidth,h:innerHeight,"
+         "fits:d.scrollWidth<=d.clientWidth+1,"
+         "smallest:Math.min.apply(null,Array.prototype.map.call(d.querySelectorAll('button'),"
+         "function(e){return e.getBoundingClientRect().height}))}})())")
+
+
+def mouse(b, x, y):
+    for kind in ("mouseMoved", "mousePressed", "mouseReleased"):
+        p = {"type": kind, "x": x, "y": y, "button": "left" if kind != "mouseMoved" else "none", "clickCount": 1}
+        b.cdp.call("Input.dispatchMouseEvent", p, session=b.sid)
+
+
+def posts(b):
+    return json.loads(b.js("JSON.stringify(window.__posts||[])"))
+
+
+def select_of(field, name="Bea"):
+    """A JS expression for the role select under test: the link's guests, Bea's row, or the new invite."""
+    if field == "share-person-role":
+        return ("Array.prototype.find.call(document.querySelectorAll('.share-person'),function(r){"
+                "return r.textContent.indexOf(%s)>=0}).querySelector('.share-person-role')" % json.dumps(name))
+    return "document.querySelector('.%s')" % field
+
+
+def choose(b, sel, value):
+    b.js("(function(s){s.value=%s;s.dispatchEvent(new Event('change',{bubbles:true}));return 1})(%s)"
+         % (json.dumps(value), sel))
+
+
+def server_role(rid, field, user_id):
+    if field == "share-guest-role":
+        return users.share_link(rid)["guest_role"]
+    if field == "share-person-role":
+        return [p for p in users.review_people(rid) if p["user_id"] == user_id][0]["direct_role"]
+    return None
+
+
+@pytest.mark.parametrize("viewport", [(1280, 900), (390, 844)], ids=["1280", "390"])
+@pytest.mark.parametrize("field", ["share-guest-role", "share-person-role", "share-invite-role"])
+def test_giving_reviewer_asks_first_and_cancel_keeps_the_old_role(env, server, review, chrome, field, viewport):
+    rid = review["id"]
+    users.share("test", rid, "create", "commenter")
+    bea = account(review_id=rid, role="commenter", name="Bea")
+    b = Board(chrome, f"{server}/r/{rid}/", viewport=viewport)
+    b.press(".share-open")
+    assert b.until("!!document.querySelector('.share-guest-role') && !!document.querySelector('.share-person-role')")
+    sel = select_of(field)
+    b.js(POSTS)
+
+    def opened():
+        choose(b, sel, "reviewer")
+        assert b.until("!!document.querySelector('.role-confirm')"), "picking Reviewer must ask first"
+        return json.loads(b.js(MODAL))
+
+    def cancelled(how):
+        assert b.until("!document.querySelector('.role-confirm')"), f"{how} must close the question"
+        assert b.js(f"{sel}.value") == "commenter", f"{how} must put the old role back"
+        assert b.js(f"document.activeElement === {sel}"), f"{how} must give focus back to the select"
+        assert b.js("!!document.querySelector('.share-dialog')"), f"{how} must leave the Share dialog open"
+        assert posts(b) == [], f"{how} must send nothing"
+        assert server_role(rid, field, bea["user_id"]) in (None, "commenter")
+
+    # The question: a labelled modal dialog, the exact copy, focus inside on Cancel, fully on screen.
+    m = opened()
+    assert m["role"] == "dialog" and m["modal"] == "true" and m["titleInside"], m
+    assert m["title"] == REVIEWER_TITLE and m["body"] == REVIEWER_BODY, m
+    assert m["buttons"] == ["Cancel", "Give Reviewer access"], m
+    assert "role-confirm-cancel" in m["focus"], m
+    assert m["left"] >= 0 and m["right"] <= m["w"] + 0.5 and m["top"] >= 0 and m["bottom"] <= m["h"] + 0.5, m
+    assert m["fits"], m
+    if viewport[0] < 640:
+        assert m["smallest"] >= 44, "phone-width buttons are full-size tap targets"
+    if field == "share-guest-role":
+        shot(b, f"reviewer-modal-{viewport[0]}.png")
+    b.key("Tab", "Tab", 9)
+    assert "role-confirm-ok" in b.js("document.activeElement.className"), "Tab stays inside the question"
+    b.key("Tab", "Tab", 9)
+    assert "role-confirm-cancel" in b.js("document.activeElement.className"), "Tab stays inside the question"
+    b.press(".role-confirm-cancel")
+    cancelled("Cancel")
+
+    opened()
+    b.key("Escape", "Escape", 27)
+    cancelled("Escape")
+
+    opened()
+    mouse(b, 6, 6)                                                       # the backdrop, outside the question
+    cancelled("a click on the backdrop")
+
+    # Roles below Reviewer never ask. A guest or person change re-renders the dialog: wait for the new select.
+    b.js(f"window.__before = {sel}; 1")
+    choose(b, sel, "viewer")
+    time.sleep(0.3)
+    assert not b.js("!!document.querySelector('.role-confirm')"), "Viewer must not ask"
+    if field != "share-invite-role":
+        assert b.until(f"!!({sel}) && {sel} !== window.__before && {sel}.value === 'viewer'"), "the change must land"
+        assert server_role(rid, field, bea["user_id"]) == "viewer"
+
+    # Confirm sends the change (an invite's role rides its Invite press).
+    m = opened()
+    assert m["title"] == REVIEWER_TITLE
+    b.press(".role-confirm-ok")
+    assert b.until("!document.querySelector('.role-confirm')")
+    if field == "share-invite-role":
+        assert b.js(f"{sel}.value") == "reviewer"
+        b.js("(function(){var i=document.querySelector('.share-invite-input');i.value='Maya Kim';return 1})()")
+        b.press(".share-invite-btn")
+    end = time.monotonic() + 10
+    want = {"share-guest-role": ("api/share", {"action": "update", "guest_role": "reviewer"}),
+            "share-person-role": ("api/people", {"action": "grant", "user_id": bea["user_id"], "role": "reviewer"}),
+            "share-invite-role": ("api/people", {"action": "invite", "name": "Maya Kim", "role": "reviewer",
+                                                 "expires": None})}[field]
+    while time.monotonic() < end and not any(p["url"].endswith(want[0]) and p["body"] == want[1]
+                                             for p in posts(b)):
+        b.cdp.pump(0.1)
+    assert any(p["url"].endswith(want[0]) and p["body"] == want[1] for p in posts(b)), posts(b)
+    while time.monotonic() < end:
+        if field == "share-invite-role":
+            row = db.connect().execute("SELECT * FROM invites ORDER BY id DESC LIMIT 1").fetchone()
+            if row is not None and row["review_role"] == "reviewer":
+                break
+        elif server_role(rid, field, bea["user_id"]) == "reviewer":
+            break
+        time.sleep(0.1)
+    if field == "share-invite-role":
+        assert row is not None and row["review_role"] == "reviewer"
+    else:
+        assert server_role(rid, field, bea["user_id"]) == "reviewer"
+
+    # From Reviewer down never asks either, and Escape closes the Share dialog again once the question is gone.
+    assert b.until(f"!!({sel}) && {sel}.value === 'reviewer'")
+    choose(b, select_of(field), "commenter")
+    time.sleep(0.3)
+    assert not b.js("!!document.querySelector('.role-confirm')"), "a lower role must not ask"
+    b.key("Escape", "Escape", 27)
+    assert b.until("!document.querySelector('.share-dialog')"), "Esc closes the Share dialog when nothing is on top"
+
+
+def test_share_marks_unconfirmed_reviewer_links_and_grants_and_reconfirms_them(env, server, review, chrome):
+    """The stored confirmation is read-only visible: a Reviewer link or grant made before the update shows its marker
+    and one re-confirm action that asks the Reviewer question before it sets wake_ok again."""
+    rid = review["id"]
+    users.share("test", rid, "create", "reviewer")
+    with db.tx() as conn:
+        conn.execute("UPDATE share_links SET wake_ok = 0 WHERE review_id = ?", (rid,))
+    bea = account(review_id=rid, role="reviewer", name="Bea")
+    with db.tx() as conn:
+        conn.execute("UPDATE grants SET wake_ok = 0 WHERE user_id = ? AND review_id = ?", (bea["user_id"], rid))
+    assert users.share_link(rid)["wake_ok"] is False
+    assert [p["wake_ok"] for p in users.review_people(rid) if p["user_id"] == bea["user_id"]] == [False]
+
+    b = Board(chrome, f"{server}/r/{rid}/")
+    b.press(".share-open")
+    assert b.until("!!document.querySelector('.share-dialog .share-wake-unconfirmed')")
+    assert b.until("!!document.querySelector('.share-dialog .share-person .share-reconfirm')"), \
+        "the unconfirmed Reviewer person shows a re-confirm action"
+    assert b.js("String(document.querySelectorAll('.share-dialog .share-wake-unconfirmed').length)") == "2", \
+        "one marker for the link and one for the person"
+    b.js(POSTS)
+
+    # The re-confirm button asks the Reviewer question first; Cancel sends nothing and leaves wake_ok alone.
+    b.press(".share-dialog > .share-wake-unconfirmed .share-reconfirm")
+    m = json.loads(b.until(MODAL) or "null")
+    assert m is not None, "the re-confirm button must ask before it sets wake_ok"
+    assert m["title"] == REVIEWER_TITLE and m["body"] == REVIEWER_BODY, m
+    assert b.js("document.querySelectorAll('.share-dialog .share-wake-unconfirmed').length === 2"), \
+        "both markers stay while the question is open"
+    assert users.share_link(rid)["wake_ok"] is False, "nothing is sent while the question is open"
+    b.press(".role-confirm-cancel")
+    assert b.until("!document.querySelector('.role-confirm')"), "Cancel closes the question"
+    assert b.js("!!document.querySelector('.share-dialog')"), "Cancel leaves the Share dialog open"
+    assert b.js("document.querySelectorAll('.share-dialog .share-wake-unconfirmed').length === 2"), \
+        "Cancel leaves both markers"
+    assert posts(b) == [], "Cancel sends nothing"
+    assert users.share_link(rid)["wake_ok"] is False, "Cancel leaves wake_ok off"
+
+    # Confirm sends the update: the link's marker goes and the person's stays.
+    b.press(".share-dialog > .share-wake-unconfirmed .share-reconfirm")
+    assert b.until("!!document.querySelector('.role-confirm')"), "the button asks before it sets wake_ok"
+    b.press(".role-confirm-ok")
+    end = time.monotonic() + 10
+    while time.monotonic() < end and users.share_link(rid)["wake_ok"] is not True:
+        time.sleep(0.1)
+    assert users.share_link(rid)["wake_ok"] is True
+    assert b.until("document.querySelectorAll('.share-dialog .share-wake-unconfirmed').length === 1"), \
+        "the link's marker is gone, the person's stays"
+
+    # The person's button asks the same question, and OK sets the grant's wake_ok.
+    b.press(".share-dialog .share-person .share-reconfirm")
+    assert b.until("!!document.querySelector('.role-confirm')"), "the person's button asks before it sets wake_ok"
+    b.press(".role-confirm-ok")
+    end = time.monotonic() + 10
+    while time.monotonic() < end:
+        row = db.connect().execute("SELECT wake_ok FROM grants WHERE user_id = ? AND review_id = ?",
+                                   (bea["user_id"], rid)).fetchone()
+        if row is not None and row["wake_ok"] == 1:
+            break
+        time.sleep(0.1)
+    assert row is not None and row["wake_ok"] == 1
+    assert b.until("!document.querySelector('.share-dialog .share-wake-unconfirmed')"), \
+        "no unconfirmed Reviewer marker is left"
+    assert b.js("!!document.querySelector('.share-dialog')"), "the Share dialog stays open"

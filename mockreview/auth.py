@@ -172,8 +172,32 @@ def from_tailnet(req: Request) -> bool:
     """Tailscale Serve sets X-Forwarded-For to the single tailnet address the request came from (ipn/ipnlocal/serve.go,
     addProxyForwardedHeaders). Anything else (missing, a chain, a public address) did not come straight from Serve."""
     hops = [h.strip() for v in req.header_values("X-Forwarded-For") for h in v.split(",") if h.strip()]
-    ip = _ip(hops[0]) if len(hops) == 1 else None
+    return len(hops) == 1 and _in_tailnet(hops[0])
+
+
+def _in_tailnet(peer: str) -> bool:
+    ip = _ip(peer)
     return ip is not None and any(ip.version == n.version and ip in n for n in TAILNET)
+
+
+def private_ingress(req: Request) -> bool:
+    """True when this request reached the board from this computer or the tailnet, never from the internet: the
+    request gate's question before the owner's Send, pin fix or mention wakes Hermes (wakeguard.request_gate).
+
+    Never through Funnel (`via_funnel`: Tailscale sets the marker on Funnel ingress and deletes every client copy),
+    and only with a positive private signal: `req.local` (this computer, no proxy headers, not a public Host), a peer
+    that is itself a tailnet address, or a trusted proxy whose X-Forwarded-For is exactly one tailnet address
+    (Tailscale Serve, `from_tailnet`). A missing Funnel marker alone is never enough: a public or LAN peer, or a proxy
+    whose X-Forwarded-For is a public address or a chain, is not private.
+
+    `req.public_host` is deliberately not read here. Funnel and tailnet Serve share the node's `*.ts.net` name, so
+    the Funnel hostname is in the public names, and counting it would hold the owner's own tailnet Send on that name.
+    The Funnel marker is what tells the two apart."""
+    if via_funnel(req):
+        return False
+    if req.local or _in_tailnet(req.peer):
+        return True
+    return trusted_peer(req.peer) and from_tailnet(req)
 
 
 def _decode(value: str) -> str:

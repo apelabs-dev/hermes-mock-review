@@ -81,10 +81,12 @@ itself once the board runs, and setup prints no link until a board answers. The 
 
 ### Let the woken session build (opt-in)
 
-Hermes runs the session Send wakes with its safe webhook tools only, so by default that session replies "Round N
-feedback is saved; the build continues in this thread's chat session." and the chat's own session builds the round. To
-let the woken session build right away, set the toolsets, re-run setup and add the line it prints by hand. Include `mock-review` so it can call the
-mock_review tools; the list replaces Hermes's webhook default rather than adding to it:
+Hermes runs the session Send wakes as a webhook session that keeps its safe webhook tools and also holds mock-review's
+own `mock_review_*` tools for every review on this install (plugin toolsets are on by default). It has no terminal or
+file tools, so by default that session replies "Round N feedback is saved; the build continues in this thread's chat
+session." and the chat's own session builds the round. To let the woken session build right away, set the toolsets,
+re-run setup and add the line it prints by hand. Include `mock-review` to keep the mock_review tools; the list
+replaces Hermes's webhook default rather than adding to it:
 
     hermes config set plugins.entries.mock-review.settings.wake_toolsets "mock-review,terminal,file"
     hermes mockreview setup
@@ -132,15 +134,23 @@ guest's credential. A review has at most one share link, managed by its owner in
 
 A guest opens the link with its role and gets a server-assigned name such as "Calm Otter"; the name is unique among
 that review's live guests and can be changed. A viewer sees only the round the link names, with no feedback pins,
-notes or submit token. A commenter can comment on any round; a reviewer can also send feedback and ask for a pin fix,
-but a guest never wakes Hermes: Send is stored for the owner. Regenerating or stopping the link ends every guest
+notes or submit token. A commenter can comment on any round; a reviewer can also mark decisions and write notes in
+their own browser, ask for a pin fix (saved for the owner, never woken) and wake Hermes with an `@Hermes` mention on a
+board that wakes a messaging chat. Send and Build are the owner's alone: anyone else sees a line saying so where the
+buttons would be. Choosing Reviewer in the Share dialog asks first. Regenerating or stopping the link ends every guest
 session of the old link.
 
+Upgrading from an earlier version: a Reviewer link, person grant or invite made before this update starts saved. It
+keeps its board role but cannot wake Hermes until you pick Reviewer again in Share. An invite minted before the update
+stays usable for its board role; the person it admits needs the same re-confirmation.
+
 Pins are conversations now: each pin opens a thread with replies, resolve/reopen, optional `@Hermes` mentions, and live
-updates on every open board. An owner's or reviewer's `@Hermes` comment wakes Hermes once per comment; the board answers
-at once and the worker tick delivers it, coalescing a burst into one wake, and the anchored block carries a working
-chip until the session replies. It replies in the thread and patches the block in place when the comment asks for it; a
-guest, an agent token and a wake-off board never wake anyone. The wake goes to the chat the review was created
+updates on every open board. An owner's or reviewer's `@Hermes` comment wakes Hermes once per comment when the request
+gate allows it: the owner from this computer or the tailnet, a reviewer (guest or member) only on a board that wakes a
+messaging chat with no `wake_toolsets`. The board answers at once and the worker tick delivers it, coalescing a burst
+into one wake, and the anchored block carries a working chip until the session replies. It replies in the thread and
+patches the block in place when the comment asks for it; a commenter, an agent token and a wake-off board never wake
+anyone, and a saved mention says why on the board. The wake goes to the chat the review was created
 from; [docs/comments.md](docs/comments.md) says what the session does there. Comments and their history live in the review's own
 database under the data root. See [docs/comments.md](docs/comments.md) and [docs/security.md](docs/security.md).
 
@@ -162,8 +172,9 @@ There are no passwords. The board server has accounts, and every request is chec
   An invite creates an account; a share link does not.
 - Accounts live in one flat user directory per install. Each account is a member or an admin; admins manage every
   review and see Members and Invites in Settings. The last admin cannot be demoted or the only admin deleted.
-- Access is granted per review: `viewer` (look), `commenter` (look and comment) or `reviewer` (look, comment and send
-  feedback), optionally with an expiry. A grant for all reviews is a convenience flag, not a workspace or a team.
+- Access is granted per review: `viewer` (look), `commenter` (look and comment) or `reviewer` (look, comment, ask for
+  a pin fix and wake Hermes with an `@Hermes` mention), optionally with an expiry. Send and Build are the owner's
+  alone; [docs/security.md](docs/security.md#who-may-wake-hermes) has the full rule. A grant for all reviews is a convenience flag, not a workspace or a team.
   `hermes mockreview users grant <name|id> --review <review id> --role reviewer --expires 30d` is the CLI form.
 - Personal access tokens (`hermes mockreview tokens create --user <id> <name>`) let a coding agent comment as that
   account; the token is shown once and stored hashed.
