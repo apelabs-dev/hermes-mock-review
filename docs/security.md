@@ -347,18 +347,22 @@ follows the reviewer rule below.
 A mention that the gate saves says why ("saved; Hermes wasn't woken because this board's chat has tools a
 guest may not trigger"). A Reviewer's `@Hermes` mention is saved with "the owner has not confirmed that this Reviewer
 may wake Hermes" until the owner sets or re-confirms Reviewer in Share for that link or grant: choosing Reviewer before
-this update did not go through that confirmation, so every existing Reviewer link and grant starts saved. Picking any
-other role clears the confirmation. The server checks the same rules again when it delivers a queued mention wake,
-because the settings and the role can change in between: a mention wake whose author's Reviewer confirmation is gone,
-or whose board now wakes a Desktop chat, or whose route now has `wake_toolsets`, fails with that reason and nothing is
-sent. Reviewer mentions share the pin-fix caps (`pin_fix_max_per_hour`, `pin_fix_max_per_round`), and a board created
-with wake-up off never wakes anyone.
+this update did not go through that confirmation, so every existing Reviewer link and grant starts saved, and a Reviewer
+invite minted before this update grants its role without the confirmation. Picking any other role clears the
+confirmation. The server checks the same rules again when it delivers a queued mention wake,
+because the settings, the role and the link can change in between: a mention wake whose author's Reviewer confirmation
+is gone, whose share link ended (stopped, regenerated, expired or signed-in people only), or whose board now wakes a
+Desktop chat, or whose route now has `wake_toolsets`, fails with that reason and nothing is sent. A request queued
+before this update carries no `by_owner` marker, so it has no proof of where it came from: its author's current admin
+account is the only evidence it names the owner, and while Funnel maps the board even that is not enough, because the
+record could have arrived through the public link; it stays saved until the owner sends it again from private ingress. Reviewer mentions share the
+pin-fix caps (`pin_fix_max_per_hour`, `pin_fix_max_per_round`), and a board created with wake-up off never wakes anyone.
 
 In the board, only the owner sees Send and Build; anyone else sees "Only the owner sends this round to Hermes. Your
 comments and pins are on the board for them." Choosing Reviewer for someone in the Share dialog (the link's guests, a
 person, or a new invite) asks first, because a reviewer can wake Hermes with a mention. That confirmation is also what
-lets the Reviewer wake by mention: for a Reviewer link, person or invite made before this update, pick another role and
-then Reviewer again to confirm it.
+lets the Reviewer wake by mention: for a Reviewer link, person or invite made before this update, the Share dialog
+marks it as unconfirmed ("Waking off") and offers Confirm Reviewer, which sets Reviewer again.
 
 ## MCP server (stdio)
 

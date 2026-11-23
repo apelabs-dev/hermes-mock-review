@@ -140,6 +140,10 @@ board that wakes a messaging chat. Send and Build are the owner's alone: anyone 
 buttons would be. Choosing Reviewer in the Share dialog asks first. Regenerating or stopping the link ends every guest
 session of the old link.
 
+Upgrading from an earlier version: a Reviewer link, person grant or invite made before this update starts saved. It
+keeps its board role but cannot wake Hermes until you pick Reviewer again in Share. An invite minted before the update
+stays usable for its board role; the person it admits needs the same re-confirmation.
+
 Pins are conversations now: each pin opens a thread with replies, resolve/reopen, optional `@Hermes` mentions, and live
 updates on every open board. An owner's or reviewer's `@Hermes` comment wakes Hermes once per comment when the request
 gate allows it: the owner from this computer or the tailnet, a reviewer (guest or member) only on a board that wakes a
