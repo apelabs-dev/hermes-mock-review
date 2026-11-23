@@ -195,7 +195,7 @@ def test_editable_mention_with_pin_fix_off(working_review, server, chrome, mobil
                           "dy:(r.top+r.height/2)-(a.top+a.height/2),w:r.width}})())" % query(WORKING)))
     red = [int(c) for c in dot["bg"][dot["bg"].index("(") + 1:dot["bg"].index(")")].split(",")[:3]]
     assert red[0] > 200 and red[1] < 130 and red[2] < 130, f"the working dot is not red: {dot}"   # --err per theme
-    assert dot["dx"] > 8 and abs(dot["dy"]) < 8, f"the working dot is not on the pin's right side: {dot}"
+    assert dot["dx"] > 5 and dot["dy"] < -5 and abs(dot["dx"] + dot["dy"]) < 4, f"the working dot is not on the pin's upper right: {dot}"
     assert dot["w"] < 20, f"the working indicator is a ring, not a dot: {dot}"   # a 10 px dot, turned and pulsing
     assert dot["anim"] == ("none" if mobile else "hermes-pin-pulse"), dot
     first = next(iter(pin_requests(rid)))
