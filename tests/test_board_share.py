@@ -509,3 +509,45 @@ def test_giving_reviewer_asks_first_and_cancel_keeps_the_old_role(env, server, r
     assert not b.js("!!document.querySelector('.role-confirm')"), "a lower role must not ask"
     b.key("Escape", "Escape", 27)
     assert b.until("!document.querySelector('.share-dialog')"), "Esc closes the Share dialog when nothing is on top"
+
+
+def test_share_marks_unconfirmed_reviewer_links_and_grants_and_reconfirms_them(env, server, review, chrome):
+    """The stored confirmation is read-only visible: a Reviewer link or grant made before the update shows its marker
+    and one direct re-confirm action that uses the existing update path (setting Reviewer again)."""
+    rid = review["id"]
+    users.share("test", rid, "create", "reviewer")
+    with db.tx() as conn:
+        conn.execute("UPDATE share_links SET wake_ok = 0 WHERE review_id = ?", (rid,))
+    bea = account(review_id=rid, role="reviewer", name="Bea")
+    with db.tx() as conn:
+        conn.execute("UPDATE grants SET wake_ok = 0 WHERE user_id = ? AND review_id = ?", (bea["user_id"], rid))
+    assert users.share_link(rid)["wake_ok"] is False
+    assert [p["wake_ok"] for p in users.review_people(rid) if p["user_id"] == bea["user_id"]] == [False]
+
+    b = Board(chrome, f"{server}/r/{rid}/")
+    b.press(".share-open")
+    assert b.until("!!document.querySelector('.share-dialog .share-wake-unconfirmed')")
+    assert b.until("!!document.querySelector('.share-dialog .share-person .share-reconfirm')"), \
+        "the unconfirmed Reviewer person shows a re-confirm action"
+    assert b.js("String(document.querySelectorAll('.share-dialog .share-wake-unconfirmed').length)") == "2", \
+        "one marker for the link and one for the person"
+
+    b.press(".share-dialog > .share-wake-unconfirmed .share-reconfirm")
+    end = time.monotonic() + 10
+    while time.monotonic() < end and users.share_link(rid)["wake_ok"] is not True:
+        time.sleep(0.1)
+    assert users.share_link(rid)["wake_ok"] is True
+    assert b.until("document.querySelectorAll('.share-dialog .share-wake-unconfirmed').length === 1"), \
+        "the link's marker is gone, the person's stays"
+
+    b.press(".share-dialog .share-person .share-reconfirm")
+    end = time.monotonic() + 10
+    while time.monotonic() < end:
+        row = db.connect().execute("SELECT wake_ok FROM grants WHERE user_id = ? AND review_id = ?",
+                                   (bea["user_id"], rid)).fetchone()
+        if row is not None and row["wake_ok"] == 1:
+            break
+        time.sleep(0.1)
+    assert row is not None and row["wake_ok"] == 1
+    assert b.until("!document.querySelector('.share-dialog .share-wake-unconfirmed')"), \
+        "no unconfirmed Reviewer marker is left"

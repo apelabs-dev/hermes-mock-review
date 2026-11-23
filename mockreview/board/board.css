@@ -905,6 +905,8 @@ select:focus {
 .share-person-info { flex: 1; min-width: 0; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .share-person-role { flex: none; }
 .share-remove { flex: none; height: 28px; padding: 0 8px; font-size: 12px; }
+.share-wake-unconfirmed { flex: none; font-size: 12px; color: var(--warn); font-weight: 600; }
+.share-reconfirm { flex: none; height: 28px; padding: 0 8px; font-size: 12px; }
 .share-owner { flex: none; font-size: 12px; color: var(--muted); font-weight: 600; }
 .share-inherited { flex: none; font-size: 12px; color: var(--muted); }
 .share-seats { margin-top: 2px; flex-wrap: wrap; }

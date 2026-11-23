@@ -4092,6 +4092,13 @@ import {paintAvatar} from './avatar.js';
         row.appendChild(roleSelect('share-person-role', p.role, function (e) {
           peoplePost({ action: 'grant', user_id: p.user_id, role: e.target.value });
         }, 'Role for ' + p.name));
+        if (p.role === 'reviewer' && !p.wake_ok) {
+          row.appendChild(h('span', { class: 'share-wake-unconfirmed', text: 'Waking off',
+            title: 'This Reviewer is saved, not woken, until you confirm Reviewer again' }));
+          row.appendChild(h('button', { class: 'btn btn-ghost share-reconfirm', type: 'button',
+            text: 'Confirm Reviewer',
+            onclick: function () { peoplePost({ action: 'grant', user_id: p.user_id, role: 'reviewer' }); } }));
+        }
         if (p.direct_role) {
           row.appendChild(h('button', { class: 'btn btn-ghost btn-danger share-remove', type: 'button',
             text: p.inherited_role ? 'Clear override' : 'Remove',
@@ -4131,6 +4138,13 @@ import {paintAvatar} from './avatar.js';
         }, 'When the link expires');
       box.appendChild(h('div', { class: 'share-row' },
         h('span', { class: 'share-label', text: 'Guests can' }), h('span', { class: 'share-spacer' }), roleSel, expSel));
+      if (link.guest_role === 'reviewer' && !link.wake_ok) {
+        box.appendChild(h('div', { class: 'share-row share-wake-unconfirmed' },
+          h('span', { class: 'share-faint', text: 'Reviewer guests cannot wake Hermes until you confirm Reviewer again.' }),
+          h('span', { class: 'share-spacer' }),
+          h('button', { class: 'btn share-reconfirm', type: 'button', text: 'Confirm Reviewer',
+            onclick: function () { sharePost({ action: 'update', guest_role: 'reviewer' }); } })));
+      }
       box.appendChild(shareLinkRow(link.url, 'Share link'));
       var regen = h('button', { class: 'btn btn-ghost', type: 'button', text: 'Regenerate',
         onclick: function () {
