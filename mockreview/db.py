@@ -12,6 +12,7 @@ Migration numbers:
     4  share_links.round: the version picker a viewer guest sees (latest or a round number)
     5  revoked_sessions: guest sessions ended by an access change, so a stale cookie reads as revoked
     6  share_links.wake_ok, grants.wake_ok: the owner confirmed this Reviewer role may wake Hermes (off for old rows)
+    7  invites.wake_ok: the owner confirmed a Reviewer invite at mint; redemption copies it (off for old rows)
 Never renumber a released step; add a new one.
 """
 
@@ -211,6 +212,10 @@ ALTER TABLE share_links ADD COLUMN wake_ok INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE grants ADD COLUMN wake_ok INTEGER NOT NULL DEFAULT 0;
 """
 
+# The owner's confirmation carried on the invite itself. An invite minted before the mention wake predates it, so the
+# migration starts every row at 0: redeeming one still grants its board role, but never the right to wake Hermes.
+_MIGRATE_7 = "ALTER TABLE invites ADD COLUMN wake_ok INTEGER NOT NULL DEFAULT 0"
+
 # (version, SQL). Index i holds version i + 1.
 MIGRATIONS: List[Tuple[int, str]] = [
     (1, _SCHEMA_1),
@@ -219,6 +224,7 @@ MIGRATIONS: List[Tuple[int, str]] = [
     (4, _MIGRATE_4),
     (5, _MIGRATE_5),
     (6, _MIGRATE_6),
+    (7, _MIGRATE_7),
 ]
 
 _local = threading.local()
