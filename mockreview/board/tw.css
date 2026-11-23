@@ -2455,8 +2455,9 @@
     pointer-events: none;
   }
   .mpin[data-hermes-state="working"] .hermes-pin-indicator {
-    right: -4px;
-    bottom: -4px;
+    right: -5px;
+    top: 50%;
+    margin-top: -5px;
     width: 10px;
     height: 10px;
     box-sizing: border-box;

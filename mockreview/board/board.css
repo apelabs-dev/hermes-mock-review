@@ -516,9 +516,9 @@ figure.opt.picked .mock { outline: 2px solid var(--accent); }
   margin: -22px 0 0 -22px; transform: rotate(45deg); }
 .mpin span { transform: rotate(45deg); }
 .mpin .hermes-pin-indicator { position: absolute; pointer-events: none; }
-/* The marker is turned -45deg, so its local bottom-right corner sits on the pin's right side on screen. */
+/* The marker is turned -45deg, so its local right-middle edge sits on the pin's upper right (about 45 degrees) on screen. */
 .mpin[data-hermes-state="working"] .hermes-pin-indicator {
-  right: -4px; bottom: -4px; width: 10px; height: 10px; box-sizing: border-box; border-radius: 50%;
+  right: -5px; top: 50%; margin-top: -5px; width: 10px; height: 10px; box-sizing: border-box; border-radius: 50%;
   background: var(--err); border: 2px solid var(--surface); animation: hermes-pin-pulse 1.2s ease-in-out infinite;
 }
 .mpin[data-hermes-state="failed"] .hermes-pin-indicator {
