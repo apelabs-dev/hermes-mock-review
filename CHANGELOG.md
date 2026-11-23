@@ -3,6 +3,13 @@
 All notable changes to this project are listed here. The format follows Keep a Changelog, and the project follows
 semantic versioning.
 
+## [2.4.0](https://github.com/apelabs-dev/hermes-mock-review/compare/v2.3.0...v2.4.0) (2026-11-23)
+
+
+### Features
+
+* owner-only wake and Send, reviewer @Hermes mentions, and comment mode pins mock controls ([#68](https://github.com/apelabs-dev/hermes-mock-review/issues/68)) ([2f21178](https://github.com/apelabs-dev/hermes-mock-review/commit/2f21178f366611b784638e3ab55e44f12604b6d3))
+
 ## [2.3.0](https://github.com/apelabs-dev/hermes-mock-review/compare/v2.2.0...v2.3.0) (2026-11-22)
 
 

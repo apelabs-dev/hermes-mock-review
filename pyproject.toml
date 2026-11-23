@@ -2,7 +2,7 @@
 # Not a packaging setup: the plugin is installed as a directory, not built or published.
 [project]
 name = "mock-review"
-version = "2.3.0" # x-release-please-version
+version = "2.4.0" # x-release-please-version
 description = "Review boards for UI mockups that wake Hermes when the reviewer presses Send."
 requires-python = ">=3.11,<3.15"
 license = "MIT"
