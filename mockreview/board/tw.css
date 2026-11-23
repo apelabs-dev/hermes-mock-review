@@ -4139,6 +4139,18 @@
     padding: 0 8px;
     font-size: 12px;
   }
+  .share-wake-unconfirmed {
+    flex: none;
+    font-size: 12px;
+    color: var(--warn);
+    font-weight: 600;
+  }
+  .share-reconfirm {
+    flex: none;
+    height: 28px;
+    padding: 0 8px;
+    font-size: 12px;
+  }
   .share-owner {
     flex: none;
     font-size: 12px;
