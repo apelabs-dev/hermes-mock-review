@@ -1023,10 +1023,14 @@ def artifact_page(html: str) -> str:
 
 
 def artifact_board_page(body: bytes) -> bytes:
-    """Use the current board probe for a previously installed artifact without rewriting its file."""
+    """Use the current board probe for a previously installed artifact without rewriting its file.
+
+    The probe is matched by its marker, not by the newline after it: a page written on Windows starts the probe's
+    script with `\\r\\n` (`Path.write_text` translates every `\\n`), and it must upgrade exactly like an LF page.
+    """
     header = _artifact_header().encode()
     probe = _probe().encode()
-    if body.startswith(header + probe) or not body.startswith(header + f"<script>/*{PROBE_MARKER}*/\n".encode()):
+    if body.startswith(header + probe) or not body.startswith(header + f"<script>/*{PROBE_MARKER}*/".encode()):
         return body
     end = body.find(b"</script>", len(header))
     return body if end < 0 else header + probe + body[end + len(b"</script>"):]
@@ -1047,7 +1051,7 @@ def _stored_decisions(dec: Dict[str, Any], vdir: Path, used: int = 0) -> Tuple[D
             from . import bundle   # lazy: bundle imports this module
             html, used = bundle.bundle_artifact(b["src"], b["id"], used)
         (vdir / "blocks").mkdir(exist_ok=True)
-        (vdir / "blocks" / f"{b['id']}.html").write_text(artifact_page(html), encoding="utf-8")
+        (vdir / "blocks" / f"{b['id']}.html").write_text(artifact_page(html), encoding="utf-8", newline="\n")
         blocks.append({k: v for k, v in b.items() if k not in ("html", "src")} | {"file": f"blocks/{b['id']}.html"})
     return dict(dec, blocks=blocks), used
 

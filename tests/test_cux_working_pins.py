@@ -394,7 +394,8 @@ def test_existing_artifact_frame_renders_a_live_working_pin(working_review, serv
                                  store.parse_round_spec(decisions=str(spec)), wake=True)
     rid = review["id"]
     page = store.review_dir(rid) / "rounds" / "1" / "a" / "blocks" / "m1.html"
-    old_probe = page.read_bytes().replace(b"if (p.hermes) {", b"if (false) {", 1)
+    # A Windows install's write_text produces CRLF; the serve-time upgrade must still match the probe by its marker.
+    old_probe = page.read_bytes().replace(b"\n", b"\r\n").replace(b"if (p.hermes) {", b"if (false) {", 1)
     page.write_bytes(old_probe)
     b = WorkingBoard(chrome, server, review, mobile, artifact=True)
     sid = frame_session(b, rid)
