@@ -3,6 +3,13 @@
 All notable changes to this project are listed here. The format follows Keep a Changelog, and the project follows
 semantic versioning.
 
+## [2.4.1](https://github.com/apelabs-dev/hermes-mock-review/compare/v2.4.0...v2.4.1) (2026-11-23)
+
+
+### Bug Fixes
+
+* **board:** move the working dot to the pin's upper right ([#70](https://github.com/apelabs-dev/hermes-mock-review/issues/70)) ([b15d7fe](https://github.com/apelabs-dev/hermes-mock-review/commit/b15d7fe96ab735a6e96ddc221e312d1441efba47))
+
 ## [2.4.0](https://github.com/apelabs-dev/hermes-mock-review/compare/v2.3.0...v2.4.0) (2026-11-23)
 
 
