@@ -20,16 +20,10 @@ log = logging.getLogger("mockreview.service")
 # more (api/submit is the owner's alone, wakeguard.request_gate); `submit(guest=True)` keeps the guard.
 GUEST_NO_WAKE = "a share-link guest never wakes Hermes: what you sent is saved for the owner"
 GUEST_NEVER_DELIVERED = "a share-link guest's feedback is never delivered to Hermes"
-# A record queued before the `by_owner` marker existed has no proof it came from the owner. Only its author's current
-# admin role can prove that now; anything else is saved for the owner to send again.
-LEGACY_QUEUED_NO_WAKE = ("queued before this update by a reviewer who is not an admin: not sent; the owner can send "
-                         "it again")
-# A record queued before the `by_owner` marker on a board a Funnel maps. Main's board gate refused such a board, so the
-# request that queued this record may have arrived through the public link; without the marker there is no proof it
-# did not. It stays saved until a fresh owner action (Send from private ingress, or re-confirming the role).
-LEGACY_FUNNEL_NO_WAKE = ("queued before this update while Funnel maps this board: not sent, because the record has no "
-                         "proof it came from this computer or the tailnet; the owner can send it again from the "
-                         "tailnet")
+# A record queued before the `by_owner` marker existed has no proof it came from the owner, Funnel or not: it stays
+# stored until the owner sends it again from private ingress (or re-confirms the Reviewer role).
+LEGACY_QUEUED_NO_WAKE = ("queued before this update without a by_owner marker: not sent, because the record has no "
+                         "proof it came from the owner; send it again from private ingress to wake Hermes")
 
 
 class AlreadySubmitted(ReviewError):
@@ -413,7 +407,6 @@ def flush_pin_fixes(review_id: str, now: Optional[float] = None) -> "tuple[bool,
     if owner.is_bound():
         return False, "not the owner service: only the board server delivers wake-ups"
     now = time.time() if now is None else now
-    funnel = bool(config.funnel_url())    # once per delivery pass: the CLI call can take up to 5 s
     with store.locked(review_id):
         data = store.load(review_id)
         if data.get("status") != "open":
@@ -422,40 +415,30 @@ def flush_pin_fixes(review_id: str, now: Optional[float] = None) -> "tuple[bool,
         if data.get("wake") is False:
             return False, "this board has wake off"
         requests = r.get("pin_requests") or {}
-        held_legacy = False
-        held_reasons = set()
         held_detail = ""
         for q in requests.values():
             if q.get("status") == "queued" and _counts_toward_wake_budget(q) and "by_owner" not in q:
-                reason = _legacy_hold(q.get("idem_owner"), funnel)
-                if reason:
-                    q.update(quiet=True, detail=reason)
-                    held_reasons.add(reason)
-                    held_legacy = True
+                q.update(quiet=True, detail=LEGACY_QUEUED_NO_WAKE)
+                held_detail = LEGACY_QUEUED_NO_WAKE
         state = r.get("pin_fix") or {}
         wake = state.get("wake") or {}
         if wake.get("status") == "pending_notify":
             ids = list(wake.get("requests") or [])
-            allowed = [i for i in ids if _pin_wake_allowed(requests.get(i), funnel)]
+            allowed = [i for i in ids if _pin_wake_allowed(requests.get(i))]
             if allowed != ids:
                 held = [i for i in ids if i not in allowed]
-                reasons = [reason for reason in (_pin_refusal(requests.get(i), funnel) for i in held) if reason]
-                reason = (LEGACY_FUNNEL_NO_WAKE if LEGACY_FUNNEL_NO_WAKE in reasons
-                          else reasons[0] if reasons else LEGACY_QUEUED_NO_WAKE)
                 for i in held:
                     q = requests.get(i)
                     if q:
-                        q["detail"] = _pin_refusal(q, funnel) or reason
+                        q["detail"] = _pin_refusal(q) or LEGACY_QUEUED_NO_WAKE
                 wake["requests"] = allowed
                 if not allowed:
-                    wake.update(status="failed", sending_until=0.0, last_error=reason, next_attempt=0.0)
+                    wake.update(status="failed", sending_until=0.0, last_error=LEGACY_QUEUED_NO_WAKE,
+                                next_attempt=0.0)
                 state["wake"] = wake
                 r["pin_fix"] = state
-                held_reasons.add(reason)
-                held_legacy = True
-        if held_legacy:
-            held_detail = (LEGACY_FUNNEL_NO_WAKE if LEGACY_FUNNEL_NO_WAKE in held_reasons
-                           else sorted(held_reasons)[0])
+                held_detail = LEGACY_QUEUED_NO_WAKE
+        if held_detail:
             log.warning("mock-review: legacy pin fix queue for %s held: %s", review_id, held_detail)
             store.save(review_id, data, pin_round=r["n"])
         queued = sorted((q for q in requests.values()
@@ -610,48 +593,27 @@ def _mention_wakes(data: Dict[str, Any]) -> Dict[str, Any]:
     return wakes
 
 
-def _admin_author(author: Any) -> bool:
-    """True when a legacy record's author is an account (`user:<id>`) whose current instance role is admin.
+def _legacy_hold() -> str:
+    """Why a record without `by_owner` must not be delivered now.
 
-    A legacy record has no `by_owner` marker, so only a current admin can prove it came from the owner; anything
-    else, including a guest or an unreadable account, fails closed.
+    A record queued before this update has no `by_owner` marker, so it has no proof it came from the owner, Funnel or
+    not: it stays saved until the owner sends it again from private ingress.
     """
-    if not isinstance(author, str) or not author.startswith("user:") or not author[5:].isdigit():
-        return False
-    try:
-        user = users.get_user(int(author[5:]))
-    except (OSError, sqlite3.Error, ValueError):
-        return False
-    return bool(user) and user.get("role") == "admin"
+    return LEGACY_QUEUED_NO_WAKE
 
 
-def _legacy_hold(author: Any, funnel: bool) -> str:
-    """Why a record without `by_owner` must not be delivered now, or "" when it may.
-
-    A legacy record carries no proof of where it came from. A current admin account is the only evidence an old record
-    names the owner, and a Funnel mapping removes even that: main's board gate refused a Funnel-mapped board, so any
-    pre-update record could have arrived through the public link. `funnel` is read once per delivery pass, never per
-    record.
-    """
-    if funnel:
-        return LEGACY_FUNNEL_NO_WAKE if _admin_author(author) else LEGACY_QUEUED_NO_WAKE
-    return "" if _admin_author(author) else LEGACY_QUEUED_NO_WAKE
-
-
-def _pin_refusal(request: Dict[str, Any], funnel: bool) -> str:
-    """Why this pin fix may not ride a wake, or "" when it may: a new-style request carries `by_owner`; a legacy one
-    follows `_legacy_hold`."""
+def _pin_refusal(request: Dict[str, Any]) -> str:
+    """Why this pin fix may not ride a wake, or "" when it may: only a request that carries `by_owner` may."""
     if not request:
         return LEGACY_QUEUED_NO_WAKE
     if "by_owner" in request:
         return "" if request.get("by_owner") is True else LEGACY_QUEUED_NO_WAKE
-    return _legacy_hold(request.get("idem_owner"), funnel)
+    return _legacy_hold()
 
 
-def _pin_wake_allowed(request: Dict[str, Any], funnel: bool = False) -> bool:
-    """Whether a pin fix may ride a wake: a new-style request carries `by_owner`; a legacy one is allowed only when
-    its requester is still an admin account and no Funnel maps the board."""
-    return not _pin_refusal(request, funnel)
+def _pin_wake_allowed(request: Dict[str, Any]) -> bool:
+    """Whether a pin fix may ride a wake: only a request that carries the owner's `by_owner` marker."""
+    return not _pin_refusal(request)
 
 
 def _counts_toward_wake_budget(request: Dict[str, Any]) -> bool:
@@ -903,24 +865,10 @@ def _capped_wake(review_id: str, data: Dict[str, Any], wakes: Dict[str, Any], co
     return {"status": "capped", "notified": False, "detail": detail}
 
 
-def _mention_author(review_id: str, rec: Dict[str, Any]) -> Optional[str]:
-    """The author stored on the wake record, or read from its comment for a record queued before `author` existed."""
-    author = rec.get("author")
-    if isinstance(author, str):
-        return author
-    try:
-        return str(threads._comment_row(review_id, str(rec.get("comment_id") or ""))["author"])
-    except (ReviewError, OSError, sqlite3.Error, KeyError, TypeError):
-        return None
-
-
-def _mention_by_owner(review_id: str, rec: Dict[str, Any], funnel: bool = False) -> bool:
-    """Whether the owner queued this mention wake. A record queued before `by_owner` existed was written for an
-    account (the owner or a member, never a guest): it counts as the owner's only when its comment's author is still
-    an admin account and no Funnel maps the board; anything else, or a comment that cannot be read, fails closed."""
-    if "by_owner" in rec:
-        return rec.get("by_owner") is True
-    return not _legacy_hold(_mention_author(review_id, rec), funnel)
+def _mention_by_owner(rec: Dict[str, Any]) -> bool:
+    """Whether the owner queued this mention wake: only a record that carries `by_owner` does. A record queued before
+    the marker existed has no proof it came from the owner, so it fails closed."""
+    return rec.get("by_owner") is True
 
 
 def wake_thread_mention(review_id: str, thread: Dict[str, Any], comment_id: str,
@@ -1007,13 +955,12 @@ def _deliver_thread_wakes(review_id: str, comment_ids: "list[str]",
     confirmation (the owner may have changed the role after the mention was queued), or with REVIEWER_WAKE_ENDED when
     its share link stopped, was regenerated or expired since. It is failed with TOOLS_NO_WAKE, and not sent, when the
     board now wakes a Desktop chat or wake_toolsets is set (the request gate's reviewer rule, checked again because the
-    settings may have changed since the mention was queued). A legacy record whose author is not an admin account, or
-    any legacy record while Funnel maps the board, is failed with LEGACY_QUEUED_NO_WAKE / LEGACY_FUNNEL_NO_WAKE and
-    not sent.
+    settings may have changed since the mention was queued). A record queued before this update carries no `by_owner`
+    marker, so it has no proof it came from the owner, Funnel or not: it is failed with LEGACY_QUEUED_NO_WAKE and not
+    sent.
     """
     if owner.is_bound():
         return False, "not the owner service: only the board server delivers wake-ups"
-    funnel = bool(config.funnel_url())    # once per delivery pass: the CLI call can take up to 5 s
     with store.locked(review_id):
         data = store.load(review_id)
         wakes = data.get("thread_wakes") or {}
@@ -1041,29 +988,23 @@ def _deliver_thread_wakes(review_id: str, comment_ids: "list[str]",
         pin_changed = False
         newest = data["rounds"][-1]
         round_n = newest["n"]
-        legacy_refused = []
-        for w in picked:
-            if "by_owner" in w:
-                continue
-            reason = _legacy_hold(_mention_author(review_id, w), funnel)
-            if reason:
-                legacy_refused.append((w, reason))
-        for w, reason in legacy_refused:
-            w.update(status="failed", sending_until=0.0, last_error=reason, next_attempt=0.0)
-            pin_changed = _set_mention_request(data, w.get("request_id"), "failed", reason) or pin_changed
+        legacy_refused = [w for w in picked if "by_owner" not in w]
+        for w in legacy_refused:
+            w.update(status="failed", sending_until=0.0, last_error=LEGACY_QUEUED_NO_WAKE, next_attempt=0.0)
+            pin_changed = (_set_mention_request(data, w.get("request_id"), "failed", LEGACY_QUEUED_NO_WAKE)
+                           or pin_changed)
         if legacy_refused:
             log.warning("mock-review: legacy mention wake for %s comments %s not sent: %s", review_id,
-                        ", ".join(str(w.get("comment_id")) for w, _ in legacy_refused),
-                        "; ".join(sorted({reason for _, reason in legacy_refused})))
-        held_legacy = {id(w) for w, _ in legacy_refused}
+                        ", ".join(str(w.get("comment_id")) for w in legacy_refused), LEGACY_QUEUED_NO_WAKE)
+        held_legacy = {id(w) for w in legacy_refused}
         picked = [w for w in picked if id(w) not in held_legacy]
         if not picked:
             _bounded_thread_wakes(data)
             store.save(review_id, data, pin_round=round_n if pin_changed else None)
-            return False, legacy_refused[0][1]
+            return False, LEGACY_QUEUED_NO_WAKE
         unconfirmed = []
         for w in picked:
-            if _mention_by_owner(review_id, w, funnel):
+            if _mention_by_owner(w):
                 continue
             reason = users.wake_reason(review_id, str(w.get("author") or ""))
             if reason:
@@ -1087,7 +1028,7 @@ def _deliver_thread_wakes(review_id: str, comment_ids: "list[str]",
                 pin_changed = pin_changed or bool(w["request_id"])
         reviewer_held = wakeguard.reviewer_mention_reason(data.get("origin"))
         if reviewer_held:
-            refused = [w for w in picked if not _mention_by_owner(review_id, w, funnel)]
+            refused = [w for w in picked if not _mention_by_owner(w)]
             for w in refused:
                 w.update(status="failed", sending_until=0.0, last_error=reviewer_held, next_attempt=0.0)
                 pin_changed = _set_mention_request(data, w.get("request_id"), "failed", reviewer_held) or pin_changed
@@ -1260,7 +1201,6 @@ def notify_round(review_id: str, round_n: int, url: Optional[str] = None) -> "tu
     """
     if owner.is_bound():
         return False, "not the owner service: only the board server delivers wake-ups"
-    funnel = bool(config.funnel_url())    # once per delivery pass: the CLI call can take up to 5 s
     with store.locked(review_id):
         data = store.load(review_id)
         r = store.get_round(data, round_n)
@@ -1275,7 +1215,7 @@ def notify_round(review_id: str, round_n: int, url: Optional[str] = None) -> "tu
             return True, "already notified"
         if sub.get("status") != "pending_notify":   # stored by the request gate (or wake off): never woken
             return False, sub.get("stored_detail") or "nothing pending to send"
-        legacy_reason = _legacy_hold(sub.get("author"), funnel) if "by_owner" not in sub else ""
+        legacy_reason = _legacy_hold() if "by_owner" not in sub else ""
         if legacy_reason:
             sub.update(status="stored", stored_detail=legacy_reason, next_attempt=0)
             notice = sub.get("notice")

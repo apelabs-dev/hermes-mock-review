@@ -1,8 +1,8 @@
 """Every store or path that can carry state created before this update into a wake or a send: one test per source.
 
-The rule this file keeps: a record with no explicit post-update owner confirmation is never delivered. The older
-routes had no per-request ingress proof, so a record queued before the request gate existed may have arrived through a
-public path. Only a fresh owner action (Send from private ingress, or re-confirming Reviewer in Share) authorizes it.
+The rule this file keeps: a record with no explicit post-update owner confirmation is never delivered. Every record
+queued before this update carries no `by_owner` marker, so it has no proof it came from the owner, Funnel or not; only
+a fresh owner action (Send from private ingress, or re-confirming Reviewer in Share) authorizes it.
 
 Most tests here are red on the pre-fix head and guard the fix afterwards; a few are controls (a source that is safe
 already) and stay green on both, named as such in `.dispatch/pr68-r2/class-table.md`.
@@ -184,8 +184,9 @@ def _sent(monkeypatch):
     return sent
 
 
-@pytest.mark.parametrize("funnel_mapped", [True, False], ids=["funnel-held", "no-funnel-delivered"])
-def test_a_legacy_admin_send_follows_the_funnel_hold(env, review, monkeypatch, funnel_mapped):
+@pytest.mark.parametrize("funnel_mapped", [True, False], ids=["funnel-held", "no-funnel-held"])
+def test_a_legacy_admin_send_is_held(env, review, monkeypatch, funnel_mapped):
+    """Funnel or not: no `by_owner` marker, so the record is stored, never sent."""
     if funnel_mapped:
         monkeypatch.setattr(config, "funnel_url", lambda: FUNNEL_URL)
     owner = users.owner_user()
@@ -195,17 +196,13 @@ def test_a_legacy_admin_send_follows_the_funnel_hold(env, review, monkeypatch, f
 
     wake, _ack = service.deliver_submission(rid, 1)
     sub = store.load(rid)["rounds"][0]["submission"]
-    if funnel_mapped:
-        assert sent == [] and wake == (False, service.LEGACY_FUNNEL_NO_WAKE), wake
-        assert sub["status"] == "stored" and sub["stored_detail"] == service.LEGACY_FUNNEL_NO_WAKE, sub
-    else:
-        assert sent == [f"mockreview-{rid}-r1-s1"] and wake == (True, "ok"), wake
-        assert sub["status"] == "notified", sub
+    assert sent == [] and wake == (False, service.LEGACY_QUEUED_NO_WAKE), wake
+    assert sub["status"] == "stored" and sub["stored_detail"] == service.LEGACY_QUEUED_NO_WAKE, sub
 
 
-@pytest.mark.parametrize("funnel_mapped", [True, False], ids=["funnel-held", "no-funnel-delivered"])
-def test_a_member_promoted_after_queueing_follows_the_funnel_hold(env, review, monkeypatch, funnel_mapped):
-    """A current admin role is not historical ingress proof; a Funnel mapping still holds the record."""
+@pytest.mark.parametrize("funnel_mapped", [True, False], ids=["funnel-held", "no-funnel-held"])
+def test_a_member_promoted_after_queueing_is_held(env, review, monkeypatch, funnel_mapped):
+    """A current admin role is not historical ingress proof: Funnel or not, the record is stored, never sent."""
     if funnel_mapped:
         monkeypatch.setattr(config, "funnel_url", lambda: FUNNEL_URL)
     member = account(instance="member", name="Member")
@@ -215,17 +212,15 @@ def test_a_member_promoted_after_queueing_follows_the_funnel_hold(env, review, m
     sent = _sent(monkeypatch)
 
     wake, _ack = service.deliver_submission(rid, 1)
-    if funnel_mapped:
-        assert sent == [] and wake == (False, service.LEGACY_FUNNEL_NO_WAKE), wake
-    else:
-        assert sent == [f"mockreview-{rid}-r1-s1"] and wake == (True, "ok"), wake
+    assert sent == [] and wake == (False, service.LEGACY_QUEUED_NO_WAKE), wake
 
 
 # ---------------------------------------------------------------- pin fixes
 
 
-@pytest.mark.parametrize("funnel_mapped", [True, False], ids=["funnel-held", "no-funnel-delivered"])
-def test_a_legacy_admin_pin_fix_follows_the_funnel_hold(env, tmp_path, funnel_mapped, monkeypatch):
+@pytest.mark.parametrize("funnel_mapped", [True, False], ids=["funnel-held", "no-funnel-held"])
+def test_a_legacy_admin_pin_fix_is_held(env, tmp_path, funnel_mapped, monkeypatch):
+    """Funnel or not: no `by_owner` marker, so the pin fix is stored quietly, never sent."""
     if funnel_mapped:
         monkeypatch.setattr(config, "funnel_url", lambda: FUNNEL_URL)
     data = pin_board(tmp_path)
@@ -233,13 +228,9 @@ def test_a_legacy_admin_pin_fix_follows_the_funnel_hold(env, tmp_path, funnel_ma
 
     ok, detail = service.flush_pin_fixes(data["id"])
     q = pin_requests(data["id"])[pid]
-    if funnel_mapped:
-        assert ok is False and detail == service.LEGACY_FUNNEL_NO_WAKE, (ok, detail)
-        assert env["receiver"].wakes == []
-        assert q["quiet"] is True and q["detail"] == service.LEGACY_FUNNEL_NO_WAKE, q
-    else:
-        assert ok is True and len(env["receiver"].wakes) == 1
-        assert q["status"] == "woken", q
+    assert ok is False and detail == service.LEGACY_QUEUED_NO_WAKE, (ok, detail)
+    assert env["receiver"].wakes == []
+    assert q["quiet"] is True and q["detail"] == service.LEGACY_QUEUED_NO_WAKE, q
 
 
 def _pending_wake(rid, ids):
@@ -263,9 +254,9 @@ def test_a_legacy_pending_pin_wake_on_a_funnel_board_is_held(env, tmp_path, funn
     ok, detail = service.flush_pin_fixes(data["id"])
     wake = store.load(data["id"])["rounds"][-1]["pin_fix"]["wake"]
     assert env["receiver"].wakes == []
-    assert ok is False and detail == service.LEGACY_FUNNEL_NO_WAKE, (ok, detail)
-    assert wake["status"] == "failed" and wake["last_error"] == service.LEGACY_FUNNEL_NO_WAKE, wake
-    assert pin_requests(data["id"])[pid]["detail"] == service.LEGACY_FUNNEL_NO_WAKE
+    assert ok is False and detail == service.LEGACY_QUEUED_NO_WAKE, (ok, detail)
+    assert wake["status"] == "failed" and wake["last_error"] == service.LEGACY_QUEUED_NO_WAKE, wake
+    assert pin_requests(data["id"])[pid]["detail"] == service.LEGACY_QUEUED_NO_WAKE
 
 
 def test_a_legacy_pending_pin_wake_by_a_member_is_not_sent(env, tmp_path):
@@ -279,23 +270,27 @@ def test_a_legacy_pending_pin_wake_by_a_member_is_not_sent(env, tmp_path):
     assert wake["status"] == "failed" and wake["last_error"] == service.LEGACY_QUEUED_NO_WAKE, wake
 
 
-def test_a_legacy_pending_pin_wake_without_a_funnel_sends_only_the_admin(env, tmp_path):
+def test_a_legacy_pending_pin_wake_without_a_funnel_holds_every_author(env, tmp_path):
     data = pin_board(tmp_path)
     member = account(instance="member", name="Member")
     mine = _legacy_pin_fix(data["id"], f"user:{users.owner_user()['id']}")
     theirs = _legacy_pin_fix(data["id"], f"user:{member['user_id']}")
     _pending_wake(data["id"], [mine, theirs])
-    ok, _detail = service.flush_pin_fixes(data["id"])
-    assert ok is True
-    assert [json.loads(w["body"])["requests"] for w in env["receiver"].wakes] == [[mine]]
-    assert theirs not in (store.load(data["id"])["rounds"][-1]["pin_fix"]["wake"]["requests"] or [])
+    ok, detail = service.flush_pin_fixes(data["id"])
+    assert ok is False and detail == service.LEGACY_QUEUED_NO_WAKE, (ok, detail)
+    assert env["receiver"].wakes == []
+    requests = pin_requests(data["id"])
+    assert requests[mine]["detail"] == service.LEGACY_QUEUED_NO_WAKE, requests[mine]
+    assert requests[theirs]["detail"] == service.LEGACY_QUEUED_NO_WAKE, requests[theirs]
+    assert (store.load(data["id"])["rounds"][-1]["pin_fix"]["wake"]["requests"] or []) == []
 
 
 # ---------------------------------------------------------------- mention wakes
 
 
-@pytest.mark.parametrize("funnel_mapped", [True, False], ids=["funnel-held", "no-funnel-delivered"])
-def test_a_legacy_admin_mention_follows_the_funnel_hold(env, server, tmp_path, funnel_mapped, monkeypatch):
+@pytest.mark.parametrize("funnel_mapped", [True, False], ids=["funnel-held", "no-funnel-held"])
+def test_a_legacy_admin_mention_is_held(env, server, tmp_path, funnel_mapped, monkeypatch):
+    """Funnel or not: no `by_owner` marker, so the mention wake is stored, never sent."""
     if funnel_mapped:
         monkeypatch.setattr(config, "funnel_url", lambda: FUNNEL_URL)
     rid = mention_board(tmp_path)["id"]
@@ -304,13 +299,9 @@ def test_a_legacy_admin_mention_follows_the_funnel_hold(env, server, tmp_path, f
     tick()
     rec = wake_records(rid)[comment_id]
     chip = pin_requests(rid)[rec["request_id"]]
-    if funnel_mapped:
-        assert env["receiver"].wakes == []
-        assert rec["status"] == "failed" and rec["last_error"] == service.LEGACY_FUNNEL_NO_WAKE, rec
-        assert chip["status"] == "failed" and chip["detail"] == service.LEGACY_FUNNEL_NO_WAKE, chip
-    else:
-        assert len(env["receiver"].wakes) == 1
-        assert rec["status"] == "notified", rec
+    assert env["receiver"].wakes == []
+    assert rec["status"] == "failed" and rec["last_error"] == service.LEGACY_QUEUED_NO_WAKE, rec
+    assert chip["status"] == "failed" and chip["detail"] == service.LEGACY_QUEUED_NO_WAKE, chip
 
 
 # ---------------------------------------------------------------- notices

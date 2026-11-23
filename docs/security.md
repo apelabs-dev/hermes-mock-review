@@ -352,10 +352,9 @@ invite minted before this update grants its role without the confirmation. Picki
 confirmation. The server checks the same rules again when it delivers a queued mention wake,
 because the settings, the role and the link can change in between: a mention wake whose author's Reviewer confirmation
 is gone, whose share link ended (stopped, regenerated, expired or signed-in people only), or whose board now wakes a
-Desktop chat, or whose route now has `wake_toolsets`, fails with that reason and nothing is sent. A request queued
-before this update carries no `by_owner` marker, so it has no proof of where it came from: its author's current admin
-account is the only evidence it names the owner, and while Funnel maps the board even that is not enough, because the
-record could have arrived through the public link; it stays saved until the owner sends it again from private ingress. Reviewer mentions share the
+Desktop chat, or whose route now has `wake_toolsets`, fails with that reason and nothing is sent. Every record queued
+before this update carries no `by_owner` marker, so it has no proof of where it came from, Funnel or not; it stays
+saved until the owner sends it again from private ingress. Reviewer mentions share the
 pin-fix caps (`pin_fix_max_per_hour`, `pin_fix_max_per_round`), and a board created with wake-up off never wakes anyone.
 
 In the board, only the owner sees Send and Build; anyone else sees "Only the owner sends this round to Hermes. Your
