@@ -658,7 +658,11 @@ def test_a_legacy_pending_send_by_a_member_is_stored_not_delivered(env, review, 
     assert sub["status"] == "stored" and sub["stored_detail"] == service.LEGACY_QUEUED_NO_WAKE, sub
 
 
-def test_a_legacy_pending_send_by_the_admin_is_delivered(env, review, monkeypatch):
+@pytest.mark.parametrize("funnel_mapped", [True, False], ids=["funnel-held", "no-funnel-delivered"])
+def test_a_legacy_pending_send_by_the_admin_is_delivered(env, review, monkeypatch, funnel_mapped):
+    """Round 2: a legacy record without `by_owner` keeps main's Funnel hold; without a Funnel it is delivered."""
+    if funnel_mapped:
+        monkeypatch.setattr(config, "funnel_url", lambda: FUNNEL_URL)
     owner = users.owner_user()
     rid, token = review["id"], review["token"]
     _legacy_send(rid, token, f"user:{owner['id']}", monkeypatch)
@@ -667,8 +671,14 @@ def test_a_legacy_pending_send_by_the_admin_is_delivered(env, review, monkeypatc
     monkeypatch.setattr(service.notify, "send",
                         lambda payload, delivery_id, url=None: (sent.append(delivery_id) or (True, "ok")))
     wake, _ack = service.deliver_submission(rid, 1)
-    assert wake == (True, "ok"), wake
-    assert sent == [f"mockreview-{rid}-r1-s1"]
+    sub = store.load(rid)["rounds"][0]["submission"]
+    if funnel_mapped:
+        assert wake == (False, service.LEGACY_FUNNEL_NO_WAKE), wake
+        assert sent == []
+        assert sub["status"] == "stored" and sub["stored_detail"] == service.LEGACY_FUNNEL_NO_WAKE, sub
+    else:
+        assert wake == (True, "ok"), wake
+        assert sent == [f"mockreview-{rid}-r1-s1"]
 
 
 def _legacy_pin_fix(rid, author):
@@ -695,15 +705,25 @@ def test_a_legacy_queued_pin_fix_by_a_member_is_not_sent(env, tmp_path):
     assert q["quiet"] is True and q["detail"] == service.LEGACY_QUEUED_NO_WAKE, q
 
 
-def test_a_legacy_queued_pin_fix_by_the_admin_is_sent(env, tmp_path):
+@pytest.mark.parametrize("funnel_mapped", [True, False], ids=["funnel-held", "no-funnel-delivered"])
+def test_a_legacy_queued_pin_fix_by_the_admin_is_sent(env, tmp_path, monkeypatch, funnel_mapped):
+    """Round 2: a legacy pin fix without `by_owner` keeps main's Funnel hold; without a Funnel it is sent."""
+    if funnel_mapped:
+        monkeypatch.setattr(config, "funnel_url", lambda: FUNNEL_URL)
     data = pin_board(tmp_path)
     owner = users.owner_user()
     pid = _legacy_pin_fix(data["id"], f"user:{owner['id']}")
 
-    ok, _detail = service.flush_pin_fixes(data["id"])
-    assert ok is True
-    assert len(env["receiver"].wakes) == 1
-    assert json.loads(env["receiver"].wakes[0]["body"])["requests"] == [pid]
+    ok, detail = service.flush_pin_fixes(data["id"])
+    q = pin_requests(data["id"])[pid]
+    if funnel_mapped:
+        assert ok is False and detail == service.LEGACY_FUNNEL_NO_WAKE, (ok, detail)
+        assert env["receiver"].wakes == []
+        assert q["quiet"] is True and q["detail"] == service.LEGACY_FUNNEL_NO_WAKE, q
+    else:
+        assert ok is True
+        assert len(env["receiver"].wakes) == 1
+        assert json.loads(env["receiver"].wakes[0]["body"])["requests"] == [pid]
 
 
 def _legacy_mention(server, rid, headers, idem):
@@ -733,14 +753,26 @@ def test_a_legacy_mention_by_a_member_is_not_the_owners_and_never_wakes(env, ser
     assert req["status"] == "failed" and req["detail"] == service.LEGACY_QUEUED_NO_WAKE, req
 
 
-def test_a_legacy_mention_by_the_admin_is_delivered(env, server, tmp_path):
+@pytest.mark.parametrize("funnel_mapped", [True, False], ids=["funnel-held", "no-funnel-delivered"])
+def test_a_legacy_mention_by_the_admin_is_delivered(env, server, tmp_path, monkeypatch, funnel_mapped):
+    """Round 2: a legacy mention without `by_owner` keeps main's Funnel hold; without a Funnel it is delivered."""
+    if funnel_mapped:
+        monkeypatch.setattr(config, "funnel_url", lambda: FUNNEL_URL)
     rid = mention_board(tmp_path)["id"]
     comment_id = _legacy_mention(server, rid, None, "legacy-owner")
+    rec = wake_records(rid)[comment_id]
 
-    assert service._mention_by_owner(rid, wake_records(rid)[comment_id]) is True
-    tick()
-    assert len(env["receiver"].wakes) == 1
-    assert json.loads(env["receiver"].wakes[0]["body"])["comment_id"] == comment_id
+    if funnel_mapped:
+        assert service._mention_by_owner(rid, rec, funnel=True) is False
+        tick()
+        assert env["receiver"].wakes == []
+        rec = wake_records(rid)[comment_id]
+        assert rec["status"] == "failed" and rec["last_error"] == service.LEGACY_FUNNEL_NO_WAKE, rec
+    else:
+        assert service._mention_by_owner(rid, rec) is True
+        tick()
+        assert len(env["receiver"].wakes) == 1
+        assert json.loads(env["receiver"].wakes[0]["body"])["comment_id"] == comment_id
 
 
 def test_a_mention_queued_by_an_older_version_counts_as_the_owners_only_for_an_account_author(env, server, tmp_path,
@@ -846,10 +878,13 @@ def test_the_migration_leaves_an_existing_reviewer_link_and_grant_at_zero(env, t
         conn.execute("INSERT INTO grants (review_id, all_reviews, user_id, role, granted_by, created_at) "
                      "VALUES ('old-review', 0, 1, 'reviewer', 'test', 1)")
 
-        assert db.migrate(conn) == 6
+        conn.execute("INSERT INTO invites (nonce_hash, role, review_id, review_role, created_by, created_at, "
+                     "expires_at) VALUES ('nonce', 'member', 'old-review', 'reviewer', 'test', 1, 2)")
+        assert db.migrate(conn) == 7
         link = conn.execute("SELECT wake_ok FROM share_links WHERE review_id = 'old-review'").fetchone()[0]
         grant = conn.execute("SELECT wake_ok FROM grants WHERE review_id = 'old-review'").fetchone()[0]
-        assert (link, grant) == (0, 0)
+        invite = conn.execute("SELECT wake_ok FROM invites WHERE review_id = 'old-review'").fetchone()[0]
+        assert (link, grant, invite) == (0, 0, 0)
     finally:
         conn.close()
 
