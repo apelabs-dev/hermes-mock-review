@@ -202,3 +202,33 @@ def test_only_the_starter_can_delete_a_thread(env, server, tmp_path):
     code, _, out = http("POST", f"{server}/r/{rid}/api/threads/{thread['id']}/delete", {})
     assert code == 403, out
     assert thread["id"] in _threads(server, rid)
+
+
+def _hermes_comment(server, rid, tid):
+    return next(c for c in _threads(server, rid)[tid]["comments"] if c["author"] == threads.AGENT_ACTOR)
+
+
+def test_the_owner_can_delete_a_hermes_reply(env, server, tmp_path):
+    rid = board(tmp_path)["id"]
+    tid = _owner_thread(server, rid)
+    call_tool(plugin_tools(), "mock_review_reply", {"thread_id": tid, "text": "Yes."})
+    cid = _hermes_comment(server, rid, tid)["id"]
+    code, _, out = http("POST", f"{server}/r/{rid}/api/comments/{cid}/delete", {})
+    assert code == 200, out
+    comments = _threads(server, rid)[tid]["comments"]
+    assert [c["deleted_at"] is None for c in comments] == [True, False], "only Hermes's reply should be gone"
+
+
+def test_only_the_owner_may_delete_a_hermes_reply(env, server, tmp_path):
+    rid = board(tmp_path)["id"]
+    tid = _owner_thread(server, rid)
+    call_tool(plugin_tools(), "mock_review_reply", {"thread_id": tid, "text": "Yes."})
+    cid = _hermes_comment(server, rid, tid)["id"]
+    for actor in ("guest:g1", _owner_actor()):
+        try:
+            threads.delete_comment(rid, cid, actor)           # owner flag not set: a guest, or a member below owner
+        except api.ReviewError as e:
+            assert e.status == 403, e.status
+        else:
+            raise AssertionError(f"{actor} deleted Hermes's reply without the owner role")
+    assert all(c["deleted_at"] is None for c in _threads(server, rid)[tid]["comments"])

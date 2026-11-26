@@ -102,9 +102,8 @@ def test_hermes_replies_wear_the_hermes_mark(tall_review, server, chrome):
     names = json.loads(b.js("JSON.stringify(Array.from(document.querySelectorAll('.tcomment .cname'), "
                             "function (n) { return n.textContent; }))"))
     assert names[-1] == "Hermes"
-    editable = b.js("Array.from(document.querySelectorAll('.tcomment')).filter(function (r) {"
-                    " return r.textContent.indexOf('Yes, it matches.') >= 0 && r.querySelector('.cmore'); }).length")
-    assert editable == 0, "Hermes's comment offers the owner Edit/Delete as if it were theirs"
+    # The owner gets Delete (moderation) on Hermes's row but never Edit; the menu is pinned in
+    # test_the_owner_sees_delete_on_a_hermes_reply_and_never_edit.
     b.same_document(instance)
 
 
@@ -158,3 +157,39 @@ def test_a_pin_whose_own_comment_was_deleted_can_still_be_deleted_when_only_herm
     b.press(".tp-menu .menu-item:last-child")
     assert b.until("!document.querySelector('.mpin[data-thread=\"%s\"]')" % tid), "the pin stayed on the board"
     assert _gone(server, rid, tid)
+
+
+def test_a_pin_with_an_own_follow_up_and_a_hermes_reply_still_deletes_whole(tall_review, server, chrome):
+    from conftest import http
+    rid = tall_review["id"]
+    code, _, out = post(server, rid, "Is this subtotal right?", mentions=(), anchor={"block": "m1", "option": None, "x": 0.2, "y": 0.3})
+    tid = json.loads(out)["thread"]["id"]
+    call_tool(plugin_tools(), "mock_review_reply", {"thread_id": tid, "text": "Yes, it matches."})
+    code, _, out = http("POST", f"{server}/r/{rid}/api/threads/{tid}/reply", {"text": "Thanks."})
+    assert code in (200, 201), out
+    b = open_board(chrome, server, rid)
+    on(b)
+    _open_pin(b, tid)
+    b.press(".tpop .tp-more")
+    assert b.until("!!document.querySelector('.tp-menu')")
+    b.press(".tp-menu .menu-item:last-child")
+    assert b.until("!document.querySelector('.mpin[data-thread=\"%s\"]')" % tid), "the pin stayed on the board"
+    assert _gone(server, rid, tid), "the thread survived on the server, so the pin returns on reload"
+
+
+def test_the_owner_sees_delete_on_a_hermes_reply_and_never_edit(tall_review, server, chrome):
+    rid = tall_review["id"]
+    code, _, out = post(server, rid, "Is this subtotal right?", mentions=(), anchor={"block": "m1", "option": None, "x": 0.2, "y": 0.3})
+    tid = json.loads(out)["thread"]["id"]
+    call_tool(plugin_tools(), "mock_review_reply", {"thread_id": tid, "text": "Yes, it matches."})
+    b = open_board(chrome, server, rid)
+    on(b)
+    _open_pin(b, tid)
+    assert b.until("document.querySelectorAll('.tpop .tcomment .cmore').length === 2"), "both rows need an actions button"
+    b.js("document.querySelectorAll('.tpop .tcomment .cmore')[1].click()")
+    assert b.until("!!document.querySelector('.tp-menu')")
+    texts = json.loads(b.js("JSON.stringify([].map.call(document.querySelectorAll('.tp-menu .menu-item'),"
+                            "function(x){return x.innerText.trim()}))"))
+    assert texts == ["Delete"], texts
+    b.press(".tp-menu .menu-item")
+    assert b.until("document.querySelectorAll('.tpop .tcomment.deleted').length === 1"), "Hermes's reply stayed"

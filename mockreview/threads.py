@@ -1006,7 +1006,10 @@ def edit_comment(review_id: str, comment_id: str, actor: str, text: Any, princip
     return thread
 
 
-def delete_comment(review_id: str, comment_id: str, actor: str, principal: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def delete_comment(review_id: str, comment_id: str, actor: str, principal: Optional[str] = None,
+                   owner: bool = False) -> Optional[Dict[str, Any]]:
+    """Delete one comment. Only its author may, except that the owner may also delete Hermes's replies (`owner`: the
+    caller's role on this review is owner, decided by the server from the database, never from the request)."""
     _rate_check(review_id, actor)
     t = now()
     thread_gone = False
@@ -1016,7 +1019,7 @@ def delete_comment(review_id: str, comment_id: str, actor: str, principal: Optio
         row = _comment_row(review_id, comment_id, conn)
         if row["deleted_at"] is not None:
             raise ReviewError("that comment was deleted", 400)
-        if row["author"] != actor:
+        if row["author"] != actor and not (owner and row["author"] == AGENT_ACTOR):
             raise ReviewError("you can only delete your own comment", 403)
         thread_id = row["thread_id"]
         thread_round = int(_thread_row(review_id, thread_id, conn)["round"])

@@ -158,7 +158,7 @@ def schemas(ask_host: bool, default_host: str, live_demo: bool) -> Dict[str, Dic
         },
         "mock_review_reply": {
             "name": "mock_review_reply",
-            "description": "Reply in a comment thread as the owner. Never activates @Hermes or wakes anyone.",
+            "description": "Reply in a comment thread as Hermes (author agent:hermes). Never activates @Hermes or wakes anyone.",
             "parameters": {"type": "object", "properties": {
                 "thread_id": {"type": "string"},
                 "text": {"type": "string", "maxLength": 2000, "description": "Reply text, at most 2000 characters."},
@@ -179,7 +179,7 @@ def schemas(ask_host: bool, default_host: str, live_demo: bool) -> Dict[str, Dic
     }
 
 
-# ---------------------------------------------------------------- comment tools (in process, as the owner)
+# ---------------------------------------------------------------- comment tools (in process; replies post as Hermes)
 
 def _comment_actor():
     from mockreview import users

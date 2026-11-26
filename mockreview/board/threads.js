@@ -884,10 +884,11 @@ export function createThreads(opts) {
       var who = first.author_name || 'Someone';
       var root = (t.comments || [])[0] || null;
       var ownRoot = !!(root && root.mine && root.deleted_at === null);
-      // Only Hermes is left under the starter's comment: Delete takes the whole thread, so the pin goes too. That also
-      // covers a thread whose own comment was already deleted and only Hermes's replies keep it alive.
+      // Nothing but the starter's own comments and Hermes's replies is left: Delete takes the whole thread, so the pin
+      // goes too. That also covers a thread whose own comment was already deleted and only Hermes (or the starter's
+      // follow-ups) keep it alive.
       var onlyHermes = !!(root && root.mine) && (t.comments || []).every(function (c) {
-        return c === root || c.deleted_at !== null || isHermes(c.author, c.author_kind);
+        return c === root || c.deleted_at !== null || c.mine || isHermes(c.author, c.author_kind);
       });
       var actions = h('span', {class: 'tp-acts'},
         can('comment') ? h('button', {class: 'btn btn-ghost tp-act tp-resolve' + (resolved ? ' on' : ''), type: 'button',
@@ -1036,6 +1037,17 @@ export function createThreads(opts) {
     var row = h('div', {class: 'tcomment' + (c.deleted_at !== null ? ' deleted' : '')}, avatar(c.author_name, c.author, true),
       h('div', {class: 'cbody'}, who, text));
     row._cid = c.id;
+    if (!c.mine && c.deleted_at === null && isHermes(c.author, c.author_kind) && S.me && S.me.review_role === 'owner') {
+      // The owner moderates Hermes's replies: Delete only, never Edit (nobody edits Hermes's words).
+      row.appendChild(h('button', {class: 'btn btn-ghost cmore', type: 'button', 'aria-label': 'Comment actions',
+        title: 'Comment actions', 'aria-haspopup': 'menu', 'aria-expanded': 'false',
+        onclick: function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          showPopMenu(this, 'Comment actions', [
+            {icon: 'trash', text: 'Delete', danger: true, run: function () { deleteComment(p, c); }}]);
+        }}, icon('more')));
+    }
     if (c.mine && c.deleted_at === null) {
       row.appendChild(h('button', {class: 'btn btn-ghost cmore', type: 'button', 'aria-label': 'Comment actions',
         title: 'Comment actions', 'aria-haspopup': 'menu', 'aria-expanded': 'false',
