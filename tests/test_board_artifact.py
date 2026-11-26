@@ -18,7 +18,7 @@ SRC = (ROOT / 'mockreview/board/board.js').read_text(encoding='utf-8')
 VENDOR = ROOT / 'mockreview/board/vendor'
 NAMES = ['h', 'append', 'paras', 'frameUrl', 'roundBase', 'num', 'newPinId', 'uuid', 'pct', 'wlabel', 'pinWhat',
          'artifactBody', 'renderArtifact', 'pushArtifact', 'pushPageState', 'artifactLoaded', 'artifactMessage',
-         'isMarkableBlock']
+         'isMarkableBlock', 'pinNo', 'nextPinNo']
 
 # What the functions above reach for. Every place a message could leave the page is a recorder, so a test can say
 # "nothing was sent": the artifact path has no submit, no fetch, nothing but a pin draft in memory.
@@ -32,6 +32,7 @@ function isEditable() { return EDITABLE; }
 function canComment() { return EDITABLE && pinsOn(); }
 function pinVisible(p) { return !p.thread || !(T.gone(p.thread) || (CFG.hide_resolved_pins && T.resolved(p.thread))); }
 var T = {mockEntries: function () { return []; }, gone: function () { return false; }, resolved: function () { return false; },
+  number: function () { return 0; }, threads: function () { return []; },
   activityFor: function () {}, activityState: function () { return ''; }};
 function pinsOn() { return CFG.pins_enabled; }
 function cleanTarget(v) { return v && typeof v === 'object' && typeof v.path === 'string' ? v : null; }
