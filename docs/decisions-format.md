@@ -101,8 +101,8 @@ mark it.
 video players, a timeline, anything that needs script. Give exactly one of `html` (the page, up to 2 MB) or `src` (an
 absolute path to an `.html` file). Optional `text` (2000) and `caption` (300), both plain text; `height` (`"auto"`, the
 default, follows the page up to 4000 px, or a fixed 80 to 4000); `desktop_width` as for `mock`; `display` (`"frame"`,
-the default, or `"page"`); `markable` (default `false`; `true` adds the keys every markable block takes, and the reviewer
-can approve or change it). Reviewers can pin it in comment mode either way.
+the default, `"page"` or `"canvas"`); `markable` (default `false`; `true` adds the keys every markable block takes, and
+the reviewer can approve or change it). Reviewers can pin it in comment mode either way.
 
     {"type": "artifact", "id": "clip", "title": "Click sound", "html": "<audio controls src=\"data:audio/wav;base64,UklGRg==\"></audio><script>document.title = 'ok'</script>", "caption": "Take 3", "markable": true}
 
@@ -110,6 +110,11 @@ can approve or change it). Reviewers can pin it in comment mode either way.
 viewport tall (between the board header and the docked decide bar), the page scrolls inside it, and there is no 4000 px
 cap and no card frame around it. It ignores `height` and `desktop_width`. The block's title, `text` and `caption` stay
 in the document column, and its pins keep working.
+
+`display: "canvas"` is the full-length sibling of both: the frame is the full width of the window and as tall as the
+artifact page itself, up to 30000 px, with no inner scroll. It ignores `height` and `desktop_width`. The canvas scrolls
+with the board, so the board header and footer (the essential controls) stay on screen however far down the page runs.
+A canvas takes pins down to 30000 px; a frame keeps the 4000 px limit.
 
 With `src` the block is `{"type": "artifact", "id": "film", "src": "/abs/film/page.html"}` and the page's folder supplies the media.
 
@@ -354,7 +359,9 @@ and Safari plays video served from a round; a request for several ranges at once
 limit: the media stays beside the round instead of inside the block. Use an `artifact` when the page needs script, or its
 media must play everywhere. Page mode (a prototype round, or an artifact with `"display": "page"`) is the framed mode's
 full-bleed sibling: the page fills the window and scrolls inside its frame, and its media still seeks because the board
-answers `Range` the same way.
+answers `Range` the same way. A canvas (an artifact with `"display": "canvas"`) is the same full-bleed frame without
+the inner scroll: it takes the page's own height, up to 30000 px, scrolls with the board, and its media seeks the same
+way.
 
 ## Design profiles
 

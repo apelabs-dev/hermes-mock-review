@@ -107,6 +107,12 @@ browser never runs a framework.
   same system: logo, 12/13/14/16/20 px type, a 12 px card, 36 px desktop / 44 px phone controls and the accent ring.
   There is no separate setup or token web page: setup and login are CLI commands.
 
+## The board shell
+
+Every board keeps the shell: a header, a footer and the essential controls in both, drawn in the review's design
+profile, or the default look when the review has none. Everything between them is the agent's decision for each task;
+nothing in the plugin picks it.
+
 ## The pin
 
 Pins and pin badges are always mock-review indigo (`--pin: #5b5bf0`), white numeral, a 2 px surface-coloured ring so
@@ -139,7 +145,9 @@ Nothing was removed. “More” means the control moved into the header's More m
 
 Sign-in and the other server-rendered pages, the exported HTML, tablet (768–820), prototype and artifact rounds,
 presence, unread and activity, toasts, empty and loading states, and the option tiles' Recommended badge. The content
-inside a mock frame is the reviewed project's own UI and is never restyled.
+inside a mock frame is the reviewed project's own UI and is never restyled. An artifact with `display: "page"` fills the
+window and scrolls inside its frame; one with `display: "canvas"` runs the page's full length and scrolls with the board
+between the same header and footer.
 
 ## Tests that hold the rules
 
