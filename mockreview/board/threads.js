@@ -160,6 +160,21 @@ export function createThreads(opts) {
     });
   }
   function working(q) { return !!q && (q.awaiting_delivery || q.deadline * 1000 > opts.pinNow()); }
+  // A wake that was delivered can still wait behind another Hermes turn (a session runs its wake turns one after
+  // another). Among the round's open requests the oldest is the one running; each younger one is queued behind
+  // every older request.
+  // Requests from the same second keep the order the server stored them in.
+  function queuedBehind(q) {
+    if (!working(q)) return 0;
+    var all = roundRequests(), me = all.indexOf(q), mine = Date.parse(q.requested_at) || 0;
+    return all.filter(function (o, i) {
+      if (o === q || !working(o)) return false;
+      var theirs = Date.parse(o.requested_at) || 0;
+      return theirs < mine || (theirs === mine && i < me);
+    }).length;
+  }
+  function queuedText(n) { return 'Queued behind ' + n; }
+  function badgeText(q) { var n = queuedBehind(q); return n ? queuedText(n) : 'Working'; }
   function activityFor(thread, pin) {
     var matches = roundRequests().filter(function (q) {
       return q.thread_id ? q.thread_id === thread : !!pin && (q.pin_id || q.id) === pin.id &&
@@ -173,22 +188,28 @@ export function createThreads(opts) {
     return q.status === 'failed' || q.deadline ? 'failed' : '';
   }
   function activityTextFor(q) {
-    return activityState(q) === 'working' ? 'Hermes is working on this…'
-      : q.timed_out || q.deadline ? 'Hermes couldn’t finish in time.' : 'Hermes couldn’t finish.';
+    if (activityState(q) === 'working') {
+      var n = queuedBehind(q);
+      return n ? queuedText(n) : 'Hermes is working on this…';
+    }
+    return q.timed_out || q.deadline ? 'Hermes couldn’t finish in time.' : 'Hermes couldn’t finish.';
   }
   function paintPin(btn, q) {
-    var state = activityState(q);
-    if ((btn.dataset.hermesState || '') === state) return btn;
-    var old = btn.querySelector('.hermes-pin-indicator');
-    if (old) old.remove();
-    if (state) {
-      btn.dataset.hermesState = state;
-      btn.appendChild(h('span', {class: 'hermes-pin-indicator', 'aria-hidden': 'true'},
-        state === 'failed' ? icon('x') : null));
-    } else delete btn.dataset.hermesState;
+    var state = activityState(q), text = state ? activityTextFor(q) : '';
+    if ((btn.dataset.hermesState || '') === state && (btn.dataset.hermesText || '') === text) return btn;
+    if ((btn.dataset.hermesState || '') !== state) {
+      var old = btn.querySelector('.hermes-pin-indicator');
+      if (old) old.remove();
+      if (state) {
+        btn.dataset.hermesState = state;
+        btn.appendChild(h('span', {class: 'hermes-pin-indicator', 'aria-hidden': 'true'},
+          state === 'failed' ? icon('x') : null));
+      } else delete btn.dataset.hermesState;
+    }
     var label = btn.dataset.pinLabel || btn.getAttribute('aria-label');
     btn.dataset.pinLabel = label;
-    btn.setAttribute('aria-label', state ? label + ' · ' + activityTextFor(q) : label);
+    if (text) btn.dataset.hermesText = text; else delete btn.dataset.hermesText;
+    btn.setAttribute('aria-label', state ? label + ' · ' + text : label);
     return btn;
   }
   function statusRow(row, q, retry) {
@@ -475,7 +496,8 @@ export function createThreads(opts) {
     var meta = h('span', {class: 'tmeta'},
       h('span', {text: (t.comments || []).length + ' comment' + ((t.comments || []).length === 1 ? '' : 's')}),
       h('span', {text: '· ' + ago(t.updated_at)}));
-    var badge = working(activityFor(t.id)) ? h('span', {class: 'badge ac', text: 'Working'}) : null;
+    var request = activityFor(t.id);
+    var badge = working(request) ? h('span', {class: 'badge ac', text: badgeText(request)}) : null;
     return h('button', {class: 'trow' + (t.activated ? ' act' : ''), type: 'button', onclick: function () {
       closeOverlay();
       if (here) open(t); else jump(t);
@@ -521,7 +543,7 @@ export function createThreads(opts) {
           opts.openPinFix(q);
         }}, h('span', {class: 'tmain'}, h('span', {class: 'tname', text: 'Pin fix'}),
           h('span', {class: 'tsub', text: opts.blockLabel(q.block)})),
-          state === 'working' ? h('span', {class: 'badge ac', text: 'Working'}) : null));
+          state === 'working' ? h('span', {class: 'badge ac', text: badgeText(q)}) : null));
       });
     };
     o.paint();
@@ -1278,7 +1300,7 @@ export function createThreads(opts) {
   return {
     boot: boot, setView: setView, refresh: refresh, close: closePopover,
     headerActions: headerActions, workingCount: workingCount,
-    roundRequests: roundRequests, working: working, activityFor: activityFor, activityState: activityState,
+    roundRequests: roundRequests, working: working, queuedBehind: queuedBehind, queuedText: queuedText, activityFor: activityFor, activityState: activityState,
     paintPin: paintPin, pinActivityChanged: pinActivityChanged, openFix: openFix, statusRow: statusRow,
     canvasEntries: canvasEntries, mockEntries: mockEntries, protoEntries: protoEntries, frameEntries: frameEntries,
     spot: spot, marker: marker, row: row,

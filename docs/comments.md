@@ -48,7 +48,10 @@ An `@Hermes` mention in a comment starts a Hermes session without anyone pressin
 - **On the board.** On the current round, an accepted request on an editable block (or a pin in a prototype round) adds a pulsing red dot on the
   pin's right side,
   one **Hermes is working…** chip to the block, an elapsed timer in the open thread and a **Working** badge in
-  Comments. **Hermes · N working** in the header opens the working comments for that round. Reviewer pin fixes use
+  Comments. **Hermes · N working** in the header opens the working comments for that round. When several requests are
+  open on a round, only the oldest is running: each younger one shows **Queued behind N** (N older open requests
+  ahead of it) instead, on the pin label, the thread status, the block chip and the Comments badge, and switches to
+  working when the older ones finish. Reviewer pin fixes use
   the same indicator, including standalone pins. `pin_fix` controls reviewer pin fixes. Mentions can still wake
   Hermes and patch supported blocks when that setting is off.
 - **Completion.** A patch, Hermes reply or Hermes resolve clears the working state on the requests it completes.

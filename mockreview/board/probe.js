@@ -201,7 +201,7 @@ import {LIVE, CONTROL, controlOf, presses, anchorFor, cleanTarget, surface, inst
       b.textContent = String(p.n);
       if (p.hermes) {
         b.classList.add('h-' + p.hermes);
-        b.setAttribute('aria-label', 'Pin ' + p.n + (p.hermes === 'working' ? ' · Hermes is working' : ' · Hermes couldn’t finish'));
+        b.setAttribute('aria-label', 'Pin ' + p.n + (p.hermes === 'working' ? (p.queued ? ' · Queued behind ' + p.queued : ' · Hermes is working') : ' · Hermes couldn’t finish'));
         var indicator = document.createElement('span');
         indicator.className = 'hermes-pin-indicator';
         indicator.setAttribute('aria-hidden', 'true');
@@ -311,6 +311,7 @@ import {LIVE, CONTROL, controlOf, presses, anchorFor, cleanTarget, surface, inst
       pins = (Array.isArray(d.pins) ? d.pins : []).slice(0, 60).map(function (p) {
         return { i: num(p.i, -1, 99) | 0, n: num(p.n, 0, 99) | 0, x: num(p.x, 0, 1), y: num(p.y, 0, 1), ghost: !!p.ghost, thread: typeof p.thread === 'string' ? p.thread : '', detached: !!p.detached,
           hermes: p.hermes === 'working' || p.hermes === 'failed' ? p.hermes : '',
+          queued: p.hermes === 'working' ? num(p.queued, 0, 99) | 0 : 0,
           ...(cleanTarget(p.target) ? {target: cleanTarget(p.target)} : {}) };
       });
       draw(); if (anchors) anchors.schedule();

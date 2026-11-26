@@ -2177,13 +2177,14 @@ import {paintAvatar} from './avatar.js';
     var out = [];
     S.draft.pins.forEach(function (p, i) {
       if (p.block !== f.b.id || p.w !== f.device || !pinVisible(p)) return;
-      out.push({i: i, n: pinNo(p, i), x: p.x, y: p.y, hermes: T.activityState(T.activityFor(p.thread, p))});
+      out.push({i: i, n: pinNo(p, i), x: p.x, y: p.y, hermes: T.activityState(T.activityFor(p.thread, p)),
+        queued: T.queuedBehind(T.activityFor(p.thread, p))});
     });
     if (f.ghost) out.push({ i: -1, n: nextPinNo(), x: f.ghost.x, y: f.ghost.y, ghost: true });
     T.mockEntries(f.b.id, null).forEach(function (t, j) {
       var a = t.anchor || {};
       out.push({ i: 60 + j, n: t.n, x: a.x || 0, y: a.y || 0, thread: t.id, detached: !!t.detached,
-        hermes: T.activityState(T.activityFor(t.id)),
+        hermes: T.activityState(T.activityFor(t.id)), queued: T.queuedBehind(T.activityFor(t.id)),
         ...(a.target ? {target: cleanTarget(a.target)} : {}) });
     });
     try { f.iframe.contentWindow.postMessage({ __mockreview: 1, cmd: 'state', comment: canComment() && S.commentMode, scale: 1, pins: pinsOn() ? out : [] }, '*'); } catch (e) {}
@@ -2624,11 +2625,17 @@ import {paintAvatar} from './avatar.js';
       var heading = sec.querySelector(':scope > .ihead');
       var chipHost = heading || sec;
       var chip = chipHost.querySelector(':scope > .hermes-block-status');
-      if (!requests.some(T.working)) {
+      var live = requests.filter(T.working);
+      if (!live.length) {
         if (chip) chip.remove();
-      } else if (!chip) {
-        chip = h('span', {class: 'hermes-block-status', role: 'status', text: 'Hermes is working…'});
-        if (heading) heading.appendChild(chip); else sec.prepend(chip);
+      } else {
+        // When every working request here waits behind an older one elsewhere, say so with the shortest wait.
+        var ahead = Math.min.apply(null, live.map(T.queuedBehind));
+        var chipText = ahead ? T.queuedText(ahead) : 'Hermes is working…';
+        if (!chip) {
+          chip = h('span', {class: 'hermes-block-status', role: 'status', text: chipText});
+          if (heading) heading.appendChild(chip); else sec.prepend(chip);
+        } else if (chip.textContent !== chipText) chip.textContent = chipText;
       }
       var fixes = requests.filter(function (q) {
         return pinsOn() && !q.thread_id && (T.activityState(q) || q.status === 'done') && !S.draft.pins.some(function (p) {
@@ -3286,12 +3293,12 @@ import {paintAvatar} from './avatar.js';
   }
   function pushProto(f) {
     var out = [];
-    S.draft.pins.forEach(function (p, i) { if (p.block === 'proto' && p.w === f.device && pinVisible(p)) out.push({ i: i, n: pinNo(p, i), x: p.x, y: p.y, hermes: T.activityState(T.activityFor(p.thread, p)), ...(p.target ? {target: cleanTarget(p.target)} : {}) }); });
+    S.draft.pins.forEach(function (p, i) { if (p.block === 'proto' && p.w === f.device && pinVisible(p)) out.push({ i: i, n: pinNo(p, i), x: p.x, y: p.y, hermes: T.activityState(T.activityFor(p.thread, p)), queued: T.queuedBehind(T.activityFor(p.thread, p)), ...(p.target ? {target: cleanTarget(p.target)} : {}) }); });
     if (f.ghost) out.push({ i: -1, n: nextPinNo(), x: f.ghost.x, y: f.ghost.y, ghost: true });
     T.protoEntries().forEach(function (t, j) {
       var a = t.anchor || {};
       out.push({ i: 60 + j, n: t.n, x: a.x || 0, y: a.y || 0, thread: t.id, detached: !!t.detached,
-        hermes: T.activityState(T.activityFor(t.id)),
+        hermes: T.activityState(T.activityFor(t.id)), queued: T.queuedBehind(T.activityFor(t.id)),
         ...(a.target ? {target: cleanTarget(a.target)} : {}) });
     });
     try { f.iframe.contentWindow.postMessage({ __mockreview: 1, cmd: 'state', comment: canComment() && S.commentMode, scale: 1, pins: pinsOn() ? out : [] }, '*'); } catch (e) {}
