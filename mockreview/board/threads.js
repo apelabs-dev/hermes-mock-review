@@ -40,6 +40,13 @@ export function createThreads(opts) {
     return h('span', {class: (cls || 'faint') + ' guest-mark', text: 'guest', title: 'Guest',
       'aria-label': 'Guest'});
   }
+  // Hermes itself: stored under the fixed agent actor, shown with its own avatar and a small mark like the guest one.
+  function isHermes(actor, kind) { return kind === 'hermes' || actor === 'hermes' || /^agent:/.test(String(actor || '')); }
+  function hermesMark(cls) {
+    // The name already says Hermes, so the mark says what kind of author it is.
+    return h('span', {class: (cls || 'faint') + ' hermes-mark', text: 'agent', title: 'Hermes, an AI agent',
+      'aria-label': 'Hermes, an AI agent'});
+  }
   function initials(name) {
     var words = String(name || '?').replace(/[^\p{L}\p{N} ]/gu, ' ').trim().split(/\s+/);
     return ((words[0] || '?')[0] + (words.length > 1 ? words[1][0] : (words[0][1] || ''))).toUpperCase();
@@ -70,6 +77,7 @@ export function createThreads(opts) {
     return svg;
   }
   function avatar(name, actor, small) {
+    if (isHermes(actor)) return h('span', {class: 'av hermes' + (small ? ' s' : ''), 'aria-hidden': 'true', text: 'H'});
     var el = h('span', {class: 'av' + (small ? ' s' : ''), 'aria-hidden': 'true', text: initials(name)});
     paintAvatar(el, actor, name);
     return el;
@@ -287,6 +295,8 @@ export function createThreads(opts) {
     S.es.addEventListener('presence', function (e) { onPresence(e); });
     S.es.addEventListener('typing', function (e) { onTyping(e); });
     S.es.addEventListener('pin.requests', function () { opts.refreshPinActivity(); });
+    // Hermes patched a block: the same state fetch finds the newer revision and swaps that block in place.
+    S.es.addEventListener('block.patched', function () { opts.refreshPinActivity(); });
     S.es.addEventListener('reset', function () { if (opts.reloadState) opts.reloadState(); else refresh(); });
     ['thread.created', 'thread.replied', 'thread.status', 'thread.deleted', 'comment.edited', 'comment.deleted',
       'mention', 'review.reset'].forEach(function (kind) {
@@ -549,6 +559,7 @@ export function createThreads(opts) {
           if (th) jump(th);
         }}, h('span', {class: 'tadot'}), h('span', {class: 'tmain'},
           h('span', {class: 'tname'}, kind === 'guest' ? guestMark('tsub') : null,
+            isHermes(e.actor, kind) ? hermesMark('tsub') : null,
             h('span', {text: activityText(e)})),
           h('span', {class: 'tsub', text: t ? anchorLabel(t) : ''})),
           h('span', {class: 'tmeta', text: ago(e.at)}));
@@ -873,6 +884,12 @@ export function createThreads(opts) {
       var who = first.author_name || 'Someone';
       var root = (t.comments || [])[0] || null;
       var ownRoot = !!(root && root.mine && root.deleted_at === null);
+      // Nothing but the starter's own comments and Hermes's replies is left: Delete takes the whole thread, so the pin
+      // goes too. That also covers a thread whose own comment was already deleted and only Hermes (or the starter's
+      // follow-ups) keep it alive.
+      var onlyHermes = !!(root && root.mine) && (t.comments || []).every(function (c) {
+        return c === root || c.deleted_at !== null || c.mine || isHermes(c.author, c.author_kind);
+      });
       var actions = h('span', {class: 'tp-acts'},
         can('comment') ? h('button', {class: 'btn btn-ghost tp-act tp-resolve' + (resolved ? ' on' : ''), type: 'button',
           'aria-label': resolved ? 'Reopen' : 'Resolve', title: resolved ? 'Reopen' : 'Resolve',
@@ -885,8 +902,8 @@ export function createThreads(opts) {
             var items = [];
             if (ownRoot) items.push({icon: 'pencil', text: 'Edit', run: function () { editComment(p, root); }});
             items.push({icon: 'link', text: 'Copy link', run: function () { copyThreadLink(t); }});
-            if (ownRoot) items.push({icon: 'trash', text: 'Delete', danger: true,
-              run: function () { deleteComment(p, root); }});
+            if (ownRoot || onlyHermes) items.push({icon: 'trash', text: 'Delete', danger: true,
+              run: function () { if (onlyHermes) deleteWholeThread(p, t, root); else deleteComment(p, root); }});
             showPopMenu(this, 'Thread actions', items);
           }}, icon('more')),
         h('button', {class: 'btn btn-ghost tp-act tp-close', type: 'button', 'aria-label': 'Close', title: 'Close',
@@ -894,6 +911,7 @@ export function createThreads(opts) {
       var head = h('div', {class: 'tp-head'}, avatar(who, first.author, true),
         h('div', {class: 'tp-title'}, h('strong', {text: who}),
           first.author_kind === 'guest' ? [' ', guestMark()] : null,
+          isHermes(first.author, first.author_kind) ? [' ', hermesMark()] : null,
           h('span', {class: 'faint', text: ' · ' + ago(first.created_at)})),
         h('span', {class: 'spacer'}), actions);
       el.appendChild(head);
@@ -1009,7 +1027,8 @@ export function createThreads(opts) {
   function commentRow(p, c) {
     var who = h('div', {class: 'cwho'}, h('span', {class: 'cname', text: c.author_name}),
       c.author_kind === 'guest' ? [' ', guestMark()] : null,
-      c.role ? h('span', {class: 'faint', text: ' · ' + c.role}) : null,
+      isHermes(c.author, c.author_kind) ? [' ', hermesMark()] : null,
+      c.role && !isHermes(c.author, c.author_kind) ? h('span', {class: 'faint', text: ' · ' + c.role}) : null,
       h('span', {class: 'faint', text: ' · ' + ago(c.created_at)}),
       c.edited_at ? h('span', {class: 'faint', text: ' · edited'}) : null);
     var text = h('div', {class: 'ctext'});
@@ -1018,6 +1037,17 @@ export function createThreads(opts) {
     var row = h('div', {class: 'tcomment' + (c.deleted_at !== null ? ' deleted' : '')}, avatar(c.author_name, c.author, true),
       h('div', {class: 'cbody'}, who, text));
     row._cid = c.id;
+    if (!c.mine && c.deleted_at === null && isHermes(c.author, c.author_kind) && S.me && S.me.review_role === 'owner') {
+      // The owner moderates Hermes's replies: Delete only, never Edit (nobody edits Hermes's words).
+      row.appendChild(h('button', {class: 'btn btn-ghost cmore', type: 'button', 'aria-label': 'Comment actions',
+        title: 'Comment actions', 'aria-haspopup': 'menu', 'aria-expanded': 'false',
+        onclick: function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          showPopMenu(this, 'Comment actions', [
+            {icon: 'trash', text: 'Delete', danger: true, run: function () { deleteComment(p, c); }}]);
+        }}, icon('more')));
+    }
     if (c.mine && c.deleted_at === null) {
       row.appendChild(h('button', {class: 'btn btn-ghost cmore', type: 'button', 'aria-label': 'Comment actions',
         title: 'Comment actions', 'aria-haspopup': 'menu', 'aria-expanded': 'false',
@@ -1040,6 +1070,11 @@ export function createThreads(opts) {
   function deleteComment(p, c) {
     request('comments/' + encodeURIComponent(c.id) + '/delete', {}).then(function (j) {
       if (j.thread) { upsert(j.thread); redraw(); p.render(); } else closePopover();
+    }).catch(function (e) { opts.toast(e.message || 'Could not delete', 'warn'); });
+  }
+  function deleteWholeThread(p, t, root) {
+    request('threads/' + encodeURIComponent(t.id) + '/delete', {}).then(function () {
+      S.hidden[t.id] = true; S.threads = S.threads.filter(function (x) { return x.id !== t.id; }); redraw(); closePopover();
     }).catch(function (e) { opts.toast(e.message || 'Could not delete', 'warn'); });
   }
   function markRead(t) {
@@ -1177,11 +1212,22 @@ export function createThreads(opts) {
       return j.thread;
     });
   }
+  // Deleting a pin removes its whole thread, Hermes's replies with it. When someone else replied (409) or the
+  // thread is not the viewer's to remove, fall back to deleting the viewer's own first comment.
   function deleteThreadFirst(threadId) {
     var t = find(threadId);
     if (!t) return Promise.resolve(null);
     var mine = (t.comments || []).filter(function (c) { return c.mine && c.deleted_at === null; })[0];
     if (!mine) return Promise.resolve(null);
+    return request('threads/' + encodeURIComponent(threadId) + '/delete', {}).then(function () {
+      S.hidden[threadId] = true; S.threads = S.threads.filter(function (x) { return x.id !== threadId; }); redraw();
+      return null;
+    }, function (e) {
+      if (e.status !== 409 && e.status !== 403) throw e;
+      return deleteOwnFirst(mine, threadId);
+    });
+  }
+  function deleteOwnFirst(mine, threadId) {
     return request('comments/' + encodeURIComponent(mine.id) + '/delete', {}).then(function (j) {
       if (j.thread) { upsert(j.thread); redraw(); } else { S.hidden[threadId] = true; S.threads = S.threads.filter(function (x) { return x.id !== threadId; }); redraw(); }
       return j.thread || null;

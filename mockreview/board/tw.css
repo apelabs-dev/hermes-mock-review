@@ -4585,6 +4585,21 @@
     height: 24px;
     font-size: 12px;
   }
+  .av.hermes {
+    background: var(--text);
+    color: var(--surface);
+  }
+  .hermes-mark {
+    display: inline-block;
+    padding: 0 6px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 16px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    vertical-align: middle;
+  }
   .av[data-av="0"] {
     background: #b91c1c;
     color: #ffffff;

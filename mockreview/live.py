@@ -63,9 +63,11 @@ LOOP_WAIT = 0.5
 RECHECK_EVERY = 5.0  # seconds between access re-reads on a live stream
 _SENTINEL = object()
 PIN_REQUESTS = "pin.requests"
+BLOCK_PATCHED = "block.patched"
 
 THREAD_KINDS = frozenset({"thread.created", "thread.replied", "thread.status", "thread.deleted",
-                          "comment.edited", "comment.deleted", "mention", "typing", PIN_REQUESTS})
+                          "comment.edited", "comment.deleted", "mention", "typing", PIN_REQUESTS,
+                          BLOCK_PATCHED})
 
 
 def event_round(kind: str, data: Any) -> Optional[int]:

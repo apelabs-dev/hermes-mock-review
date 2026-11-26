@@ -115,7 +115,8 @@ failure is JSON, never an HTML page, and every POST body is capped at 64 kB.
 | `threads/<tid>/status` | POST | `comment` | `{status: "open"\|"resolved"}` | `{ok, thread}` |
 | `threads/<tid>/read` | POST | `read` | `{}` | `{ok}` |
 | `comments/<cid>` | POST | `comment` | `{text}` | `{ok, thread, comment}` (own comment only) |
-| `comments/<cid>/delete` | POST | `comment` | `{}` | `{ok, thread?}` (own comment only) |
+| `comments/<cid>/delete` | POST | `comment` | `{}` | `{ok, thread?}` (own comment only; the owner may also delete Hermes's replies) |
+| `threads/<tid>/delete` | POST | `comment` | `{}` | `{ok}` (the thread's starter only; Hermes's replies and the starter's own follow-ups go with it, `409` when someone else replied) |
 | `typing` | POST | `comment` | `{thread}` | `{ok}` |
 | `activity/read` | POST | `read` | `{}` | `{ok}` |
 | `/r/<id>/events` | GET | `read` | — | `text/event-stream` |
@@ -176,6 +177,7 @@ Then one frame per change, plus presence and typing:
 | `comment.edited` | yes | `{thread, actor, name, comment}` |
 | `comment.deleted` | yes | `{thread, actor, name, comment}` |
 | `mention` | yes | `{thread, actor, name, targets}` |
+| `block.patched` | yes | `{round, block, option, rev}`: `mock_review_patch_block` saved a block; the board fetches state and swaps that block in place when `rev` is newer than the one it shows |
 | `review.reset` | yes | reserved for a round-level reset |
 | `presence` | no | people and count; never replayed |
 | `typing` | no | `{thread, actor, name, until}` |
@@ -251,7 +253,7 @@ feed has its own cursor, moved by `activity/read`. More shows the open-thread an
   comment when you own it; Delete is last and in the danger colour, and the menu is Copy link alone on someone
   else's thread) and Close. The words live in each
   button's `title` and `aria-label`. Hermes activity appears below the comments, alongside typing. Every own comment
-  carries a `⋯` menu on row hover or focus with Edit and Delete. In the reply composer, Enter sends, Shift+Enter
+  carries a `⋯` menu on row hover or focus with Edit and Delete; the owner also gets a Delete-only menu on Hermes's replies. In the reply composer, Enter sends, Shift+Enter
   adds a newline and `@` completes people with access plus Hermes. Live updates patch the open thread in place,
   so an unsent reply keeps its text, caret and mentions.
 - Copy link copies an absolute URL with `?thread=<id>`. Opening it starts the board and opens that thread's popover; the
@@ -275,8 +277,11 @@ feed has its own cursor, moved by `activity/read`. More shows the open-thread an
 
 An owner's or reviewer's `@Hermes` mention wakes Hermes once per comment. The worker coalesces a burst into one wake
 that names each mention. Mentions of people do not send notifications. A woken session answers through the plugin's
-`mock_review_list_comments`, `mock_review_reply` and `mock_review_resolve` tools as the install's owner. The reply or
-resolve reaches the open board and clears the linked activity, including when `hermes mockreview serve` shares the
+`mock_review_list_comments`, `mock_review_reply` and `mock_review_resolve` tools. Its reply and resolve are Hermes's:
+the comment is stored under the fixed agent author `agent:hermes`, shown with the name Hermes, its own avatar and a
+small **Hermes** mark, and `author_kind` is `hermes`. It is nobody's own comment (`mine` is false for everyone, so no
+one edits it as theirs), and the audit row (`plugin.reply`, `plugin.resolve`) names the owner account that made the
+call. Comments written earlier as the owner stay as they were. The reply or resolve reaches the open board and clears the linked activity, including when `hermes mockreview serve` shares the
 store with Hermes. Agents outside Hermes can use the MCP comment tools (`list_comments`, `reply`, `resolve`) with a
 personal access token. Agent replies on either path cannot wake another agent. Threads carry into later rounds of
 the same review.

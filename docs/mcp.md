@@ -103,7 +103,8 @@ still be the newest round and `if_rev` the block's current revision (either bein
 written, so read the round again and merge), `option` names the option of a decision block (required when the block has
 options) and `request_ids` are the pin fix ids the patch closes. Only HTML changes:
 a block's id, type, title and option ids stay, and the replaced content is kept under the round's `history/`.
-Everything else is still a new round with `mock_review_add_round`.
+Every patch publishes a `block.patched` event (`{round, block, option, rev}`), so an open board swaps the block in
+place without a reload. Everything else is still a new round with `mock_review_add_round`.
 
 `mock_review_list` lists reviews. Open reviews only, unless `include_closed` is true.
 

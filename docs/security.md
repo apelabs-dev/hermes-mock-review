@@ -381,7 +381,8 @@ comment — it appears under that user's name, reaches open
 boards through the same SSE stream and is audited (`mcp.reply`, `mcp.resolve`, `mcp.reopen`) under the token's account.
 An `@Hermes` mention in an agent's reply is dropped and the thread is never activated, so two agents cannot wake each
 other in a loop. The plugin's own `mock_review_list_comments`, `mock_review_reply` and `mock_review_resolve` tools run
-in process in the woken session as the install's owner, need no token, and reply with `can_activate=False`: they never
+in process in the woken session, need no token, write under the agent author `agent:hermes` (the audit rows name the
+owner account), and reply with `can_activate=False`: they never
 activate a thread or wake anyone either.
 
 A personal access token is also an HTTP bearer credential (`Authorization: Bearer mrp_...`), accepted on loopback requests

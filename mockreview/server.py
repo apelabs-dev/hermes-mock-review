@@ -140,6 +140,8 @@ def thread_post_cap(rest: List[str]) -> Optional[str]:
         return "comment"
     if len(rest) == 3 and rest[0] == "comments" and rest[2] == "delete":
         return "comment"
+    if len(rest) == 3 and rest[0] == "threads" and rest[2] == "delete":
+        return "comment"
     if rest == ["typing"]:
         return "comment"
     if rest == ["activity", "read"]:
@@ -1341,8 +1343,12 @@ class Handler(BaseHTTPRequestHandler):
             comment = next((c for c in thread["comments"] if c["id"] == rest[1]), None)
             return self._json(200, {"ok": True, "thread": thread, "comment": comment})
         if len(rest) == 3 and rest[0] == "comments" and rest[2] == "delete":
-            thread = threads.delete_comment(rid, rest[1], who.actor, principal=who.actor)
+            thread = threads.delete_comment(rid, rest[1], who.actor, principal=who.actor,
+                                            owner=decision.role == "owner")
             return self._json(200, {"ok": True, "thread": thread} if thread else {"ok": True})
+        if len(rest) == 3 and rest[0] == "threads" and rest[2] == "delete":
+            threads.delete_thread(rid, rest[1], who.actor)
+            return self._json(200, {"ok": True})
         if rest == ["typing"]:
             tid = str(body.get("thread") or "")
             if not tid:
