@@ -1023,7 +1023,7 @@ a { color: var(--accent); }
 .av.s { width: 24px; height: 24px; font-size: 12px; }
 /* Hermes has its own avatar, outside the per-person palette: the page's ink on the page's surface, always opaque. */
 .av.hermes { background: var(--text); color: var(--surface); }
-.hermes-mark { display: inline-block; padding: 0 6px; border-radius: 999px; font-size: 11px; font-weight: 600; line-height: 16px;
+.hermes-mark { display: inline-block; padding: 0 6px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 16px;
   color: var(--accent); background: var(--accent-soft); vertical-align: middle; }
 /* One deterministic fill per person, keyed by data-av (see avatar.js). Every fill is opaque and every ink clears
    4.5:1 against its own fill; the dark theme uses lighter fills with dark inks so an avatar also clears the page. */

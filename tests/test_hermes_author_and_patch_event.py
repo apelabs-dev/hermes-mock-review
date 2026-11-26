@@ -159,3 +159,46 @@ def test_older_owner_comments_are_left_alone(env, server, tmp_path):
     assert thread["id"] == tid
     first = thread["comments"][0]
     assert first["author"] == _owner_actor() and first["author_kind"] == "member" and first["mine"] is True
+
+
+# ---------------------------------------------------------------- deleting a pin removes its thread
+
+def _owner_thread(server, rid, text="Is this right?"):
+    code, _, out = post(server, rid, text, mentions=(), anchor={"block": "m1", "x": 0.2, "y": 0.3})
+    assert code == 201, out
+    return json.loads(out)["thread"]["id"]
+
+
+def _threads(server, rid):
+    code, _, out = http("GET", f"{server}/r/{rid}/api/threads")
+    assert code == 200, out
+    return {t["id"]: t for t in json.loads(out)["threads"]}
+
+
+def test_deleting_a_thread_takes_hermes_s_replies_with_it(env, server, tmp_path):
+    rid = board(tmp_path)["id"]
+    tid = _owner_thread(server, rid)
+    call_tool(plugin_tools(), "mock_review_reply", {"thread_id": tid, "text": "Yes."})
+    before = len(kinds(rid))
+    code, _, out = http("POST", f"{server}/r/{rid}/api/threads/{tid}/delete", {})
+    assert code == 200, out
+    assert tid not in _threads(server, rid), "the thread survived its own delete"
+    events = [(k, d) for k, d in kinds(rid)[before:] if k == "thread.deleted"]
+    assert len(events) == 1 and events[0][1]["thread_id"] == tid
+
+
+def test_deleting_a_thread_refuses_when_someone_else_replied(env, server, tmp_path):
+    rid = board(tmp_path)["id"]
+    tid = _owner_thread(server, rid)
+    threads.reply_comment(rid, tid, "guest:g1", "Guest", None, "Looks off to me.")
+    code, _, out = http("POST", f"{server}/r/{rid}/api/threads/{tid}/delete", {})
+    assert code == 409, out
+    assert tid in _threads(server, rid)
+
+
+def test_only_the_starter_can_delete_a_thread(env, server, tmp_path):
+    rid = board(tmp_path)["id"]
+    thread = threads.create(rid, "guest:g1", "Guest", None, "A guest pin", anchor={"block": "m1", "x": 0.2, "y": 0.3})
+    code, _, out = http("POST", f"{server}/r/{rid}/api/threads/{thread['id']}/delete", {})
+    assert code == 403, out
+    assert thread["id"] in _threads(server, rid)

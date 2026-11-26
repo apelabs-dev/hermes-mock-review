@@ -116,6 +116,7 @@ failure is JSON, never an HTML page, and every POST body is capped at 64 kB.
 | `threads/<tid>/read` | POST | `read` | `{}` | `{ok}` |
 | `comments/<cid>` | POST | `comment` | `{text}` | `{ok, thread, comment}` (own comment only) |
 | `comments/<cid>/delete` | POST | `comment` | `{}` | `{ok, thread?}` (own comment only) |
+| `threads/<tid>/delete` | POST | `comment` | `{}` | `{ok}` (the thread's starter only; Hermes's replies go with it, `409` when someone else replied) |
 | `typing` | POST | `comment` | `{thread}` | `{ok}` |
 | `activity/read` | POST | `read` | `{}` | `{ok}` |
 | `/r/<id>/events` | GET | `read` | — | `text/event-stream` |

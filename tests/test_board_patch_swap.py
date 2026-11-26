@@ -7,6 +7,7 @@ import pytest
 from mockreview import api, config, live, owner, service, store, threads
 from test_cux_working_pins import CHIP, WorkingBoard, exists, has_text, mention
 from test_live_round_tool import chrome  # noqa: F401
+from test_cux_thread_actions import on, open_board
 from test_mention_wake import call_tool, plugin_tools, post
 
 pytestmark = pytest.mark.browser
@@ -105,3 +106,55 @@ def test_hermes_replies_wear_the_hermes_mark(tall_review, server, chrome):
                     " return r.textContent.indexOf('Yes, it matches.') >= 0 && r.querySelector('.cmore'); }).length")
     assert editable == 0, "Hermes's comment offers the owner Edit/Delete as if it were theirs"
     b.same_document(instance)
+
+
+def _open_pin(b, tid):
+    assert b.until("!!document.querySelector('.mpin[data-thread=\"%s\"]')" % tid, timeout=20), "the pin never drew"
+    b.press('.mpin[data-thread="%s"]' % tid)
+    assert b.until("!!document.querySelector('.tpop')", timeout=20)
+
+
+def _gone(server, rid, tid):
+    from conftest import http
+    code, _, body = http("GET", f"{server}/r/{rid}/api/threads")
+    assert code == 200
+    return all(t["id"] != tid for t in json.loads(body)["threads"])
+
+
+def test_deleting_a_pin_that_hermes_answered_removes_the_pin(tall_review, server, chrome):
+    rid = tall_review["id"]
+    code, _, out = post(server, rid, "Is this subtotal right?", mentions=(), anchor={"block": "m1", "option": None, "x": 0.2, "y": 0.3})
+    assert code == 201, out
+    tid = json.loads(out)["thread"]["id"]
+    call_tool(plugin_tools(), "mock_review_reply", {"thread_id": tid, "text": "Yes, it matches."})
+    b = open_board(chrome, server, rid)
+    on(b)
+    _open_pin(b, tid)
+    b.press(".tpop .tp-more")
+    assert b.until("!!document.querySelector('.tp-menu')")
+    b.press(".tp-menu .menu-item:last-child")
+    assert b.until("!document.querySelector('.tpop')", timeout=20), "Delete left the popover open"
+    assert b.until("!document.querySelector('.mpin[data-thread=\"%s\"]')" % tid), "the pin stayed on the board"
+    assert _gone(server, rid, tid), "the thread survived on the server, so the pin returns on reload"
+
+
+def test_a_pin_whose_own_comment_was_deleted_can_still_be_deleted_when_only_hermes_is_left(tall_review, server, chrome):
+    from conftest import http
+    rid = tall_review["id"]
+    code, _, out = post(server, rid, "Is this subtotal right?", mentions=(), anchor={"block": "m1", "option": None, "x": 0.2, "y": 0.3})
+    thread = json.loads(out)["thread"]
+    tid, root = thread["id"], thread["comments"][0]["id"]
+    call_tool(plugin_tools(), "mock_review_reply", {"thread_id": tid, "text": "Yes, it matches."})
+    code, _, out = http("POST", f"{server}/r/{rid}/api/comments/{root}/delete", {})
+    assert code == 200, out
+    b = open_board(chrome, server, rid)
+    on(b)
+    _open_pin(b, tid)
+    b.press(".tpop .tp-more")
+    assert b.until("!!document.querySelector('.tp-menu')")
+    texts = json.loads(b.js("JSON.stringify([].map.call(document.querySelectorAll('.tp-menu .menu-item'),"
+                            "function(x){return x.innerText.trim()}))"))
+    assert texts == ["Copy link", "Delete"], texts
+    b.press(".tp-menu .menu-item:last-child")
+    assert b.until("!document.querySelector('.mpin[data-thread=\"%s\"]')" % tid), "the pin stayed on the board"
+    assert _gone(server, rid, tid)

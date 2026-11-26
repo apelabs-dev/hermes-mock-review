@@ -1046,6 +1046,33 @@ def delete_comment(review_id: str, comment_id: str, actor: str, principal: Optio
     return thread
 
 
+def delete_thread(review_id: str, thread_id: str, actor: str) -> None:
+    """Remove a whole thread: what deleting a pin does. Only the one who started it may.
+
+    Deleting just the starter's own comments left the thread (and so the pin, on the next load) alive whenever Hermes
+    had replied. Hermes's replies go with the thread. Another person's reply does not: that is their words, so the
+    thread stays and the caller gets a 409 it can fall back from.
+    """
+    _rate_check(review_id, actor)
+    t = now()
+    with db.tx() as conn:
+        thread = _thread_row(review_id, thread_id, conn)
+        if thread["created_by"] != actor:
+            raise ReviewError("you can only delete a thread you started", 403)
+        rows = conn.execute("SELECT id, author FROM comments WHERE thread_id = ? AND deleted_at IS NULL",
+                            (thread["id"],)).fetchall()
+        if any(r["author"] != actor and _author_kind(r["author"]) != "hermes" for r in rows):
+            raise ReviewError("someone else replied in this thread", 409)
+        stamp = _stamp(conn, thread["id"], t)
+        conn.execute("UPDATE comments SET deleted_at = ? WHERE thread_id = ? AND deleted_at IS NULL",
+                     (stamp, thread["id"]))
+        conn.execute("DELETE FROM reads WHERE review_id = ? AND thread_id = ?", (review_id, thread["id"]))
+        conn.execute("DELETE FROM threads WHERE id = ?", (thread["id"],))
+    live.publish(review_id, "thread.deleted", thread["id"], actor,
+                 {"thread_id": thread["id"], "actor": actor, "actor_kind": _author_kind(actor),
+                  "name": _name_for(actor), "round": int(thread["round"])})
+
+
 def set_status(review_id: str, thread_id: str, status: str, actor: str, principal: Optional[str] = None) -> Dict[str, Any]:
     if status not in ("open", "resolved"):
         raise ReviewError("status must be open or resolved", 400)
