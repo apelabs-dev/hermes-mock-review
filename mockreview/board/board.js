@@ -885,7 +885,7 @@ import {paintAvatar} from './avatar.js';
     pins.forEach(function (p, i) {
       list.appendChild(h('li', { class: 'pin-item' },
         h('button', { class: 'pin-row', onclick: function () { if (p.thread) T.open(p.thread, {detached: p.detached}); else focusPin(vid, i); } },
-          h('span', { class: 'pin-num', text: String(i + 1) }),
+          h('span', { class: 'pin-num', text: String(pinNo(p, i)) }),
           h('span', { class: 'pin-body' },
             h('span', { class: 'pin-where', text: DEVICES[p.frame].label + ' · ' + pct(p.x) + ', ' + pct(p.y) }),
             h('span', { class: 'pin-text', text: p.text })))));
@@ -1013,7 +1013,7 @@ import {paintAvatar} from './avatar.js';
   function framePins(f) {
     var out = [];
     S.draft.variants[f.vid].pins.forEach(function (p, i) {
-      if (p.frame === f.device && pinVisible(p)) out.push({ i: i, n: i + 1, x: p.x, y: p.y });
+      if (p.frame === f.device && pinVisible(p)) out.push({ i: i, n: pinNo(p, i), x: p.x, y: p.y });
     });
     if (f.ghost) out.push({ i: -1, n: S.draft.variants[f.vid].pins.length + 1, x: f.ghost.x, y: f.ghost.y, ghost: true });
     if (S.commentMode) T.frameEntries(f.vid, f.device).forEach(function (t, j) {
@@ -2175,9 +2175,9 @@ import {paintAvatar} from './avatar.js';
     var out = [];
     S.draft.pins.forEach(function (p, i) {
       if (p.block !== f.b.id || p.w !== f.device || !pinVisible(p)) return;
-      out.push({i: i, n: i + 1, x: p.x, y: p.y, hermes: T.activityState(T.activityFor(p.thread, p))});
+      out.push({i: i, n: pinNo(p, i), x: p.x, y: p.y, hermes: T.activityState(T.activityFor(p.thread, p))});
     });
-    if (f.ghost) out.push({ i: -1, n: S.draft.pins.length + 1, x: f.ghost.x, y: f.ghost.y, ghost: true });
+    if (f.ghost) out.push({ i: -1, n: nextPinNo(), x: f.ghost.x, y: f.ghost.y, ghost: true });
     T.mockEntries(f.b.id, null).forEach(function (t, j) {
       var a = t.anchor || {};
       out.push({ i: 60 + j, n: t.n, x: a.x || 0, y: a.y || 0, thread: t.id, detached: !!t.detached,
@@ -2407,6 +2407,12 @@ import {paintAvatar} from './avatar.js';
     m.pins.style.setProperty('--k', String(1 / s));
   }
   // A deleted thread always takes its marker away; a resolved one only with hide_resolved_pins on.
+  // A pin that is a thread wears the number the server gave that thread; a pin that is not one keeps its place in the
+  // list (the feedback text names those by place). Numbering every pin by place made a new pin and a carried thread both
+  // read "1".
+  // A pin still saving (`tmp:` id) is about to become the next thread, so it shows that number, not a wrong one.
+  function pinNo(p, i) { return p && p.thread ? (T.number(p.thread) || nextPinNo()) : i + 1; }
+  function nextPinNo() { return Math.max(S.draft.pins.length, T.threads().length) + 1; }
   function pinVisible(p) { return !p.thread || !(T.gone(p.thread) || (CFG.hide_resolved_pins && T.resolved(p.thread))); }
   function draftThreadIds() {
     var out = {};
@@ -2425,8 +2431,8 @@ import {paintAvatar} from './avatar.js';
       if (p.block !== m.b.id || p.option !== m.o.id || p.w !== S.width || !pinVisible(p)) return;
       var box = m.inner.getBoundingClientRect();
       var spot = p.detached && p.target ? {left: ((p.target.doc.x - scrollX - box.left) / m.scale) + 'px', top: ((p.target.doc.y - scrollY - box.top) / m.scale) + 'px'} : {left: (p.x * 100) + '%', top: (p.y * 100) + '%'};
-      var button = h('button', { class: 'mpin' + (p.detached ? ' det' : '') + (p.thread && T.unread(p.thread) ? ' un' : ''), style: spot, title: p.detached ? 'Element removed' : p.text, 'aria-label': 'Pin ' + (i + 1) + ': ' + (p.detached ? 'Element removed · ' : '') + p.text, 'data-pin-id': p.id, ...(p.thread && String(p.thread).indexOf('tmp:') !== 0 ? {'data-thread': p.thread} : {}),
-        onclick: function (e) { e.stopPropagation(); if (p.thread && String(p.thread).indexOf('tmp:') !== 0) { T.open(p.thread, {detached: p.detached}); } else editPin(m, i, e); } }, h('span', { text: String(i + 1) }));
+      var button = h('button', { class: 'mpin' + (p.detached ? ' det' : '') + (p.thread && T.unread(p.thread) ? ' un' : ''), style: spot, title: p.detached ? 'Element removed' : p.text, 'aria-label': 'Pin ' + pinNo(p, i) + ': ' + (p.detached ? 'Element removed · ' : '') + p.text, 'data-pin-id': p.id, ...(p.thread && String(p.thread).indexOf('tmp:') !== 0 ? {'data-thread': p.thread} : {}),
+        onclick: function (e) { e.stopPropagation(); if (p.thread && String(p.thread).indexOf('tmp:') !== 0) { T.open(p.thread, {detached: p.detached}); } else editPin(m, i, e); } }, h('span', { text: String(pinNo(p, i)) }));
       m.pins.appendChild(T.paintPin(button, T.activityFor(p.thread, p)));
     });
     T.mockEntries(m.b.id, m.o.id).forEach(function (t) {
@@ -2447,7 +2453,7 @@ import {paintAvatar} from './avatar.js';
       S.draft.pins.forEach(function (p, i) {
         if (p.block !== id || !pinVisible(p)) return;
         list.appendChild(h('li', null, h('button', { class: 'pin-row', onclick: function () { if (p.thread) T.open(p.thread, {detached: p.detached}); else focusDzPin(i); } },
-          h('span', { class: 'pin-num', text: String(i + 1) }),
+          h('span', { class: 'pin-num', text: String(pinNo(p, i)) }),
           h('span', { class: 'pin-body' }, h('span', { class: 'pin-where', text: (p.option ? p.option.toUpperCase() + ' · ' : '') + wlabel(p.w) }), h('span', { class: 'pin-text', text: p.text })))));
       });
       if (S.commentMode) (id === 'proto' ? T.protoEntries() : T.mockEntries(id, null)).forEach(function (t) { list.appendChild(T.row(t)); });
@@ -2892,18 +2898,18 @@ import {paintAvatar} from './avatar.js';
       var button = h('button', {
         class: 'mpin' + (it.detached ? ' det' : '') + (p.thread && T.unread(p.thread) ? ' un' : ''), style: style,
         title: it.detached ? 'Element removed' : p.text,
-        'aria-label': 'Pin ' + (it.i + 1) + ': ' + (it.detached ? 'Element removed · ' : '') + p.text,
+        'aria-label': 'Pin ' + pinNo(p, it.i) + ': ' + (it.detached ? 'Element removed · ' : '') + p.text,
         'data-mr-pin': String(it.i),
         'data-pin-id': p.id,
         ...(p.thread && String(p.thread).indexOf('tmp:') !== 0 ? {'data-thread': p.thread} : {}),
         onclick: function (e) { e.stopPropagation(); if (p.thread && String(p.thread).indexOf('tmp:') !== 0) T.open(p.thread, {detached: it.detached}); else editCanvasPin(it.i, e); }
-      }, h('span', { text: String(it.i + 1) }));
+      }, h('span', { text: String(pinNo(p, it.i)) }));
       c.layer.appendChild(T.paintPin(button, T.activityFor(p.thread, p)));
     });
     items.forEach(function (it) {
       var p = it.p;
       canvasLayer(it.sec).list.appendChild(h('li', null, h('button', { class: 'pin-row', onclick: function () { focusDzPin(it.i); } },
-        h('span', { class: 'pin-num', text: String(it.i + 1) }),
+        h('span', { class: 'pin-num', text: String(pinNo(p, it.i)) }),
         h('span', { class: 'pin-body' }, h('span', { class: 'pin-where', text: (p.option ? p.option.toUpperCase() + ' · ' : '') + wlabel(p.w) }),
           h('span', { class: 'pin-text', text: p.text })))));
     });
@@ -3022,7 +3028,7 @@ import {paintAvatar} from './avatar.js';
     var target = anchorFor(deep, sec, e.clientX, e.clientY, range);
     var scroll = scrollPoint();
     var doc = { x: num(e.clientX + scroll.x, 0, 1000000), y: num(e.clientY + scroll.y, 0, 1000000) };
-    var ghost = h('div', { class: 'mpin ghost', style: { left: (x * 100) + '%', top: (y * 100) + '%' } }, h('span', { text: String(S.draft.pins.length + 1) }));
+    var ghost = h('div', { class: 'mpin ghost', style: { left: (x * 100) + '%', top: (y * 100) + '%' } }, h('span', { text: String(nextPinNo()) }));
     var c = canvasLayer(sec);
     c.ghost = ghost;
     c.layer.appendChild(ghost);
@@ -3084,7 +3090,7 @@ import {paintAvatar} from './avatar.js';
     var hit = e.composedPath ? e.composedPath()[0] : e.target;
     if (closestOf(hit, CONTROL)) range = null;
     var target = e.mrTarget || anchorFor(controlOf(hit, m.root), m.root, e.clientX, e.clientY, range);
-    var ghost = h('div', { class: 'mpin ghost', style: { left: (x * 100) + '%', top: (y * 100) + '%' } }, h('span', { text: String(S.draft.pins.length + 1) }));
+    var ghost = h('div', { class: 'mpin ghost', style: { left: (x * 100) + '%', top: (y * 100) + '%' } }, h('span', { text: String(nextPinNo()) }));
     m.ghost = ghost;
     m.pins.appendChild(ghost);
     notePop({ title: 'New pin · ' + pinWhat(m.b, m.o.id), where: target ? 'on ' + target.label : wlabel(S.width) + ' · ~' + pct(x) + ', ' + pct(y) + ' of the mock',
@@ -3275,11 +3281,12 @@ import {paintAvatar} from './avatar.js';
   }
   function pushProto(f) {
     var out = [];
-    S.draft.pins.forEach(function (p, i) { if (p.block === 'proto' && p.w === f.device && pinVisible(p)) out.push({ i: i, n: i + 1, x: p.x, y: p.y, ...(p.target ? {target: cleanTarget(p.target)} : {}) }); });
-    if (f.ghost) out.push({ i: -1, n: S.draft.pins.length + 1, x: f.ghost.x, y: f.ghost.y, ghost: true });
+    S.draft.pins.forEach(function (p, i) { if (p.block === 'proto' && p.w === f.device && pinVisible(p)) out.push({ i: i, n: pinNo(p, i), x: p.x, y: p.y, hermes: T.activityState(T.activityFor(p.thread, p)), ...(p.target ? {target: cleanTarget(p.target)} : {}) }); });
+    if (f.ghost) out.push({ i: -1, n: nextPinNo(), x: f.ghost.x, y: f.ghost.y, ghost: true });
     T.protoEntries().forEach(function (t, j) {
       var a = t.anchor || {};
       out.push({ i: 60 + j, n: t.n, x: a.x || 0, y: a.y || 0, thread: t.id, detached: !!t.detached,
+        hermes: T.activityState(T.activityFor(t.id)),
         ...(a.target ? {target: cleanTarget(a.target)} : {}) });
     });
     try { f.iframe.contentWindow.postMessage({ __mockreview: 1, cmd: 'state', comment: canComment() && S.commentMode, scale: 1, pins: pinsOn() ? out : [] }, '*'); } catch (e) {}

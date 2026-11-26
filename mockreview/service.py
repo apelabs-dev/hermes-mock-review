@@ -750,13 +750,18 @@ def _mention_request(data: Dict[str, Any], review_id: str, wake: Dict[str, Any])
     block = str(wake.get("block") or "")
     if not block or block in store.RESERVED_REFS:
         return None
-    try:
-        _dec, by_ref = _pin_html_refs(review_id, int(current["n"]))
-    except (ReviewError, OSError, ValueError, KeyError, TypeError):
-        return None
-    target = by_ref.get(block)
-    if not isinstance(target, dict) or not _pin_editable(target):
-        return None
+    if block == "proto" and current.get("kind") == "prototype":
+        # A prototype round is one live page: it has no decisions.json and no block to patch, but Hermes edits that
+        # page like any other, so a mention on it opens its activity request too.
+        target: Any = {"type": "prototype"}
+    else:
+        try:
+            _dec, by_ref = _pin_html_refs(review_id, int(current["n"]))
+        except (ReviewError, OSError, ValueError, KeyError, TypeError):
+            return None
+        target = by_ref.get(block)
+        if not isinstance(target, dict) or not _pin_editable(target):
+            return None
     requests = current.get("pin_requests")
     if not isinstance(requests, dict):
         requests = current["pin_requests"] = {}

@@ -23,8 +23,8 @@ A thread is one anchored conversation:
 - **Activation.** `activated` means the owner or a reviewer mentioned `@Hermes` in it and the request gate let that
   mention wake Hermes (see "Who" below). An activating comment wakes Hermes once through the same wake route Send uses; the payload names the review, round, thread, comment
   and block. The POST answers without waiting for the gateway: the worker tick delivers the wake, a burst inside the
-  spacing window becomes one wake carrying every mention, and a request on an editable block shows live Hermes
-  activity. Replaying the same `idem` is a duplicate and never wakes twice. A commenter, an agent's token and a
+  spacing window becomes one wake carrying every mention, and a request on an editable block, or on a pin in a
+  prototype round, shows live Hermes activity. Replaying the same `idem` is a duplicate and never wakes twice. A commenter, an agent's token and a
   wake-off board never activate, so they never wake anyone.
 
 ## Waking Hermes from a thread
@@ -45,7 +45,7 @@ An `@Hermes` mention in a comment starts a Hermes session without anyone pressin
 - **In the chat.** The mention sends no ack message and no stalled ping; those belong to Send. The woken session reads
   the thread, answers it with `mock_review_reply` and can close it with `mock_review_resolve`. The reply appears in the
   thread on the board, not in the chat.
-- **On the board.** On the current round, an accepted request on an editable block adds a pulsing red dot on the
+- **On the board.** On the current round, an accepted request on an editable block (or a pin in a prototype round) adds a pulsing red dot on the
   pin's right side,
   one **Hermes is working…** chip to the block, an elapsed timer in the open thread and a **Working** badge in
   Comments. **Hermes · N working** in the header opens the working comments for that round. Reviewer pin fixes use

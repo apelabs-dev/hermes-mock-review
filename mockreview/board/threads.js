@@ -1282,6 +1282,7 @@ export function createThreads(opts) {
     spot: spot, marker: marker, row: row,
     open: open,
     gone: function (id) { return !!S.hidden[id]; },
+    number: function (id) { var t = find(id); return t ? t.n : 0; },
     resolved: function (id) { var t = find(id); return !!(t && t.status === 'resolved'); },
     unread: function (id) { var t = find(id); return !!(t && t.unread); },
     create: create, editThreadFirst: editThreadFirst, deleteThreadFirst: deleteThreadFirst,

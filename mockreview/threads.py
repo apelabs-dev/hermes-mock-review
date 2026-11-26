@@ -542,13 +542,17 @@ def _comment_dict(c: Dict[str, Any], mentions: List[Dict[str, str]], principal: 
     }
 
 
-def _build(rows: List[Dict[str, Any]], data: Dict[str, Any], viewed_round: int, principal: str) -> List[Dict[str, Any]]:
+def _build(rows: List[Dict[str, Any]], data: Dict[str, Any], viewed_round: int, principal: str,
+           numbered: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    """`numbered`: the threads the viewer sees, in creation order, when `rows` is only some of them (one thread's
+    payload). A thread's number is its place there, so a lone thread is not numbered 1."""
     ids = [r["id"] for r in rows]
     comments = _comments_for(ids)
     cids = [c["id"] for group in comments.values() for c in group]
     mentions = _mentions_for(cids)
     reads = _reads_for(str(data.get("id") or ""), principal)
-    numbers = {r["id"]: i + 1 for i, r in enumerate(rows)}
+    ordered = numbered if numbered is not None else rows
+    numbers = {r["id"]: i + 1 for i, r in enumerate(ordered)}
     out = []
     for r in rows:
         group = [_comment_dict(c, mentions.get(c["id"], []), principal, data.get("id", ""), bool(r["activated"]))
@@ -564,7 +568,7 @@ def _build(rows: List[Dict[str, Any]], data: Dict[str, Any], viewed_round: int, 
             anchor = {}
         carried = int(r["round"]) != int(viewed_round)
         out.append({
-            "id": r["id"], "n": numbers[r["id"]], "round": int(r["round"]), "status": r["status"],
+            "id": r["id"], "n": numbers.get(r["id"], len(ordered) + 1), "round": int(r["round"]), "status": r["status"],
             "activated": bool(r["activated"]), "carried": carried,
             "detached": bool(anchor) and not _anchor_resolves(data, viewed_round, anchor),
             "anchor": anchor, "created_at": r["created_at"], "updated_at": r["updated_at"],
@@ -857,8 +861,12 @@ def _thread_dict(review_id: str, thread_id: str, principal: str, round_n: Option
     if data is None:
         raise ReviewError("thread not found", 404)
     viewed = int(round_n) if round_n is not None else _current_round(data)
-    rows = [r for r in _threads_rows(review_id) if r["id"] == thread_id]
-    built = _build(rows, data, viewed, principal)
+    every = _threads_rows(review_id)
+    rows = [r for r in every if r["id"] == thread_id]
+    # The number is the thread's place among the threads this viewer sees, as the listing counts them; counted from
+    # this one row every thread would be 1 and the board would redraw its pin with the wrong number.
+    seen = [r for r in every if sees_round(Scope(viewed), r["round"])]
+    built = _build(rows, data, viewed, principal, numbered=seen)
     if not built:
         raise ReviewError("thread not found", 404)
     return built[0]
