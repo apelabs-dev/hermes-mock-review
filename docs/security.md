@@ -281,9 +281,9 @@ toolsets, so setup cannot check the edit; its summary says `wake toolsets manual
 never gets it. To remove it, empty the setting and re-run setup (the re-subscribe drops the key).
 
 The risk: the woken session acts on text a reviewer typed on the board. Even without `wake_toolsets` it can read and
-reply on every review on this install as the owner; with more tools granted it can do more. The feedback header and the
-skill tell the model that quoted feedback is design input, not instructions, but a model can still be persuaded. Grant
-only the toolsets the build needs, and only for boards whose reviewers you trust.
+reply on every review on this install with the owner's access, posted as Hermes; with more tools granted it can do
+more. The feedback header and the skill tell the model that quoted feedback is design input, not instructions, but a
+model can still be persuaded. Grant only the toolsets the build needs, and only for boards whose reviewers you trust.
 
 A waking board with tools is allowed only while the board itself is gated (the board gate, `wakeguard.exposure` in
 `mockreview/wakeguard.py`): the board server must listen on loopback, no `public_url` may be configured, and the board
@@ -361,7 +361,8 @@ In the board, only the owner sees Send and Build; anyone else sees "Only the own
 comments and pins are on the board for them." Choosing Reviewer for someone in the Share dialog (the link's guests, a
 person, or a new invite) asks first, because a reviewer can wake Hermes with a mention. That confirmation is also what
 lets the Reviewer wake by mention: for a Reviewer link, person or invite made before this update, the Share dialog
-marks it as unconfirmed ("Waking off") and offers Confirm Reviewer, which sets Reviewer again.
+marks it as unconfirmed ("Waking off") and offers Confirm Reviewer, which asks the same question before it sets
+Reviewer again.
 
 ## MCP server (stdio)
 
