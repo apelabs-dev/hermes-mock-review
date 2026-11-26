@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import sqlite3
 import threading
 import time
 import uuid
@@ -937,8 +938,11 @@ def create(review_id: str, actor: str, name: str, role: Optional[str], text: Any
 
 def reply_comment(review_id: str, thread_id: str, actor: str, name: str, role: Optional[str], text: Any,
                   mentions: Any = None, idem: Any = "", can_activate: Optional[bool] = None,
-                  principal: Optional[str] = None) -> Tuple[Dict[str, Any], str]:
+                  principal: Optional[str] = None, drop_wakes: bool = True) -> Tuple[Dict[str, Any], str]:
     """Insert one reply and return (thread, comment_id).
+
+    Hermes's reply drops the thread's mention wakes still waiting to be sent (`service.drop_answered_wakes`);
+    `drop_wakes=False` leaves them, for an answer that names the one request it settles.
 
     The id is the row this call inserted, or, on an idempotent retry, the row the same actor already inserted with this
     `idem`. Callers never guess it from the thread (a concurrent reply may be newer or share the author).
@@ -980,6 +984,8 @@ def reply_comment(review_id: str, thread_id: str, actor: str, name: str, role: O
                      {"thread": shared(thread), "actor": actor, "actor_kind": _author_kind(actor),
                       "name": _name_for(actor, author_name), "comment": cid})
         _publish_mention(review_id, thread, actor, mention_rows)
+        if actor == AGENT_ACTOR and drop_wakes:
+            _drop_answered_wakes(review_id, thread_id)
     return thread, cid
 
 
@@ -1084,7 +1090,17 @@ def delete_thread(review_id: str, thread_id: str, actor: str) -> None:
                   "name": _name_for(actor), "round": int(thread["round"])})
 
 
-def set_status(review_id: str, thread_id: str, status: str, actor: str, principal: Optional[str] = None) -> Dict[str, Any]:
+def _drop_answered_wakes(review_id: str, thread_id: str) -> None:
+    """Drop the thread's queued mention wakes. A failure here never fails the reply or the resolve that caused it."""
+    from . import service   # service imports this module
+    try:
+        service.drop_answered_wakes(review_id, thread_id)
+    except (ReviewError, OSError, ValueError, KeyError, TypeError, sqlite3.Error):
+        pass
+
+
+def set_status(review_id: str, thread_id: str, status: str, actor: str, principal: Optional[str] = None,
+               drop_wakes: bool = True) -> Dict[str, Any]:
     if status not in ("open", "resolved"):
         raise ReviewError("status must be open or resolved", 400)
     _rate_check(review_id, actor)
@@ -1099,6 +1115,8 @@ def set_status(review_id: str, thread_id: str, status: str, actor: str, principa
         live.publish(review_id, "thread.status", thread_id, actor,
                      {"thread": shared(thread), "actor": actor, "actor_kind": _author_kind(actor), "name": _name_for(actor),
                       "status": status})
+        if status == "resolved" and drop_wakes:
+            _drop_answered_wakes(review_id, thread_id)
     return thread
 
 

@@ -276,7 +276,10 @@ feed has its own cursor, moved by `activity/read`. More shows the open-thread an
 ## Hermes and external agent replies
 
 An owner's or reviewer's `@Hermes` mention wakes Hermes once per comment. The worker coalesces a burst into one wake
-that names each mention. Mentions of people do not send notifications. A woken session answers through the plugin's
+that names each mention. A wake still queued when Hermes replies to its thread, or when anyone resolves the thread, is
+dropped instead of sent (its working chip closes as "answered before delivery"); a wake already sent, one on another
+thread, and a human's reply leave the queue alone, and so does an answer that names the one `request_id` it settles.
+Mentions of people do not send notifications. A woken session answers through the plugin's
 `mock_review_list_comments`, `mock_review_reply` and `mock_review_resolve` tools. Its reply and resolve are Hermes's:
 the comment is stored under the fixed agent author `agent:hermes`, shown with the name Hermes, its own avatar and a
 small **Hermes** mark, and `author_kind` is `hermes`. It is nobody's own comment (`mine` is false for everyone, so no

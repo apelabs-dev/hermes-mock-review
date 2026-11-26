@@ -649,7 +649,7 @@ def _wake_budget_used(data: Dict[str, Any], round_n: int, now: float) -> "tuple[
     return hour, on_round
 
 
-MENTION_TERMINAL = ("notified", "failed", "capped")
+MENTION_TERMINAL = ("notified", "failed", "capped", "answered")
 MENTION_WAKE_HOUR_SECONDS = 3600.0
 
 
@@ -804,6 +804,35 @@ def _set_mention_request(data: Dict[str, Any], request_id: Optional[str], status
             q["done_at"] = store.now_iso()
         return True
     return False
+
+
+def drop_answered_wakes(review_id: str, thread_id: str) -> int:
+    """Drop the mention wakes for `thread_id` that were queued but not yet sent, once the thread has been answered.
+
+    Hermes replying to a thread, or anyone resolving it, answers what is waiting on it: a wake still queued for
+    delivery would only start a turn with nothing left to do. Each such record becomes `answered` (the delivery pass
+    skips it) and its chip request closes with "answered before delivery". A record already sent, one in flight, one
+    for another thread and one from an older round are left alone. Returns how many wakes were dropped.
+    """
+    now = time.time()
+    with store.locked(review_id):
+        data = store.load(review_id)
+        if data.get("status") != "open":
+            return 0
+        round_n = int(data["rounds"][-1]["n"])
+        dropped = 0
+        pin_changed = False
+        for w in (data.get("thread_wakes") or {}).values():
+            if (not isinstance(w, dict) or w.get("status") != "pending_notify" or w.get("thread_id") != thread_id
+                    or int(w.get("round") or 0) != round_n or float(w.get("sending_until") or 0) > now):
+                continue
+            w.update(status="answered", sending_until=0.0, last_error=None, next_attempt=0.0)
+            pin_changed = _set_mention_request(data, w.get("request_id"), "done", "answered before delivery") or pin_changed
+            dropped += 1
+        if dropped:
+            _bounded_thread_wakes(data)
+            store.save(review_id, data, pin_round=round_n if pin_changed else None)
+        return dropped
 
 
 def close_mention_requests(review_id: str, thread_id: Optional[str],
