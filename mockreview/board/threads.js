@@ -40,6 +40,12 @@ export function createThreads(opts) {
     return h('span', {class: (cls || 'faint') + ' guest-mark', text: 'guest', title: 'Guest',
       'aria-label': 'Guest'});
   }
+  // Hermes itself: stored under the fixed agent actor, shown with its own avatar and a small mark like the guest one.
+  function isHermes(actor, kind) { return kind === 'hermes' || actor === 'hermes' || /^agent:/.test(String(actor || '')); }
+  function hermesMark(cls) {
+    return h('span', {class: (cls || 'faint') + ' hermes-mark', text: 'Hermes', title: 'Hermes',
+      'aria-label': 'Hermes'});
+  }
   function initials(name) {
     var words = String(name || '?').replace(/[^\p{L}\p{N} ]/gu, ' ').trim().split(/\s+/);
     return ((words[0] || '?')[0] + (words.length > 1 ? words[1][0] : (words[0][1] || ''))).toUpperCase();
@@ -70,6 +76,7 @@ export function createThreads(opts) {
     return svg;
   }
   function avatar(name, actor, small) {
+    if (isHermes(actor)) return h('span', {class: 'av hermes' + (small ? ' s' : ''), 'aria-hidden': 'true', text: 'H'});
     var el = h('span', {class: 'av' + (small ? ' s' : ''), 'aria-hidden': 'true', text: initials(name)});
     paintAvatar(el, actor, name);
     return el;
@@ -287,6 +294,8 @@ export function createThreads(opts) {
     S.es.addEventListener('presence', function (e) { onPresence(e); });
     S.es.addEventListener('typing', function (e) { onTyping(e); });
     S.es.addEventListener('pin.requests', function () { opts.refreshPinActivity(); });
+    // Hermes patched a block: the same state fetch finds the newer revision and swaps that block in place.
+    S.es.addEventListener('block.patched', function () { opts.refreshPinActivity(); });
     S.es.addEventListener('reset', function () { if (opts.reloadState) opts.reloadState(); else refresh(); });
     ['thread.created', 'thread.replied', 'thread.status', 'thread.deleted', 'comment.edited', 'comment.deleted',
       'mention', 'review.reset'].forEach(function (kind) {
@@ -549,6 +558,7 @@ export function createThreads(opts) {
           if (th) jump(th);
         }}, h('span', {class: 'tadot'}), h('span', {class: 'tmain'},
           h('span', {class: 'tname'}, kind === 'guest' ? guestMark('tsub') : null,
+            isHermes(e.actor, kind) ? hermesMark('tsub') : null,
             h('span', {text: activityText(e)})),
           h('span', {class: 'tsub', text: t ? anchorLabel(t) : ''})),
           h('span', {class: 'tmeta', text: ago(e.at)}));
@@ -894,6 +904,7 @@ export function createThreads(opts) {
       var head = h('div', {class: 'tp-head'}, avatar(who, first.author, true),
         h('div', {class: 'tp-title'}, h('strong', {text: who}),
           first.author_kind === 'guest' ? [' ', guestMark()] : null,
+          isHermes(first.author, first.author_kind) ? [' ', hermesMark()] : null,
           h('span', {class: 'faint', text: ' · ' + ago(first.created_at)})),
         h('span', {class: 'spacer'}), actions);
       el.appendChild(head);
@@ -1009,7 +1020,8 @@ export function createThreads(opts) {
   function commentRow(p, c) {
     var who = h('div', {class: 'cwho'}, h('span', {class: 'cname', text: c.author_name}),
       c.author_kind === 'guest' ? [' ', guestMark()] : null,
-      c.role ? h('span', {class: 'faint', text: ' · ' + c.role}) : null,
+      isHermes(c.author, c.author_kind) ? [' ', hermesMark()] : null,
+      c.role && !isHermes(c.author, c.author_kind) ? h('span', {class: 'faint', text: ' · ' + c.role}) : null,
       h('span', {class: 'faint', text: ' · ' + ago(c.created_at)}),
       c.edited_at ? h('span', {class: 'faint', text: ' · edited'}) : null);
     var text = h('div', {class: 'ctext'});

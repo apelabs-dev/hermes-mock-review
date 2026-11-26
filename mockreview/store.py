@@ -173,13 +173,18 @@ def atomic_write(path: Path, text: str, lock: bool = False) -> None:
         raise
 
 
-def save(review_id: str, data: Dict[str, Any], *, pin_round: Optional[int] = None) -> None:
+def save(review_id: str, data: Dict[str, Any], *, pin_round: Optional[int] = None,
+         block_patched: Optional[Dict[str, Any]] = None) -> None:
     data["updated_at"] = now_iso()
     atomic_write(review_dir(review_id) / "review.json", json.dumps(data, indent=2, ensure_ascii=False), lock=True)
 
-    if pin_round is not None:  # the review lock orders invalidations after their corresponding saves
+    if block_patched is not None or pin_round is not None:
         from . import live
-        live.publish(review_id, live.PIN_REQUESTS, "", "", {"round": pin_round})
+        # the review lock orders invalidations after their corresponding saves
+        if block_patched is not None:
+            live.publish(review_id, live.BLOCK_PATCHED, "", "", block_patched)
+        if pin_round is not None:
+            live.publish(review_id, live.PIN_REQUESTS, "", "", {"round": pin_round})
 
 
 def list_ids() -> List[str]:
@@ -1291,6 +1296,7 @@ def public_state(data: Dict[str, Any]) -> Dict[str, Any]:
             "kind": r.get("kind", "variants"),
             "design": r.get("design"),
             "decisions": round_index(r),
+            "blocks_rev": {str(k): int(v or 0) for k, v in (r.get("blocks_rev") or {}).items()},
             "sections": round_sections(r),
             "preset": r.get("preset", "design"),
             "gate": r.get("gate"),

@@ -523,7 +523,8 @@ def patch_block(review_id: str, block: str, html: str, option: Optional[str] = N
             history = current["history"] = []
         history.append({"at": now, "action": "patch_block", "block": block, "option": option, "rev": new_rev,
                         "request_ids": done, "prev_file": hist.relative_to(store.review_dir(review_id)).as_posix()})
-        store.save(review_id, data, pin_round=n if done else None)
+        store.save(review_id, data, pin_round=n if done else None,
+                   block_patched={"round": n, "block": block, "option": option, "rev": new_rev})
         result = {"ok": True, "review_id": review_id, "round": n, "block": block, "option": option,
                   "rev": new_rev, "done": done, "url": store.review_url(data)}
         if skipped:

@@ -33,6 +33,10 @@ from .store import ReviewError
 MAX_TEXT = 2000
 MAX_OPEN_THREADS = 200
 MAX_COMMENTS = 40
+# Hermes answering in a thread: one fixed actor that is no account, so the comment is never a person's (`mine` is false
+# for everyone) and never wakes anything. Callers audit the real account that held the pen.
+AGENT_ACTOR = "agent:hermes"
+AGENT_NAME = "Hermes"
 MAX_ANCHOR_BYTES = 4096
 MAX_IDENT = 64
 MAX_IDEM = 100
@@ -370,6 +374,8 @@ def _name_for(actor: str, fallback: str = "") -> str:
     if actor.startswith("guest:") and actor[6:]:
         g = users.guest(actor[6:])
         return (g or {}).get("display_name") or fallback or "Guest"
+    if actor == AGENT_ACTOR:
+        return AGENT_NAME
     return fallback or "Someone"
 
 
@@ -608,8 +614,9 @@ def activity(review_id: str, principal: str = "", limit: int = 100,
     lim = max(1, min(int(limit), 500))
     scope = scope or _default_scope(review_id)
     restricted = scope.restricted
-    sql = "SELECT * FROM events WHERE review_id = ? AND kind != ? ORDER BY id DESC" + ("" if restricted else " LIMIT ?")
-    args = (review_id, live.PIN_REQUESTS) if restricted else (review_id, live.PIN_REQUESTS, lim)
+    sql = "SELECT * FROM events WHERE review_id = ? AND kind NOT IN (?, ?) ORDER BY id DESC" + ("" if restricted else " LIMIT ?")
+    quiet = (live.PIN_REQUESTS, live.BLOCK_PATCHED)   # board plumbing, never an entry in the feed
+    args = (review_id, *quiet) if restricted else (review_id, *quiet, lim)
     rows = [dict(r) for r in conn.execute(sql, args).fetchall()]
     thread_rounds = _thread_rounds(review_id) if restricted else {}
     cursor = _reads_for(review_id, principal, conn).get("", 0.0)
@@ -637,13 +644,13 @@ def activity_unread(review_id: str, principal: str = "", scope: Optional[Scope] 
     scope = scope or _default_scope(review_id)
     if not scope.restricted:
         row = db.connect().execute(
-            "SELECT COUNT(*) AS n FROM events WHERE review_id = ? AND kind != ? AND actor != ? AND at > ?",
-            (review_id, live.PIN_REQUESTS, principal, cursor)).fetchone()
+            "SELECT COUNT(*) AS n FROM events WHERE review_id = ? AND kind NOT IN (?, ?) AND actor != ? AND at > ?",
+            (review_id, live.PIN_REQUESTS, live.BLOCK_PATCHED, principal, cursor)).fetchone()
         return int(row["n"])
     thread_rounds = _thread_rounds(review_id)
     rows = [dict(r) for r in db.connect().execute(
-        "SELECT * FROM events WHERE review_id = ? AND kind != ? AND actor != ? AND at > ?",
-        (review_id, live.PIN_REQUESTS, principal, cursor)).fetchall()]
+        "SELECT * FROM events WHERE review_id = ? AND kind NOT IN (?, ?) AND actor != ? AND at > ?",
+        (review_id, live.PIN_REQUESTS, live.BLOCK_PATCHED, principal, cursor)).fetchall()]
     return sum(1 for r in rows if sees_round(scope, _event_round(r, thread_rounds)))
 
 
@@ -884,8 +891,8 @@ def create(review_id: str, actor: str, name: str, role: Optional[str], text: Any
         raise ReviewError("round not found", 404)
     if rn > current:
         rn = current
-    author_name = users.clean_name(name) or _name_for(actor)
-    activated = _activated(mention_rows, role, can_activate, actor=actor)
+    author_name = AGENT_NAME if actor == AGENT_ACTOR else users.clean_name(name) or _name_for(actor)
+    activated = False if actor == AGENT_ACTOR else _activated(mention_rows, role, can_activate, actor=actor)
     _rate_check(review_id, actor)
     t = now()
     created: Optional[Dict[str, Any]] = None
@@ -957,7 +964,7 @@ def reply_comment(review_id: str, thread_id: str, actor: str, name: str, role: O
                          (stamp, 1 if activated else 0, row["id"]))
             conn.execute("INSERT INTO reads (principal, review_id, thread_id, seen_at) VALUES (?, ?, ?, ?) "
                          "ON CONFLICT(principal, review_id, thread_id) DO UPDATE SET seen_at = excluded.seen_at",
-                         (principal or actor, review_id, row["id"], stamp))
+                         (actor if actor == AGENT_ACTOR else (principal or actor), review_id, row["id"], stamp))
             changed = True
     thread = _thread_dict(review_id, thread_id, principal or actor)
     if changed:

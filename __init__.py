@@ -191,6 +191,12 @@ def _comment_as(user: Dict[str, Any]) -> Dict[str, Any]:
     return {"user_id": user["id"], "name": user["name"], "role": "owner"}
 
 
+def _comment_as_agent() -> Dict[str, Any]:
+    """Who a plugin reply or resolve is attributed to on the board: Hermes, never the owner who holds the pen."""
+    from mockreview import threads
+    return {"actor": threads.AGENT_ACTOR, "name": threads.AGENT_NAME, "role": "agent"}
+
+
 def _comment_status(value: Any) -> str:
     from mockreview.store import ReviewError
     status = str(value or "open").strip().lower()
@@ -221,7 +227,10 @@ def _comment_list(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _comment_reply(args: Dict[str, Any]) -> Dict[str, Any]:
-    """Reply in a thread as the owner, never activating it: an agent's answer must not wake an agent.
+    """Reply in a thread as Hermes, never activating it: an agent's answer must not wake an agent.
+
+    The comment is stored under the fixed agent actor (`threads.AGENT_ACTOR`), so nobody sees it as their own; the
+    audit row names the real owner account that made the call.
 
     A `hermes` mention the caller passes is dropped the same way the MCP reply drops it, and `can_activate=False`
     makes the guard independent of the role. The chip request this answer settles closes here.
@@ -244,19 +253,19 @@ def _comment_reply(args: Dict[str, Any]) -> Dict[str, Any]:
         row = threads.by_id(thread_id)
         review_id = str(row["review_id"])
         thread, comment_id = threads.reply_comment(
-            review_id, thread_id, actor, user["name"], "owner", text,
+            review_id, thread_id, threads.AGENT_ACTOR, threads.AGENT_NAME, "agent", text,
             mentions=mentions, can_activate=False, principal=actor)
         comment = next((c for c in thread.get("comments") or [] if c["id"] == comment_id), None)
         with db.tx() as conn:
             users.audit(conn, actor, "plugin.reply", f"review:{review_id}",
                         thread_id=thread_id, comment=comment_id)
         closed = service.close_mention_requests(review_id, thread_id, request_id)
-        return {"review_id": review_id, "as": _comment_as(user), "thread": thread, "comment": comment,
+        return {"review_id": review_id, "as": _comment_as_agent(), "thread": thread, "comment": comment,
                 "closed": closed}
 
 
 def _comment_resolve(args: Dict[str, Any]) -> Dict[str, Any]:
-    """Resolve (or reopen) a thread as the owner; the answer also closes the thread's mention chip request."""
+    """Resolve (or reopen) a thread as Hermes; the answer also closes the thread's mention chip request."""
     from mockreview import db, owner, service, threads, users
     from mockreview.store import ReviewError
     thread_id = str(args.get("thread_id") or "").strip()
@@ -272,12 +281,12 @@ def _comment_resolve(args: Dict[str, Any]) -> Dict[str, Any]:
         user, actor = _comment_actor()
         row = threads.by_id(thread_id)
         review_id = str(row["review_id"])
-        thread = threads.set_status(review_id, thread_id, status, actor, principal=actor)
+        thread = threads.set_status(review_id, thread_id, status, threads.AGENT_ACTOR, principal=actor)
         with db.tx() as conn:
             users.audit(conn, actor, "plugin.reopen" if reopen else "plugin.resolve",
                         f"review:{review_id}", thread_id=thread_id)
         closed = service.close_mention_requests(review_id, thread_id, request_id)
-        return {"review_id": review_id, "status": status, "as": _comment_as(user), "thread": thread,
+        return {"review_id": review_id, "status": status, "as": _comment_as_agent(), "thread": thread,
                 "closed": closed}
 
 

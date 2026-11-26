@@ -1288,6 +1288,7 @@ import {paintAvatar} from './avatar.js';
   // Decision + prototype rounds: the board's own canvas IS the review (no iframe around the decisions).
   // ======================================================================================================
   var ASSETS = {};          // round n -> Promise<{dec, sheetText}>
+  var assetRevs = {};       // round n -> {block id: rev} the cached decisions.json reflects (state.json's revisions)
   var MOCKS = [];           // live inline mocks on screen
   var renderSeq = 0;
   S.width = window.innerWidth < 760 ? 'phone' : 'desktop';   // Desktop / Mobile: defaults to the device in hand
@@ -1441,6 +1442,7 @@ import {paintAvatar} from './avatar.js';
     ':host(:not(.use)) .cq :is(' + LIVE + '),:host(:not(.use)) .cq :is(' + LIVE + ') *{cursor:auto!important}';
   function loadAssets(r) {
     if (ASSETS[r.n]) return ASSETS[r.n];
+    assetRevs[r.n] = blockRevs(r);   // read before the file: a patch landing in between only makes the next sync swap again
     var base = roundBase(r), d = r.design, out = { dec: null, css: '' }, jobs = [];
     function get(url, as) {
       return fetch(url, { cache: 'no-store', credentials: 'same-origin' }).then(function (x) {
@@ -1455,7 +1457,7 @@ import {paintAvatar} from './avatar.js';
       try { out.sheet = new CSSStyleSheet(); out.sheet.replaceSync(out.css); } catch (e) { out.sheet = null; }
       return out;
     });
-    ASSETS[r.n].catch(function () { delete ASSETS[r.n]; });
+    ASSETS[r.n].catch(function () { delete ASSETS[r.n]; delete assetRevs[r.n]; });
     return ASSETS[r.n];
   }
 
@@ -2497,6 +2499,65 @@ import {paintAvatar} from './avatar.js';
   function applyPinSnapshot(st) {
     pinRounds = Object.fromEntries(st.rounds.map(function (r) { return [r.n, r.pin_requests || {}]; }));
   }
+  // ---- a block Hermes patched: swap it in place, no reload ----
+  function blockRevs(r) {
+    var out = {};   // state.json's blocks_rev covers every block, not only the markable ones the index lists
+    Object.keys(r.blocks_rev || {}).forEach(function (id) { out[id] = Number(r.blocks_rev[id]) || 0; });
+    return out;
+  }
+  // The blocks whose revision in `st` is newer than the one the loaded round shows, as [{r, ids}] for the round on
+  // screen. Any other round (or every round, when the page is about to re-render anyway) only forgets its cached
+  // decisions.json, so its next render loads the patched one. A stale or repeated event finds nothing newer.
+  function staleBlocks(st, rendering) {
+    var out = [];
+    st.rounds.forEach(function (r) {
+      var known = assetRevs[r.n];
+      if (!known) return;
+      var now = blockRevs(r), ids = Object.keys(now).filter(function (id) { return now[id] > (known[id] || 0); });
+      if (!ids.length) return;
+      if (!rendering && DOC && DOC.el.isConnected && DOC.r.n === r.n && S.view === r.n) out.push({r: r, ids: ids});
+      else { delete ASSETS[r.n]; delete assetRevs[r.n]; }
+    });
+    return out;
+  }
+  function swapBlocks(r, ids) {
+    var seq = renderSeq;
+    delete ASSETS[r.n]; delete assetRevs[r.n];
+    loadAssets(r).then(function (a) {
+      if (seq !== renderSeq || !DOC || !DOC.el.isConnected || DOC.r.n !== r.n) return;   // a full render took over
+      var ok = true;
+      keepPlace(function () { ok = ids.every(function (id) { return swapBlock(r, a, id); }); });
+      if (!ok) keepPlace(render);   // the block could not be replaced where it stands: rebuild the page (assets are fresh)
+      else paintPinActivity();
+    }).catch(function () { keepPlace(render); });
+  }
+  function swapBlock(r, a, id) {
+    var dec = a && a.dec, idx = dec && Array.isArray(dec.blocks) ? dec.blocks.findIndex(function (x) { return x.id === id; }) : -1;
+    if (idx < 0) return false;
+    var old = Array.from(DOC.el.querySelectorAll('[data-mr-ref]')).find(function (el) { return el.getAttribute('data-mr-ref') === id; });
+    if (!old || !old.parentNode) return false;
+    var secs = Array.isArray(r.sections) && r.sections.length === dec.blocks.length ? r.sections : derivedSections(dec);
+    SECTIONS = new Map();
+    dec.blocks.forEach(function (b, i) { if (secs[i]) SECTIONS.set(b, secs[i]); });
+    var el = renderBlock(r, a, dec.blocks[idx]);   // marks and pins live in the draft, so they come straight back
+    if (!el) return false;
+    MOCKS = MOCKS.filter(function (m) {
+      if (m.b.id !== id || !old.contains(m.outer)) return true;
+      if (m.anchorSurface) m.anchorSurface.dispose();
+      if (m.ro) m.ro.disconnect();
+      return false;
+    });
+    S.frames = S.frames.filter(function (f) {
+      if (f.ctx !== 'artifact' || f.b.id !== id) return true;
+      clearTimeout(f.watch);
+      return false;
+    });
+    CANVAS.forEach(function (c, sec) { if (sec === old || old.contains(sec)) CANVAS.delete(sec); });
+    old.replaceWith(el);
+    DOC.r = r; DOC.dec = dec;
+    if (CANVAS_LIVE) CANVAS_LIVE.schedule();
+    return true;
+  }
   function refreshPinActivity(reset) {
     pinDirty = true;
     pinReset = pinReset || reset;
@@ -2509,11 +2570,16 @@ import {paintAvatar} from './avatar.js';
       pinRefreshing = true;
       fetchState().then(function (st) {
         applyPinSnapshot(st);
-        if (reload || st.current_round !== R().current_round || st.status !== R().status) {
+        var moved = reload || st.current_round !== R().current_round || st.status !== R().status;
+        var swaps = staleBlocks(st, moved);
+        if (moved) {
           applyState(st);
           if (!st.rounds.some(function (r) { return r.n === S.view; })) switchRound(st.current_round);
           else keepPlace(render);
           if (reload) T.refresh();
+        } else if (swaps.length) {
+          applyState(st);
+          swaps.forEach(function (sw) { swapBlocks(sw.r, sw.ids); });
         }
         T.pinActivityChanged();
       }).catch(function (e) {
