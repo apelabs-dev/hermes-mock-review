@@ -350,6 +350,7 @@ export function createThreads(opts) {
       if (gone) {
         S.hidden[gone] = true;
         S.threads = S.threads.filter(function (x) { return x.id !== gone; });
+        if (!stale) refresh();   // a replayed frame is already in the fetched listing
         if (S.pop && S.pop.id === gone) closePopover();
       }
     } else if (t) {
@@ -1221,6 +1222,7 @@ export function createThreads(opts) {
     if (!mine) return Promise.resolve(null);
     return request('threads/' + encodeURIComponent(threadId) + '/delete', {}).then(function () {
       S.hidden[threadId] = true; S.threads = S.threads.filter(function (x) { return x.id !== threadId; }); redraw();
+      refresh();   // the server renumbered every later thread, and pins wear those numbers
       return null;
     }, function (e) {
       if (e.status !== 409 && e.status !== 403) throw e;
@@ -1229,7 +1231,7 @@ export function createThreads(opts) {
   }
   function deleteOwnFirst(mine, threadId) {
     return request('comments/' + encodeURIComponent(mine.id) + '/delete', {}).then(function (j) {
-      if (j.thread) { upsert(j.thread); redraw(); } else { S.hidden[threadId] = true; S.threads = S.threads.filter(function (x) { return x.id !== threadId; }); redraw(); }
+      if (j.thread) { upsert(j.thread); redraw(); } else { S.hidden[threadId] = true; S.threads = S.threads.filter(function (x) { return x.id !== threadId; }); redraw(); refresh(); }
       return j.thread || null;
     });
   }

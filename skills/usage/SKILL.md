@@ -43,7 +43,8 @@ When a wake says `review.thread_mention`, a reviewer mentioned `@Hermes` in a co
 `mock_review_list_comments`. When the comment asks for a change, patch the block in place FIRST with
 `mock_review_patch_block`, using the round and the block's `if_rev` you read and passing `request_ids=[request_id]`;
 then answer in the same thread with `mock_review_reply`, passing the wake payload's `request_id` so the block's
-live activity clears. The board shows the work on the pin, block, open thread, Comments list and header. Answer
+live activity clears. A prototype round is one page with no block to patch (`mock_review_patch_block` answers 404 on it):
+answer in the thread, and add a round if the page has to change. The board shows the work on the pin, block, open thread, Comments list and header. Answer
 questions in the thread and resolve it with `mock_review_resolve` when you are done. Start a new round only if the
 comment asks for one. Mentions wake you on a wake-on board from the owner (on their own computer or the tailnet) or
 from a reviewer, a member or a reviewer-role guest, when the board wakes a messaging chat with no extra

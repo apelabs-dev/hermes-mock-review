@@ -2879,31 +2879,33 @@
     color: var(--muted);
     font-size: 14px;
   }
-  .blk-art-page {
+  .blk-art-page, .blk-art-canvas {
     border-bottom: 0;
   }
-  .blk-art-page .art-fig {
+  .blk-art-page .art-fig, .blk-art-canvas .art-fig {
     margin-left: calc(50% - var(--page-w, 100vw) / 2);
     margin-right: calc(50% - var(--page-w, 100vw) / 2);
     margin-top: 10px;
   }
-  .blk-art-page .art {
+  .blk-art-page .art, .blk-art-canvas .art {
     margin: 0;
     border-radius: 0;
     outline: 0;
     background: var(--bg);
     overflow: hidden;
   }
-  .blk-art-page .art-frame {
+  .blk-art-page .art-frame, .blk-art-canvas .art-frame {
     width: 100%;
-    height: calc(100dvh - var(--barh, 52px) - var(--footh, 0px));
     display: block;
     border: 0;
   }
-  .blk-art-page .ctx-cap {
+  .blk-art-page .art-frame {
+    height: calc(100dvh - var(--barh, 52px) - var(--footh, 0px));
+  }
+  .blk-art-page .ctx-cap, .blk-art-canvas .ctx-cap {
     margin: 10px 0 0;
   }
-  .blk-art-page .ipins {
+  .blk-art-page .ipins, .blk-art-canvas .ipins {
     margin-top: 12px;
   }
   .dz-prototype {

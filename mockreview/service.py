@@ -751,8 +751,8 @@ def _mention_request(data: Dict[str, Any], review_id: str, wake: Dict[str, Any])
     if not block or block in store.RESERVED_REFS:
         return None
     if block == "proto" and current.get("kind") == "prototype":
-        # A prototype round is one live page: it has no decisions.json and no block to patch, but Hermes edits that
-        # page like any other, so a mention on it opens its activity request too.
+        # A prototype round is one live page: it has no decisions.json and no block to patch (a new round is the only
+        # way to change it), but the pin still shows Hermes working until its reply closes the request.
         target: Any = {"type": "prototype"}
     else:
         try:

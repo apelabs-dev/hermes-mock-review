@@ -2117,22 +2117,24 @@ import {paintAvatar} from './avatar.js';
   // showing, within the caps. A tap can open a pin draft, never send anything. Text and
   // captions are text (textContent), not markup. A page that navigates its own frame away from the block file is reset
   // to it (only the block file answers the probe's ping), a few times, then the frame is dropped.
-  var ART = { min: 80, max: 4000, perSecond: 40, growths: 40, helloWait: 1000, resets: 3, file: /^blocks\/[a-z0-9-]+\.html$/ };
+  var ART = { min: 80, max: 4000, canvasMax: 30000, perSecond: 40, growths: 40, helloWait: 1000, resets: 3, file: /^blocks\/[a-z0-9-]+\.html$/ };
   function artifactBody(r, b) {
     var f = null;
-    var page = b.display === 'page';
+    var page = b.display === 'page', canvas = b.display === 'canvas';   // canvas: full length, inline, no inner scroll
     var fig = h('figure', { class: 'opt ctx-fig art-fig' });
     if (typeof b.file === 'string' && ART.file.test(b.file)) {
-      f = { r: r, vid: b.id, b: b, device: S.width, ctx: 'artifact', alive: false, ghost: null, scale: 1, pageH: 0, count: 0, since: 0, grown: 0, resets: 0, watch: 0, page: page };
+      f = { r: r, vid: b.id, b: b, device: S.width, ctx: 'artifact', alive: false, ghost: null, scale: 1, pageH: 0, count: 0, since: 0, grown: 0, resets: 0, watch: 0, page: page, canvas: canvas };
       var fixed = typeof b.height === 'number';
-      f.iframe = h('iframe', { class: 'art-frame' + (page ? ' art-page-frame' : ''), src: frameUrl(r, b.file),
+      f.iframe = h('iframe', { class: 'art-frame' + (page ? ' art-page-frame' : '') + (canvas ? ' art-canvas-frame' : ''), src: frameUrl(r, b.file),
         title: b.title || 'Artifact ' + b.id, sandbox: 'allow-scripts', allow: 'clipboard-write', referrerpolicy: 'no-referrer', loading: 'lazy' });
       // Page mode ignores `height` and `desktop_width`: it is the page-mode frame, full bleed and viewport height,
-      // with the page scrolling inside it (CSS keeps the height between the sticky header and footer).
+      // with the page scrolling inside it (CSS keeps the height between the sticky header and footer). Canvas ignores
+      // them too: full bleed, as tall as the page itself (it follows the page's own height up to ART.canvasMax), and
+      // it scrolls with the board, so the header and footer stay where they are.
       f.iframe.style.height = page ? 'calc(100dvh - var(--barh, 52px) - var(--footh, 0px))'
-        : (fixed ? num(b.height, ART.min, ART.max) : 120) + 'px';
+        : (fixed && !canvas ? num(b.height, ART.min, ART.max) : 120) + 'px';
       f.iframe.addEventListener('load', function () { artifactLoaded(f); });
-      f.el = page ? h('div', { class: 'art art-page' }, f.iframe)
+      f.el = page || canvas ? h('div', { class: 'art ' + (page ? 'art-page' : 'art-canvas') }, f.iframe)
         : h('div', { class: 'art', style: b.desktop_width ? { maxWidth: b.desktop_width + 'px' } : null }, f.iframe);
       S.frames.push(f);
       fig.appendChild(f.el);
@@ -2148,7 +2150,7 @@ import {paintAvatar} from './avatar.js';
       h('ol', { class: 'ipins', id: 'pins-' + b.id })];
   }
   function renderArtifact(r, b) {   // not a decision: a neutral block, no "mock" framing
-    var el = h('section', { class: 'blk blk-art' + (b.display === 'page' ? ' blk-art-page' : ''), id: 'dz-' + b.id, 'data-id': b.id },
+    var el = h('section', { class: 'blk blk-art' + (b.display === 'page' ? ' blk-art-page' : '') + (b.display === 'canvas' ? ' blk-art-canvas' : ''), id: 'dz-' + b.id, 'data-id': b.id },
       b.title ? h('h2', { text: b.title }) : null, artifactBody(r, b));
     setTimeout(function () { redrawPins(b.id); }, 0);
     return el;
@@ -2260,8 +2262,8 @@ import {paintAvatar} from './avatar.js';
     var rc = f.iframe.getBoundingClientRect(), b = f.b;
     if (d.type === 'hello') {
       f.alive = true;
-      if (!f.page && typeof b.height !== 'number') {   // auto: follow the page's height, within the cap and a bounded number of changes
-        var hh = Math.round(num(d.h, ART.min, ART.max));
+      if (!f.page && (f.canvas || typeof b.height !== 'number')) {   // auto: follow the page's height, within the cap and a bounded number of changes
+        var hh = Math.round(num(d.h, ART.min, f.canvas ? ART.canvasMax : ART.max));
         if (Math.abs(hh - f.pageH) >= 2 && f.grown < ART.growths) { f.grown++; f.pageH = hh; f.iframe.style.height = hh + 'px'; }
       }
       pushArtifact(f); pushPageState(f);
@@ -2277,7 +2279,7 @@ import {paintAvatar} from './avatar.js';
       var target = cleanTarget(d.target);
       var mine = f.ghost = { x: x, y: y }; pushArtifact(f);
       notePop({ title: 'New pin · ' + pinWhat(b, null), where: target ? 'on ' + target.label : wlabel(f.device) + ' · ~' + pct(x) + ', ' + pct(y) + ' of the artifact', isNew: true, target: target,
-        anchor: { x: rc.left + num(d.cx, 0, 4000), y: rc.top + num(d.cy, 0, 4000) }, text: '',
+        anchor: { x: rc.left + num(d.cx, 0, 4000), y: rc.top + num(d.cy, 0, f.canvas ? ART.canvasMax : 4000) }, text: '',
         onClose: function () { if (f.ghost === mine) { f.ghost = null; pushArtifact(f); } },
         onSave: function (text, ta) {
           saveNewThread({ id: newPinId(), block: b.id, option: null, w: f.device, x: x, y: y, ...(target ? {target: target} : {}) }, text, ta);
@@ -2293,13 +2295,13 @@ import {paintAvatar} from './avatar.js';
       }
       var p = S.draft.pins[i];
       if (!p || p.block !== b.id || p.w !== f.device) return;
-      var x = rc.left + num(d.cx, 0, 4000), y = rc.top + num(d.cy, 0, 4000);
+      var x = rc.left + num(d.cx, 0, 4000), y = rc.top + num(d.cy, 0, f.canvas ? ART.canvasMax : 4000);
       if (p.thread && !p.thread.startsWith('tmp:')) {
         T.open(p.thread, {read: false, box: {right: x, top: y}});
         return;
       }
       notePop({ pin: p, title: 'Pin ' + (i + 1) + ' · ' + pinWhat(b, null), where: wlabel(p.w) + ' · ~' + pct(p.x) + ', ' + pct(p.y),
-        anchor: { x: rc.left + num(d.cx, 0, 4000), y: rc.top + num(d.cy, 0, 4000) }, text: p.text,
+        anchor: { x: rc.left + num(d.cx, 0, 4000), y: rc.top + num(d.cy, 0, f.canvas ? ART.canvasMax : 4000) }, text: p.text,
         onSave: function (text) { p.text = text; if (p.thread) T.editThreadFirst(p.thread, text).catch(function () {}); saveDraft(); redrawPins(b.id); },
         onDelete: function () { if (p.thread) T.deleteThreadFirst(p.thread).catch(function () {}); S.draft.pins.splice(i, 1); saveDraft(); MOCKS.forEach(drawPins); redrawPins(b.id); } });
     }
@@ -2412,7 +2414,10 @@ import {paintAvatar} from './avatar.js';
   // read "1".
   // A pin still saving (`tmp:` id) is about to become the next thread, so it shows that number, not a wrong one.
   function pinNo(p, i) { return p && p.thread ? (T.number(p.thread) || nextPinNo()) : i + 1; }
-  function nextPinNo() { return Math.max(S.draft.pins.length, T.threads().length) + 1; }
+  function nextPinNo() {
+    var placed = S.draft.pins.filter(function (q) { return String(q.thread || '').indexOf('tmp:') !== 0; }).length;
+    return Math.max(placed, T.threads().length) + 1;
+  }
   function pinVisible(p) { return !p.thread || !(T.gone(p.thread) || (CFG.hide_resolved_pins && T.resolved(p.thread))); }
   function draftThreadIds() {
     var out = {};

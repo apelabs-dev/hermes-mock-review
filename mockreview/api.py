@@ -582,7 +582,8 @@ def get_feedback(review_id: str, round_n: Optional[int] = None) -> Dict[str, Any
     elif (not guest and res["action"] == "send" and res["kind"] == "decisions" and r.get("feedback")
           and data["status"] == "open" and r["n"] == data["rounds"][-1]["n"]):
         res["next_round"] = SEND_NEXT_ROUND
-    waiting = [q for q in pin_requests if q.get("status") in ("queued", "woken")]
+    # A prototype request has no block to patch (patch_block answers 404 on "proto"); the thread reply closes it.
+    waiting = [q for q in pin_requests if q.get("status") in ("queued", "woken") and q.get("block") != "proto"]
     if waiting:
         ids = ", ".join(f"{q.get('id')} (block {q.get('block')}, rev {q.get('rev', 0)})" for q in waiting)
         pin_step = (f"{len(waiting)} pin fix request(s) are waiting: patch the block in place with "
