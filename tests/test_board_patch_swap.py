@@ -96,7 +96,7 @@ def test_hermes_replies_wear_the_hermes_mark(tall_review, server, chrome):
     b.shows(exists(".tpanel .trow"), "the Comments list never opened")
     b.press(".tpanel .trow")
     b.shows(exists(".tcomment .hermes-mark"), "Hermes's reply carries no Hermes mark")
-    assert b.js(has_text(".tcomment .hermes-mark", "Hermes"))
+    assert b.js(has_text(".tcomment .hermes-mark", "agent"))
     assert b.js(exists(".tcomment .av.hermes"))
     names = json.loads(b.js("JSON.stringify(Array.from(document.querySelectorAll('.tcomment .cname'), "
                             "function (n) { return n.textContent; }))"))

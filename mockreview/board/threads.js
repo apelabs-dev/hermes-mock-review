@@ -43,8 +43,9 @@ export function createThreads(opts) {
   // Hermes itself: stored under the fixed agent actor, shown with its own avatar and a small mark like the guest one.
   function isHermes(actor, kind) { return kind === 'hermes' || actor === 'hermes' || /^agent:/.test(String(actor || '')); }
   function hermesMark(cls) {
-    return h('span', {class: (cls || 'faint') + ' hermes-mark', text: 'Hermes', title: 'Hermes',
-      'aria-label': 'Hermes'});
+    // The name already says Hermes, so the mark says what kind of author it is.
+    return h('span', {class: (cls || 'faint') + ' hermes-mark', text: 'agent', title: 'Hermes, an AI agent',
+      'aria-label': 'Hermes, an AI agent'});
   }
   function initials(name) {
     var words = String(name || '?').replace(/[^\p{L}\p{N} ]/gu, ' ').trim().split(/\s+/);
