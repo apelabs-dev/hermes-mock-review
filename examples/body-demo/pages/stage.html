@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Settings screen: three layouts</title>
+<style>
+:root{--stage:#12161a;--stage2:#1a2026;--sline:#2c353e;--stext:#eef1f4;--smuted:#aeb7c1;--sok:#6fdcb0;--swarn:#f5b454;
+  --bg:#f6f2e8;--surface:#fffdf7;--surface2:#efe9db;--line:#e1d9c6;--text:#1f1d18;--muted:#5b5649;--accent:#1f6f5a;--onacc:#fff}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:var(--stage);color:var(--stext);font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased;overflow:hidden}
+button,input{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid #8fd8c2;outline-offset:2px}
+.ic{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+
+/* the stage: a pannable board of frames */
+.canvas{position:absolute;inset:48px 0 0 0;overflow:auto;
+  background-image:radial-gradient(rgba(174,183,193,.38) 1px,transparent 1.3px);background-size:22px 22px}
+.world{transform-origin:0 0;display:flex;gap:72px;align-items:flex-start;width:max-content;padding:28px 48px 40px}
+.board{width:var(--bw,400px);display:grid;gap:12px}
+.bh{display:flex;align-items:baseline;gap:4px 10px;flex-wrap:wrap;background:var(--stage);width:max-content;max-width:100%;padding:3px 8px 3px 0;border-radius:6px}
+.bh h2{font-size:17px;font-weight:650}
+.bh span{color:var(--smuted);font-size:13px}
+.tools{position:absolute;left:0;right:0;top:0;height:48px;z-index:5;display:flex;align-items:center;justify-content:space-between;gap:8px;
+  background:var(--stage2);border-bottom:1px solid var(--sline);padding:0 12px 0 20px}
+.tools .zoom{display:flex;gap:2px}
+.tools button{display:inline-flex;gap:6px;align-items:center;background:none;border:0;border-radius:8px;padding:6px 10px;min-height:36px;
+  font-size:13px;color:var(--smuted)}
+.tools button[aria-pressed=true]{background:#2a343d;color:var(--stext)}
+.tally{padding:0;font-size:13px;color:var(--smuted);font-variant-numeric:tabular-nums}
+
+/* marks under each frame */
+.markrow{display:grid;gap:8px}
+.marks{display:flex;gap:6px;flex-wrap:wrap}
+.marks button{display:inline-flex;gap:7px;align-items:center;background:var(--stage2);border:1px solid var(--sline);border-radius:10px;
+  padding:7px 12px;min-height:40px;font-size:14px;color:var(--smuted)}
+.marks button:hover{color:var(--stext);border-color:#46535f}
+.marks button[aria-pressed=true]{color:var(--stext);font-weight:600}
+.marks button[data-status=approve][aria-pressed=true]{border-color:var(--sok);background:rgba(111,220,176,.14)}
+.marks button[data-status=change][aria-pressed=true]{border-color:var(--swarn);background:rgba(245,180,84,.14)}
+.marks button[data-status=skip][aria-pressed=true]{border-color:#8794a1;background:rgba(174,183,193,.14)}
+.markrow input{width:100%;background:var(--stage2);border:1px solid var(--sline);border-radius:10px;padding:9px 12px;min-height:40px;font-size:14px;color:var(--stext)}
+.markrow input::placeholder{color:#8e99a5}
+
+/* the screen under review: one settings screen, drawn three ways */
+.phone{background:var(--bg);color:var(--text);border-radius:22px;overflow:hidden;height:540px;display:flex;flex-direction:column;
+  box-shadow:0 22px 44px -18px rgba(0,0,0,.65);border:1px solid #000}
+.appbar{display:flex;align-items:center;gap:10px;padding:14px 18px;background:var(--surface);border-bottom:1px solid var(--line)}
+.appbar h3{font-size:17px;font-weight:650}
+.scroll{flex:1;overflow:auto;padding:6px 18px 28px;-webkit-mask-image:linear-gradient(#000 calc(100% - 26px),transparent);mask-image:linear-gradient(#000 calc(100% - 26px),transparent)}
+.grp{padding-top:16px}
+.grp h4{font-size:14px;font-weight:650;display:flex;gap:8px;align-items:center;margin-bottom:6px}
+.grp h4 .ic{color:var(--accent);width:17px;height:17px}
+.set{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:11px 0;border-bottom:1px solid var(--line);min-height:48px}
+.set:last-child{border-bottom:0}
+.set small{display:block;color:var(--muted);font-size:13px;line-height:1.3}
+.btn{background:var(--surface);border:1px solid #cdc4ad;border-radius:9px;padding:7px 12px;font-size:14px;min-height:36px;color:var(--text)}
+.sw{position:relative;flex:none}
+.sw input{position:absolute;opacity:0;inset:0;width:100%;height:100%;cursor:pointer}
+.sw i{display:block;width:44px;height:26px;border-radius:999px;background:#bdb5a0;position:relative;transition:background-color .2s}
+.sw i:after{content:"";position:absolute;left:3px;top:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:transform .2s cubic-bezier(.2,.8,.2,1)}
+.sw input:checked+i{background:var(--accent)}
+.sw input:checked+i:after{transform:translateX(18px)}
+.sw input:focus-visible+i{outline:2px solid var(--accent);outline-offset:2px}
+.seg{display:inline-flex;background:var(--surface2);border:1px solid var(--line);border-radius:10px;padding:2px}
+.seg button{background:none;border:0;border-radius:8px;padding:6px 11px;font-size:14px;min-height:34px;color:var(--muted)}
+.seg button[aria-pressed=true]{background:var(--surface);color:var(--text);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.14)}
+
+/* layout B: tabs */
+.tabs{display:flex;background:var(--surface);border-bottom:1px solid var(--line);padding:0 8px}
+.tabs button{background:none;border:0;border-bottom:2px solid transparent;padding:12px 10px 10px;font-size:14px;color:var(--muted);min-height:44px}
+.tabs button[aria-selected=true]{color:var(--text);font-weight:600;border-bottom-color:var(--accent)}
+.panel[hidden]{display:none}
+
+/* layout C: two panes */
+.panes{flex:1;display:grid;grid-template-columns:116px 1fr;min-height:0}
+.nav{background:var(--surface);border-right:1px solid var(--line);padding:8px 6px;display:grid;align-content:start;gap:2px}
+.nav button{display:flex;gap:8px;align-items:center;background:none;border:0;border-radius:8px;padding:9px 8px;font-size:14px;color:var(--muted);text-align:left;min-height:42px}
+.nav button .ic{width:16px;height:16px}
+.nav button[aria-selected=true]{background:var(--surface2);color:var(--text);font-weight:600}
+.panes .scroll{padding:6px 14px 28px}
+
+@media (max-width:700px){
+  .world{flex-direction:column;gap:40px;padding:20px 16px 80px;width:100%}
+  .board{width:100%}
+  .phone{height:560px}
+  .tools .zoom{display:none}
+  .tools{padding-left:16px}
+}
+@media (prefers-reduced-motion:reduce){.sw i,.sw i:after{transition:none}}
+</style></head><body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <symbol id="i-look" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3v18"/><path d="M12 3a9 9 0 0 1 0 18" fill="currentColor" stroke="none" opacity=".35"/></symbol>
+  <symbol id="i-sync" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14-4L4 9"/><path d="M4 4v5h5"/><path d="M4 13a8 8 0 0 0 14 4l2-2"/><path d="M20 20v-5h-5"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 17V11a6 6 0 0 1 12 0v6l2 2H4Z"/><path d="M10 21a2 2 0 0 0 4 0"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></symbol>
+  <symbol id="i-skip" viewBox="0 0 24 24"><path d="m5 4 10 8-10 8Z"/><path d="M19 5v14"/></symbol>
+  <symbol id="i-fit" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
+  <symbol id="i-one" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M10 10l2-1v6"/></symbol>
+</defs></svg>
+
+<div class="canvas" id="canvas"><div class="world" id="world">
+
+  <article class="board" data-mr-part="layout-list">
+    <div class="bh"><h2>One long list</h2><span>Every setting on one page</span></div>
+    <div class="phone">
+      <div class="appbar"><h3>Settings</h3></div>
+      <div class="scroll">
+        <section class="grp"><h4><svg class="ic"><use href="#i-look"/></svg>Appearance</h4>
+          <div class="set"><span>Look</span><div class="seg" role="group" aria-label="Look"><button aria-pressed="true">Paper</button><button aria-pressed="false">Slate</button><button aria-pressed="false">Meadow</button></div></div>
+          <div class="set"><span>Text size</span><div class="seg" role="group" aria-label="Text size"><button aria-pressed="false">S</button><button aria-pressed="true">M</button><button aria-pressed="false">L</button></div></div>
+          <div class="set"><span>Note previews<small>Show a line under each title</small></span><label class="sw"><input type="checkbox" checked aria-label="Note previews"><i></i></label></div></section>
+        <section class="grp"><h4><svg class="ic"><use href="#i-sync"/></svg>Sync</h4>
+          <div class="set"><span>Sync on Wi-Fi only<small>Last synced 2 minutes ago</small></span><label class="sw"><input type="checkbox" checked aria-label="Sync on Wi-Fi only"><i></i></label></div>
+          <div class="set"><span>Sync now</span><button class="btn">Sync</button></div></section>
+        <section class="grp"><h4><svg class="ic"><use href="#i-user"/></svg>Account</h4>
+          <div class="set"><span>Signed in<small>sam@example.test</small></span><button class="btn">Sign out</button></div></section>
+        <section class="grp"><h4><svg class="ic"><use href="#i-bell"/></svg>Alerts</h4>
+          <div class="set"><span>Reminders</span><label class="sw"><input type="checkbox" checked aria-label="Reminders"><i></i></label></div>
+          <div class="set"><span>Weekly summary<small>Sent on Mondays</small></span><label class="sw"><input type="checkbox" aria-label="Weekly summary"><i></i></label></div></section>
+      </div>
+    </div>
+    <div class="markrow" data-mark-group="layout-list">
+      <div class="marks" role="group" aria-label="Mark One long list">
+        <button data-status="approve" aria-pressed="false"><svg class="ic"><use href="#i-check"/></svg>Approve</button>
+        <button data-status="change" aria-pressed="false"><svg class="ic"><use href="#i-edit"/></svg>Change</button>
+        <button data-status="skip" aria-pressed="false"><svg class="ic"><use href="#i-skip"/></svg>Skip</button></div>
+      <input data-note type="text" maxlength="280" placeholder="Note on this layout" aria-label="Note on One long list"></div>
+  </article>
+
+  <article class="board" data-mr-part="layout-tabs">
+    <div class="bh"><h2>Tabs</h2><span>One group at a time</span></div>
+    <div class="phone">
+      <div class="appbar"><h3>Settings</h3></div>
+      <div class="tabs" role="tablist" aria-label="Settings groups">
+        <button role="tab" aria-selected="true" data-tab="look">Look</button><button role="tab" aria-selected="false" data-tab="sync">Sync</button>
+        <button role="tab" aria-selected="false" data-tab="account">Account</button><button role="tab" aria-selected="false" data-tab="alerts">Alerts</button></div>
+      <div class="scroll">
+        <div class="panel" data-panel="look" role="tabpanel">
+          <div class="set"><span>Look</span><div class="seg" role="group" aria-label="Look"><button aria-pressed="true">Paper</button><button aria-pressed="false">Slate</button><button aria-pressed="false">Meadow</button></div></div>
+          <div class="set"><span>Text size</span><div class="seg" role="group" aria-label="Text size"><button aria-pressed="false">S</button><button aria-pressed="true">M</button><button aria-pressed="false">L</button></div></div>
+          <div class="set"><span>Note previews<small>Show a line under each title</small></span><label class="sw"><input type="checkbox" checked aria-label="Note previews"><i></i></label></div></div>
+        <div class="panel" data-panel="sync" role="tabpanel" hidden>
+          <div class="set"><span>Sync on Wi-Fi only<small>Last synced 2 minutes ago</small></span><label class="sw"><input type="checkbox" checked aria-label="Sync on Wi-Fi only"><i></i></label></div>
+          <div class="set"><span>Sync now</span><button class="btn">Sync</button></div></div>
+        <div class="panel" data-panel="account" role="tabpanel" hidden>
+          <div class="set"><span>Signed in<small>sam@example.test</small></span><button class="btn">Sign out</button></div></div>
+        <div class="panel" data-panel="alerts" role="tabpanel" hidden>
+          <div class="set"><span>Reminders</span><label class="sw"><input type="checkbox" checked aria-label="Reminders"><i></i></label></div>
+          <div class="set"><span>Weekly summary<small>Sent on Mondays</small></span><label class="sw"><input type="checkbox" aria-label="Weekly summary"><i></i></label></div></div>
+      </div>
+    </div>
+    <div class="markrow" data-mark-group="layout-tabs">
+      <div class="marks" role="group" aria-label="Mark Tabs">
+        <button data-status="approve" aria-pressed="false"><svg class="ic"><use href="#i-check"/></svg>Approve</button>
+        <button data-status="change" aria-pressed="false"><svg class="ic"><use href="#i-edit"/></svg>Change</button>
+        <button data-status="skip" aria-pressed="false"><svg class="ic"><use href="#i-skip"/></svg>Skip</button></div>
+      <input data-note type="text" maxlength="280" placeholder="Note on this layout" aria-label="Note on Tabs"></div>
+  </article>
+
+  <article class="board" data-mr-part="layout-panes">
+    <div class="bh"><h2>Two panes</h2><span>Groups on the left, detail on the right</span></div>
+    <div class="phone">
+      <div class="appbar"><h3>Settings</h3></div>
+      <div class="panes">
+        <div class="nav" role="tablist" aria-label="Settings groups">
+          <button role="tab" aria-selected="false" data-tab="look"><svg class="ic"><use href="#i-look"/></svg>Look</button>
+          <button role="tab" aria-selected="true" data-tab="sync"><svg class="ic"><use href="#i-sync"/></svg>Sync</button>
+          <button role="tab" aria-selected="false" data-tab="account"><svg class="ic"><use href="#i-user"/></svg>Account</button>
+          <button role="tab" aria-selected="false" data-tab="alerts"><svg class="ic"><use href="#i-bell"/></svg>Alerts</button></div>
+        <div class="scroll">
+          <div class="panel" data-panel="look" role="tabpanel" hidden>
+            <div class="set"><span>Look</span><div class="seg" role="group" aria-label="Look"><button aria-pressed="true">Paper</button><button aria-pressed="false">Slate</button><button aria-pressed="false">Meadow</button></div></div>
+            <div class="set"><span>Text size</span><div class="seg" role="group" aria-label="Text size"><button aria-pressed="false">S</button><button aria-pressed="true">M</button><button aria-pressed="false">L</button></div></div>
+            <div class="set"><span>Note previews<small>A line under each title</small></span><label class="sw"><input type="checkbox" checked aria-label="Note previews"><i></i></label></div></div>
+          <div class="panel" data-panel="sync" role="tabpanel">
+            <div class="set"><span>Wi-Fi only<small>Synced 2 minutes ago</small></span><label class="sw"><input type="checkbox" checked aria-label="Sync on Wi-Fi only"><i></i></label></div>
+            <div class="set"><span>Sync now</span><button class="btn">Sync</button></div></div>
+          <div class="panel" data-panel="account" role="tabpanel" hidden>
+            <div class="set"><span>Signed in<small>sam@example.test</small></span></div>
+            <div class="set"><span>Sign out</span><button class="btn">Go</button></div></div>
+          <div class="panel" data-panel="alerts" role="tabpanel" hidden>
+            <div class="set"><span>Reminders</span><label class="sw"><input type="checkbox" checked aria-label="Reminders"><i></i></label></div>
+            <div class="set"><span>Weekly summary<small>Mondays</small></span><label class="sw"><input type="checkbox" aria-label="Weekly summary"><i></i></label></div></div>
+        </div>
+      </div>
+    </div>
+    <div class="markrow" data-mark-group="layout-panes">
+      <div class="marks" role="group" aria-label="Mark Two panes">
+        <button data-status="approve" aria-pressed="false"><svg class="ic"><use href="#i-check"/></svg>Approve</button>
+        <button data-status="change" aria-pressed="false"><svg class="ic"><use href="#i-edit"/></svg>Change</button>
+        <button data-status="skip" aria-pressed="false"><svg class="ic"><use href="#i-skip"/></svg>Skip</button></div>
+      <input data-note type="text" maxlength="280" placeholder="Note on this layout" aria-label="Note on Two panes"></div>
+  </article>
+
+</div></div>
+
+<div class="tools">
+  <span class="tally" id="tally">0 of 3 marked</span>
+  <div class="zoom" role="group" aria-label="Zoom">
+    <button id="fit" aria-pressed="true"><svg class="ic"><use href="#i-fit"/></svg>Fit</button>
+    <button id="one" aria-pressed="false"><svg class="ic"><use href="#i-one"/></svg>100%</button></div>
+</div>
+
+<script>
+/*MARKS_JS*/
+</script>
+<script>
+(function () {
+  var world = document.getElementById('world'), canvas = document.getElementById('canvas');
+  var fit = document.getElementById('fit'), one = document.getElementById('one'), mode = 'fit';
+
+  /* zoom: scale the world to the window, or show it at 100% */
+  function layout() {
+    var narrow = innerWidth <= 700;
+    world.style.transform = 'none'; world.style.margin = '0';
+    if (narrow) return;
+    var w = world.scrollWidth, h = world.scrollHeight;
+    var s = mode === 'one' ? 1 : Math.min(1, canvas.clientWidth / w, canvas.clientHeight / h);
+    world.style.transform = 'scale(' + s + ')';
+    world.style.marginRight = (w * s - w) + 'px';
+    world.style.marginBottom = (h * s - h) + 'px';
+  }
+  function setMode(m) {
+    mode = m;
+    fit.setAttribute('aria-pressed', m === 'fit'); one.setAttribute('aria-pressed', m === 'one');
+    layout();
+  }
+  fit.onclick = function () { setMode('fit'); };
+  one.onclick = function () { setMode('one'); };
+  addEventListener('resize', layout);
+
+  /* the screens are live: tabs, segmented choices */
+  document.querySelectorAll('.board').forEach(function (board) {
+    var tabs = board.querySelectorAll('[data-tab]'), panels = board.querySelectorAll('[data-panel]');
+    tabs.forEach(function (t) {
+      t.addEventListener('click', function () {
+        tabs.forEach(function (x) { x.setAttribute('aria-selected', x === t); });
+        panels.forEach(function (p) { p.hidden = p.dataset.panel !== t.dataset.tab; });
+      });
+    });
+    board.querySelectorAll('.seg').forEach(function (seg) {
+      seg.querySelectorAll('button').forEach(function (b) {
+        b.addEventListener('click', function () {
+          seg.querySelectorAll('button').forEach(function (x) { x.setAttribute('aria-pressed', x === b); });
+        });
+      });
+    });
+  });
+
+  var total = document.querySelectorAll('[data-mark-group]').length;
+  wireMarks(function (marks) {
+    var n = Object.keys(marks).filter(function (k) { return marks[k].status; }).length;
+    document.getElementById('tally').textContent = n + ' of ' + total + ' marked';
+  });
+  layout();
+})();
+</script>
+</body></html>

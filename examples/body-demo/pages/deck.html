@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Acme Notes: product overview</title>
+<style>
+:root{--ink:#0f1a17;--ink2:#17261f;--paper:#f6f2e8;--paper2:#fffdf7;--line:#d9d1bd;--amber:#e8b04a;--green:#1f6f5a;--deep:#17493c;
+  --on-ink:#f3efe3;--on-ink2:#b9c7bf;--on-paper:#1f1d18;--on-paper2:#55503f}
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-text-size-adjust:100%}
+body{background:var(--ink);color:var(--on-ink);font:18px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+::selection{background:rgba(232,176,74,.35)}
+
+/* a slide is as wide as the page and at least a 16:9 screen tall; the vw is the frame's own width, so nothing feeds back */
+.slide{min-height:max(56.25vw,560px);padding:clamp(40px,6vw,96px) clamp(24px,7vw,120px);display:grid;
+  grid-template-columns:minmax(0,1.05fr) minmax(0,.95fr);gap:clamp(28px,5vw,80px);align-items:center}
+.slide.ink{background:var(--ink)}
+.slide.ink2{background:var(--ink2)}
+.slide.paper{background:var(--paper);color:var(--on-paper)}
+.slide.deep{background:var(--deep)}
+.copy{display:grid;gap:18px;align-content:center}
+h1,h2{font-family:ui-serif,Georgia,"Times New Roman",serif;font-weight:600;line-height:1.04;letter-spacing:-.015em;text-wrap:balance}
+h1{font-size:clamp(52px,9vw,128px)}
+h2{font-size:clamp(34px,5vw,68px)}
+.lead{font-size:clamp(19px,1.9vw,26px);line-height:1.4;max-width:30ch;color:var(--on-ink2)}
+.paper .lead{color:var(--on-paper2)}
+.body{max-width:42ch;color:var(--on-ink2)}
+.paper .body{color:var(--on-paper2)}
+.art{width:100%;height:auto;display:block}
+.slide.solo{grid-template-columns:minmax(0,1fr);justify-items:start}
+
+/* inbox and search drawn in CSS */
+.win{background:var(--paper2);color:var(--on-paper);border-radius:16px;padding:20px;box-shadow:0 30px 60px -28px rgba(0,0,0,.6);display:grid;gap:12px;width:100%;max-width:520px}
+.paper .win{box-shadow:0 26px 50px -28px rgba(31,29,24,.45);border:1px solid var(--line)}
+.cap{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:12px;padding:10px 14px;color:#6d6657;font-size:16px;background:#fff}
+.cap svg,.find svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.note{padding:12px 4px;border-top:1px solid var(--line);display:grid;gap:2px}
+.note b{font-size:16px}
+.note span{font-size:14.5px;color:#5b5649;line-height:1.4}
+.note time{font-size:13px;color:#6d6657;font-variant-numeric:tabular-nums}
+.find{display:flex;align-items:center;gap:10px;border:2px solid var(--green);border-radius:12px;padding:10px 14px;font-size:17px;background:#fff}
+.find svg{color:var(--green)}
+mark{background:#f6dc9a;color:inherit;border-radius:3px;padding:0 2px}
+.count{font-size:14px;color:#5b5649}
+
+.end{display:inline-flex;align-items:center;gap:12px;background:var(--amber);color:#1c1608;border-radius:12px;padding:14px 22px;font-weight:650;font-size:20px;width:max-content;max-width:100%}
+.end svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.small{font-size:16px;color:#cfe0d7}
+
+@media (max-width:760px){
+  .slide{grid-template-columns:minmax(0,1fr);min-height:0;padding:44px 22px 52px;gap:28px;align-items:start}
+  .art{max-width:420px}
+  .end{font-size:18px;padding:12px 18px}
+}
+</style></head><body>
+
+<section class="slide ink" id="title" data-mr-part="slide-title">
+  <div class="copy">
+    <h1>Acme Notes</h1>
+    <p class="lead">Write it down. Find it later.</p>
+  </div>
+  <svg class="art" viewBox="0 0 480 400" role="img" aria-label="A stack of three notes">
+    <g transform="rotate(-7 240 200)"><rect x="90" y="70" width="290" height="230" rx="16" fill="#2a3b33"/></g>
+    <g transform="rotate(4 240 200)"><rect x="100" y="60" width="290" height="230" rx="16" fill="#e8b04a"/></g>
+    <g transform="rotate(-1 240 200)"><rect x="95" y="80" width="290" height="240" rx="16" fill="#f6f2e8"/>
+      <rect x="125" y="116" width="150" height="14" rx="7" fill="#1f1d18"/>
+      <rect x="125" y="152" width="230" height="9" rx="4.5" fill="#bdb5a0"/><rect x="125" y="174" width="210" height="9" rx="4.5" fill="#bdb5a0"/>
+      <rect x="125" y="196" width="180" height="9" rx="4.5" fill="#bdb5a0"/><rect x="125" y="218" width="220" height="9" rx="4.5" fill="#bdb5a0"/>
+      <rect x="125" y="262" width="64" height="26" rx="13" fill="#1f6f5a"/></g>
+  </svg>
+</section>
+
+<section class="slide paper" id="problem" data-mr-part="slide-problem">
+  <div class="copy">
+    <h2>Your notes live in too many places.</h2>
+    <p class="body">A recipe in one app, a meeting in another, a to-do in a chat with yourself. When you need one, you remember writing it and not where.</p>
+  </div>
+  <svg class="art" viewBox="0 0 480 400" role="img" aria-label="Loose slips of paper scattered around">
+    <g transform="rotate(-12 110 90)"><rect x="40" y="40" width="170" height="104" rx="10" fill="#fffdf7" stroke="#d9d1bd"/><rect x="58" y="62" width="90" height="10" rx="5" fill="#1f1d18"/><rect x="58" y="86" width="130" height="7" rx="3.5" fill="#bdb5a0"/><rect x="58" y="104" width="110" height="7" rx="3.5" fill="#bdb5a0"/></g>
+    <g transform="rotate(9 340 120)"><rect x="260" y="70" width="180" height="100" rx="10" fill="#f6dc9a"/><rect x="278" y="92" width="100" height="10" rx="5" fill="#1f1d18"/><rect x="278" y="116" width="140" height="7" rx="3.5" fill="#8a7a45"/><rect x="278" y="134" width="90" height="7" rx="3.5" fill="#8a7a45"/></g>
+    <g transform="rotate(5 140 290)"><rect x="50" y="240" width="190" height="110" rx="10" fill="#cfe3da"/><rect x="68" y="262" width="110" height="10" rx="5" fill="#1f1d18"/><rect x="68" y="286" width="150" height="7" rx="3.5" fill="#5f8576"/><rect x="68" y="304" width="120" height="7" rx="3.5" fill="#5f8576"/></g>
+    <g transform="rotate(-8 350 300)"><rect x="270" y="250" width="170" height="96" rx="10" fill="#fffdf7" stroke="#d9d1bd"/><rect x="288" y="272" width="80" height="10" rx="5" fill="#1f1d18"/><rect x="288" y="296" width="120" height="7" rx="3.5" fill="#bdb5a0"/></g>
+  </svg>
+</section>
+
+<section class="slide ink2" id="inbox" data-mr-part="slide-inbox">
+  <div class="copy">
+    <h2>One inbox for everything you write.</h2>
+    <p class="body">Type it, paste it or share it in from another app. It lands in the same list, newest first, ready to sort later or never.</p>
+  </div>
+  <div class="win" role="img" aria-label="The inbox: a capture bar and three notes">
+    <div class="cap"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Write or paste a note</div>
+    <div class="note"><b>Landlord deposit</b><span>Emailed on 3 March. Returned within 14 days of the move-out date.</span><time>Today</time></div>
+    <div class="note"><b>Tuesday planning</b><span>Agenda: launch checklist, owners for week one, open risks.</span><time>Yesterday</time></div>
+    <div class="note"><b>Bread, simple</b><span>500 g flour, 350 g water, 10 g salt, a pinch of yeast. Overnight.</span><time>Monday</time></div>
+  </div>
+</section>
+
+<section class="slide paper" id="search" data-mr-part="slide-search">
+  <div class="copy">
+    <h2>Find the note, not just the title.</h2>
+    <p class="body">Search reads every word of every note. Type a few words you remember and the matches show up with the line they were found in.</p>
+  </div>
+  <div class="win" role="img" aria-label="Search results for landlord deposit">
+    <div class="find"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>landlord deposit</div>
+    <div class="count">2 notes</div>
+    <div class="note"><b>Move-out checklist</b><span>Photos of every room, then ask the <mark>landlord</mark> when the <mark>deposit</mark> comes back.</span></div>
+    <div class="note"><b>Landlord deposit</b><span>Emailed on 3 March. The <mark>deposit</mark> is returned within 14 days.</span></div>
+  </div>
+</section>
+
+<section class="slide ink" id="offline" data-mr-part="slide-offline">
+  <div class="copy">
+    <h2>Works on the train.</h2>
+    <p class="body">Every edit is saved on your device first. When you are back online the change log syncs, and a note changed in two places keeps both versions.</p>
+  </div>
+  <svg class="art" viewBox="0 0 480 360" role="img" aria-label="A phone saves edits, then syncs to a laptop when online">
+    <rect x="30" y="110" width="110" height="170" rx="18" fill="#f6f2e8"/><rect x="50" y="140" width="70" height="9" rx="4.5" fill="#1f1d18"/><rect x="50" y="164" width="70" height="6" rx="3" fill="#bdb5a0"/><rect x="50" y="180" width="54" height="6" rx="3" fill="#bdb5a0"/><circle cx="85" cy="255" r="8" fill="#1f6f5a"/>
+    <rect x="345" y="120" width="110" height="130" rx="10" fill="#f6f2e8"/><rect x="330" y="252" width="140" height="12" rx="6" fill="#b9c7bf"/><rect x="365" y="146" width="70" height="9" rx="4.5" fill="#1f1d18"/><rect x="365" y="170" width="70" height="6" rx="3" fill="#bdb5a0"/><rect x="365" y="186" width="54" height="6" rx="3" fill="#bdb5a0"/>
+    <path d="M150 195h180" stroke="#e8b04a" stroke-width="3" stroke-dasharray="3 9" stroke-linecap="round" fill="none"/>
+    <path d="m322 183 14 12-14 12" stroke="#e8b04a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <text x="85" y="312" text-anchor="middle" fill="#b9c7bf" font-size="16" font-family="system-ui,sans-serif">Saved here first</text>
+    <text x="400" y="312" text-anchor="middle" fill="#b9c7bf" font-size="16" font-family="system-ui,sans-serif">Synced when online</text>
+  </svg>
+</section>
+
+<section class="slide deep solo" id="close" data-mr-part="slide-close">
+  <div class="copy">
+    <h2>Try Acme Notes today.</h2>
+    <p class="lead" style="color:#d4e4dc">Free for one notebook. Pro adds sharing and unlimited history.</p>
+    <span class="end">notes.example.test/start<svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>
+    <p class="small">Questions before then: hello@example.test</p>
+  </div>
+</section>
+
+</body></html>
