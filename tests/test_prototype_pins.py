@@ -120,7 +120,7 @@ def pin_numbers(draft_pins, threads, pin):
     js = ("var S = {draft: {pins: %s}}; var N = %s;\nvar T = {threads: function () { return Object.keys(N).map(function (k) { return {id: k}; }); },"
           " number: function (id) { return N[id] || 0; }};\n%s\nconsole.log(JSON.stringify(pinNo(%s, 0)));"
           % (json.dumps(draft_pins), json.dumps(threads), "".join(p.group(0) for p in parts), json.dumps(pin)))
-    out = subprocess.run([node, "-e", js], capture_output=True, text=True, timeout=30)
+    out = subprocess.run([node, "-e", js], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout)
 
