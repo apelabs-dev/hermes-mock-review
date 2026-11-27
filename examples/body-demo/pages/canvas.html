@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Acme Notes: first-week journey</title>
+<style>
+:root{--bg:#f2ede0;--dot:#cfc6af;--surface:#fffdf7;--line:#ddd4be;--text:#1f1d18;--muted:#5b5649;--accent:#1f6f5a;--onacc:#fff;
+  --warn:#b4531f;--warnbg:#fbe9d9;--ok:#1f6f5a;--okbg:#dcefe6}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:2400px;height:1200px}
+body{position:relative;background:var(--bg);background-image:radial-gradient(var(--dot) 1.4px,transparent 1.8px);background-size:32px 32px;
+  color:var(--text);font:20px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased;overflow:hidden}
+.ic{width:26px;height:26px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+
+.title{position:absolute;left:96px;top:72px;width:1300px;display:grid;gap:14px}
+h1{font:600 64px/1.04 ui-serif,Georgia,serif;letter-spacing:-.015em}
+.title p{color:var(--muted);font-size:24px;max-width:58ch}
+
+.step{position:absolute;top:300px;width:460px;display:grid;gap:20px}
+.step h2{font:600 34px/1.1 ui-serif,Georgia,serif}
+.step .when{color:var(--muted);font-size:19px}
+.s1{left:96px}.s2{left:672px}.s3{left:1248px}.s4{left:1824px}
+
+.screen{background:var(--surface);border:1px solid var(--line);border-radius:22px;padding:24px;display:grid;gap:14px;
+  box-shadow:0 34px 60px -38px rgba(31,29,24,.5);min-height:360px;align-content:start}
+.field{display:flex;align-items:center;gap:12px;border:1px solid var(--line);border-radius:14px;padding:13px 16px;background:#fff;color:#6d6657}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;background:var(--accent);color:var(--onacc);border-radius:14px;padding:14px 20px;font-weight:650}
+.btn.ghost{background:none;color:var(--accent);border:1.5px solid var(--accent)}
+.row{display:grid;gap:2px;padding:12px 4px;border-top:1px solid var(--line)}
+.row b{font-size:19px}.row span{font-size:16.5px;color:var(--muted)}
+.empty{display:grid;gap:10px;justify-items:start;padding:30px 4px;color:var(--muted)}
+.empty svg{width:56px;height:56px;color:var(--dot)}
+.mark{height:10px;border-radius:5px;background:var(--line)}
+
+.note{position:absolute;width:460px;border-radius:18px;padding:18px 22px;display:grid;gap:6px}
+.note b{display:flex;align-items:center;gap:10px;font-size:20px}
+.note p{font-size:18px;line-height:1.4}
+.note.friction{background:var(--warnbg);color:#5c2a0b;top:780px}
+.note.friction svg{color:var(--warn)}
+.note.fix{background:var(--okbg);color:#12372c;top:930px}
+.note.fix svg{color:var(--ok)}
+.n1{left:96px}.n2{left:672px}.n3{left:1248px}.n4{left:1824px}
+
+.links{position:absolute;left:0;top:0;width:2400px;height:1200px;pointer-events:none}
+.links path{fill:none;stroke:#8a8268;stroke-width:3;stroke-dasharray:3 9;stroke-linecap:round}
+.links polygon{fill:#8a8268}
+
+.legend{position:absolute;right:96px;top:84px;display:flex;gap:28px;color:var(--muted);font-size:19px}
+.legend span{display:inline-flex;align-items:center;gap:10px}
+.legend i{width:22px;height:22px;border-radius:7px;display:block}
+</style></head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 3.5 2.8 19.5h18.4z"/><path d="M12 10v4.5M12 17.2v.1"/></symbol>
+  <symbol id="i-ok" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12.4 2.7 2.7L16.2 9.5"/></symbol>
+  <symbol id="i-mail" viewBox="0 0 24 24"><rect x="3" y="5.5" width="18" height="13" rx="2.5"/><path d="m4 7.5 8 6 8-6"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 5 5"/></symbol>
+  <symbol id="i-note" viewBox="0 0 24 24"><path d="M6 3.5h9l4 4v13H6z"/><path d="M15 3.5v4h4M9 12h7M9 15.5h7"/></symbol>
+  <symbol id="i-share" viewBox="0 0 24 24"><circle cx="6" cy="12" r="2.6"/><circle cx="17.5" cy="6" r="2.6"/><circle cx="17.5" cy="18" r="2.6"/><path d="m8.3 10.8 7-3.6M8.3 13.2l7 3.6"/></symbol>
+</svg>
+
+<div class="title">
+  <h1>The first week with Acme Notes</h1>
+  <p>Four moments, what trips people up in each, and what we change. Pan around, zoom into a screen, and pin what is wrong.</p>
+</div>
+<div class="legend"><span><i style="background:var(--warnbg);border:1px solid var(--warn)"></i>Where it hurts</span><span><i style="background:var(--okbg);border:1px solid var(--ok)"></i>What we change</span></div>
+
+<svg class="links" aria-hidden="true">
+  <path d="M560 470 C 610 470, 620 470, 660 470"/><polygon points="672,470 656,462 656,478"/>
+  <path d="M1136 470 C 1186 470, 1196 470, 1236 470"/><polygon points="1248,470 1232,462 1232,478"/>
+  <path d="M1712 470 C 1762 470, 1772 470, 1812 470"/><polygon points="1824,470 1808,462 1808,478"/>
+</svg>
+
+<section class="step s1">
+  <div><h2>Sign up</h2><div class="when">Minute one</div></div>
+  <div class="screen">
+    <div class="field"><svg class="ic"><use href="#i-mail"/></svg>you@example.test</div>
+    <div class="field">Choose a password</div>
+    <div class="field">Confirm password</div>
+    <div class="btn">Create account</div>
+    <div class="mark" style="width:70%"></div>
+  </div>
+</section>
+<section class="step s2">
+  <div><h2>First note</h2><div class="when">Minute five</div></div>
+  <div class="screen">
+    <div class="empty"><svg viewBox="0 0 24 24" class="ic" style="width:56px;height:56px"><use href="#i-note"/></svg>
+      <b style="color:var(--text);font-size:22px">No notes yet</b><span>Start with a blank page or import a file.</span></div>
+    <div class="btn">New note</div>
+    <div class="btn ghost">Import</div>
+  </div>
+</section>
+<section class="step s3">
+  <div><h2>Find it later</h2><div class="when">Day three</div></div>
+  <div class="screen">
+    <div class="field" style="border:2px solid var(--accent);color:var(--text)"><svg class="ic" style="color:var(--accent)"><use href="#i-search"/></svg>invoice</div>
+    <div class="row"><b>Invoice template</b><span>Edited yesterday</span></div>
+    <div class="row"><b>Q3 invoice run</b><span>Edited Mon</span></div>
+    <div class="row"><b>Vendor list</b><span>Edited last week</span></div>
+  </div>
+</section>
+<section class="step s4">
+  <div><h2>Share</h2><div class="when">Day six</div></div>
+  <div class="screen">
+    <div class="row" style="border-top:0"><b>Q3 invoice run</b><span>Only you can see this note</span></div>
+    <div class="field"><svg class="ic"><use href="#i-share"/></svg>Add people by email</div>
+    <div class="btn">Share note</div>
+    <div class="btn ghost">Copy link</div>
+  </div>
+</section>
+
+<aside class="note friction n1"><b><svg class="ic"><use href="#i-warn"/></svg>Asks for the password twice</b><p>A third of people leave on the confirm field.</p></aside>
+<aside class="note friction n2"><b><svg class="ic"><use href="#i-warn"/></svg>Two buttons, no hint</b><p>People do not know which one is the quick start.</p></aside>
+<aside class="note friction n3"><b><svg class="ic"><use href="#i-warn"/></svg>Results show no snippet</b><p>Titles look alike, so people open each one.</p></aside>
+<aside class="note friction n4"><b><svg class="ic"><use href="#i-warn"/></svg>Link is the second choice</b><p>Most people want a link, not an invite.</p></aside>
+
+<aside class="note fix n1"><b><svg class="ic"><use href="#i-ok"/></svg>One field, show password</b><p>Drop the confirm field and add a reveal toggle.</p></aside>
+<aside class="note fix n2"><b><svg class="ic"><use href="#i-ok"/></svg>Open on a blank note</b><p>The empty screen becomes the editor, with import in a menu.</p></aside>
+<aside class="note fix n3"><b><svg class="ic"><use href="#i-ok"/></svg>Show the matching line</b><p>Each result gets one line of context, with the match marked.</p></aside>
+<aside class="note fix n4"><b><svg class="ic"><use href="#i-ok"/></svg>Copy link first</b><p>The link becomes the main button and invites move below it.</p></aside>
+
+</body></html>

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write four small reviews into a folder, one for each way a board body can be built, all about a made-up notes app.
+"""Write five small reviews into a folder, one for each way a board body can be built, all about a made-up notes app.
 
     python examples/body-demo/make_demo.py OUTDIR
     mockreview create --title "Acme Notes: look" --decisions OUTDIR/rows/decisions.json ...
@@ -8,6 +8,7 @@
     stage   an artboard: three layouts of one settings screen side by side, marked one by one in the page
     plan    one long page with four parts, each marked in the page's own data
     deck    an artifact with display "long": six full-width slides as one long page
+    map     an artifact with display "canvas": a journey map on a pan-and-zoom surface
 
 Each review is OUTDIR/<name>/decisions.json; a page lives in OUTDIR/<name>/page/page.html, apart from decisions.json (a
 sibling assets/ folder would be copied into the round). Nothing here is real: Acme Notes does not exist and every address
@@ -158,17 +159,31 @@ def deck_review(src):
     }
 
 
+def map_review(src):
+    return {
+        "intro": "The first week with Acme Notes as a map: four moments, where each one hurts and what changes. Pan and zoom to read it.",
+        "next": "Press Send and I fix the pinned spots, then send the map again.",
+        "blocks": [
+            {"type": "artifact", "id": "map", "title": "Acme Notes: first-week journey", "src": str(src), "display": "canvas",
+             "desktop_width": 2400, "markable": False,
+             "text": "A fixed-size map on a surface you move around: scroll to pan, Ctrl or Cmd with the wheel (or pinch) to zoom, "
+                     "Fit to see all of it. Pin a spot to say what to change."},
+        ],
+    }
+
+
 def write(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
 
 
 def build(out):
-    """Write the four reviews under `out`. Returns {name: path of its decisions.json}."""
+    """Write the five reviews under `out`. Returns {name: path of its decisions.json}."""
     out = Path(out).resolve()
     made = {}
     for name, review, source in (("rows", rows_review(), None), ("stage", stage_review, "stage"),
-                                 ("plan", plan_review, "plan"), ("deck", deck_review, "deck")):
+                                 ("plan", plan_review, "plan"), ("deck", deck_review, "deck"),
+                                 ("map", map_review, "canvas")):
         folder = out / name
         if source:
             src = folder / "page" / "page.html"   # the page lives apart from decisions.json

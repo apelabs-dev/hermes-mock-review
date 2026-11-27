@@ -1,7 +1,7 @@
-"""examples/body-demo builds four reviews, one per board body, and each of them is a valid round.
+"""examples/body-demo builds five reviews, one per board body, and each of them is a valid round.
 
 The bodies: decision rows, a stage of frames, a page with section marks kept in the page's own data, and an artifact with
-display "long". No browser here: the round goes through the same parse and create path as `mockreview create`.
+display "long" and one with display "canvas". No browser here: the round goes through the same parse and create path as `mockreview create`.
 """
 
 import importlib.util
@@ -33,8 +33,8 @@ def _blocks(path):
     return json.loads(path.read_text(encoding="utf-8"))["blocks"]
 
 
-def test_all_four_reviews_are_written_and_validate(built):
-    assert set(built) == {"rows", "stage", "plan", "deck"}
+def test_all_five_reviews_are_written_and_validate(built):
+    assert set(built) == {"rows", "stage", "plan", "deck", "map"}
     for name, path in built.items():
         spec = store.parse_round_spec(decisions=str(path))
         assert spec["decisions"]["blocks"], name
@@ -77,6 +77,15 @@ def test_the_deck_is_a_long_page_of_six_slides(built):
     assert not block.get("markable"), "a markable artifact sits in the document column; a long page is full width"
     html = (built["deck"].parent / "page" / "page.html").read_text(encoding="utf-8")
     assert len(re.findall(r'<section class="slide', html)) == 6
+
+
+def test_the_map_is_a_canvas_with_a_fixed_world(built):
+    (block,) = store.parse_round_spec(decisions=str(built["map"]))["decisions"]["blocks"]
+    assert block["type"] == "artifact" and block["display"] == "canvas" and block["desktop_width"] == 2400
+    assert not block.get("markable")
+    html = (built["map"].parent / "page" / "page.html").read_text(encoding="utf-8")
+    assert len(re.findall(r'<section class="step', html)) == 4
+    assert "width:2400px" in html.replace(" ", ""), "the page must be as wide as desktop_width"
 
 
 def test_the_demo_is_generic_and_follows_the_craft_floor(built):
