@@ -4,8 +4,12 @@ Delivery is asserted on what the gateway receiver got (`env["receiver"].wakes`),
 """
 
 import json
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 
-from mockreview import service, store, threads
+import pytest
+
+from mockreview import notify, service, store, threads
 from test_mention_wake import (bodies, board, call_tool, pin_requests, plugin_tools, post, tick,  # noqa: F401
                                wake_records)
 
@@ -168,12 +172,13 @@ def test_a_named_reply_drops_a_queued_wake_for_a_comment_present_at_delivery(env
     assert dropped["status"] == "done" and dropped["detail"] == "answered before delivery"
 
 
-def test_a_named_reply_leaves_the_queue_when_delivery_time_is_unknown(env, server, tmp_path):
+def test_a_named_reply_leaves_the_queue_without_evidence_of_visible_comments(env, server, tmp_path):
     rid, tid, first, _ = _deliver_only_first(env, server, tmp_path)
     with store.locked(rid):
         data = store.load(rid)
         wake = data["thread_wakes"][first["comment_id"]]
-        wake.pop("notified_at")
+        # Legacy wakes may have an acknowledgement time, but no record of what the agent could see.
+        wake.pop("comments_before_send", None)
         wake.pop("delivered_at", None)
         store.save(rid, data)
 
@@ -200,3 +205,80 @@ def test_a_named_reply_leaves_a_comment_posted_later_in_the_same_second(env, ser
     assert "error" not in replied, replied
     tick()
     assert [b["text"] for b in bodies(env)] == ["@Hermes first", "@Hermes second"]
+
+
+def _thread_texts(rid, tid):
+    listed = call_tool(plugin_tools(), "mock_review_list_comments", {"review_id": rid})
+    thread = next(t for t in listed["threads"] if t["id"] == tid)
+    return [c["text"] for c in thread["comments"]]
+
+
+def test_a_named_reply_keeps_a_wake_for_a_comment_not_yet_committed(env, server, tmp_path, monkeypatch):
+    rid = board(tmp_path)["id"]
+    tid = _open(server, rid, "@Hermes first", "c1")
+    stamped, resume = Event(), Event()
+    now = threads.now
+
+    def pause_before_write():
+        stamp = now()
+        stamped.set()
+        assert resume.wait(5)
+        return stamp
+
+    with ThreadPoolExecutor(max_workers=1) as pool, monkeypatch.context() as patch:
+        patch.setattr(threads, "now", pause_before_write)
+        second = pool.submit(post, server, rid, "@Hermes second", idem="c2", thread_id=tid)
+        try:
+            assert stamped.wait(5)
+            tick()
+            first, = bodies(env)
+            assert _thread_texts(rid, tid) == ["@Hermes first"]
+        finally:
+            resume.set()
+        code, _, out = second.result(timeout=5)
+        assert code == 200, out
+
+    replied = call_tool(plugin_tools(), "mock_review_reply",
+                        {"thread_id": tid, "text": "First answered.", "request_id": first["request_id"]})
+    assert "error" not in replied, replied
+    tick()
+    tick()
+    assert [b["text"] for b in bodies(env)] == ["@Hermes first", "@Hermes second"]
+
+
+@pytest.mark.parametrize("lose_ack", [False, True], ids=["delayed-ack", "duplicate-ack"])
+def test_a_named_reply_keeps_a_wake_for_a_comment_posted_after_receipt(env, server, tmp_path, monkeypatch, lose_ack):
+    rid = board(tmp_path)["id"]
+    tid = _open(server, rid, "@Hermes first", "c1")
+    request = notify._request
+    first_attempts = []
+
+    def intercept_ack(url, payload, secret, delivery_id, timeout):
+        code, text = request(url, payload, secret, delivery_id, timeout)
+        if payload["text"] == "@Hermes first":
+            first_attempts.append(delivery_id)
+            if len(first_attempts) == 1:
+                assert code == 202
+                assert _thread_texts(rid, tid) == ["@Hermes first"]
+                result, _, out = post(server, rid, "@Hermes second", idem="c2", thread_id=tid)
+                assert result == 200, out
+                if lose_ack:
+                    raise TimeoutError("lost the acknowledgement")
+            else:
+                assert lose_ack and first_attempts == [delivery_id, delivery_id]
+                return 200, '{"status": "duplicate"}'
+        return code, text
+
+    monkeypatch.setattr(notify, "_request", intercept_ack)
+    tick()
+    first, = bodies(env)
+    if lose_ack:
+        # Retry only the first delivery with the same id, as a deduplicating gateway would see it.
+        assert service._deliver_thread_wakes(rid, [first["comment_id"]]) == (True, "HTTP 200 duplicate")
+    replied = call_tool(plugin_tools(), "mock_review_reply",
+                        {"thread_id": tid, "text": "First answered.", "request_id": first["request_id"]})
+    assert "error" not in replied, replied
+    tick()
+    tick()
+    expected = ["@Hermes first"] * (2 if lose_ack else 1) + ["@Hermes second"]
+    assert [b["text"] for b in bodies(env)] == expected

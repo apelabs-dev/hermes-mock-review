@@ -280,11 +280,11 @@ feed has its own cursor, moved by `activity/read`. More shows the open-thread an
 
 An owner's or reviewer's `@Hermes` mention wakes Hermes once per comment. The worker coalesces a burst into one wake
 that names each mention. When Hermes replies with a `request_id`, it settles that request and drops queued wakes on the
-same thread for comments already posted when that wake was delivered. Wakes for later comments stay queued. If the
-delivery time is unknown, nothing extra is dropped. A Hermes reply without a `request_id` or a thread resolution
-drops all queued wakes on that thread for the current round, except a resolution naming a `request_id` leaves the
-queue alone. Dropped wakes close their working chips as "answered before delivery". Wakes already sent or being sent,
-wakes on other threads or older rounds, and the queue after a human reply are left alone.
+same thread for comments that were already visible before its wake was sent. Later comments keep their wakes. If the
+board can't tell what was visible before the wake, nothing extra is dropped. A Hermes reply without a `request_id`
+or a thread resolution drops all queued wakes on that thread for the current round, except a resolution naming a
+`request_id` leaves the queue alone. Dropped wakes close their working chips as "answered before delivery".
+Wakes already sent or being sent, wakes on other threads or older rounds, and the queue after a human reply are left alone.
 Mentions of people do not send notifications. A woken session answers through the plugin's
 `mock_review_list_comments`, `mock_review_reply` and `mock_review_resolve` tools. Its reply and resolve are Hermes's:
 the comment is stored under the fixed agent author `agent:hermes`, shown with the name Hermes, its own avatar and a

@@ -10,7 +10,7 @@ import sqlite3
 import time
 from typing import Any, Dict, Optional
 
-from . import (config, feedback, notify, owner, platforms, sessionwake, settings, store, targets, threads, users,
+from . import (config, db, feedback, notify, owner, platforms, sessionwake, settings, store, targets, threads, users,
                wakeguard)
 from .store import ReviewError
 
@@ -809,7 +809,7 @@ def _set_mention_request(data: Dict[str, Any], request_id: Optional[str], status
 def drop_answered_wakes(review_id: str, thread_id: str, request_id: Optional[str] = None) -> int:
     """Drop the mention wakes for `thread_id` that were queued but not yet sent, once the thread has been answered.
 
-    A reply naming a request only covers comments already present at its wake's delivery. If delivery is unknown,
+    A reply naming a request only covers comments known to be visible before its wake was sent. Without that evidence,
     leave the queue alone. With no request, a reply or resolve covers the whole thread. Dropped records become
     `answered` and their chip requests close with "answered before delivery". A record already sent, one in flight,
     one for another thread and one from an older round are left alone. Returns how many wakes were dropped.
@@ -821,14 +821,13 @@ def drop_answered_wakes(review_id: str, thread_id: str, request_id: Optional[str
             return 0
         round_n = int(data["rounds"][-1]["n"])
         wakes = (data.get("thread_wakes") or {}).values()
-        delivered_at = None
+        visible = None
         if request_id:
             settled = next((w for w in wakes if isinstance(w, dict) and w.get("request_id") == request_id
-                            and w.get("thread_id") == thread_id and w.get("status") == "notified"), {})
-            delivered_at = settled.get("delivered_at")
-            if not isinstance(delivered_at, (int, float)):
-                delivered_at = _parse_iso(settled.get("notified_at"))
-            if delivered_at is None:
+                            and w.get("thread_id") == thread_id and w.get("status") == "notified"
+                            and int(w.get("round") or 0) == round_n), {})
+            visible = settled.get("comments_before_send")
+            if not isinstance(visible, list):
                 return 0
         dropped = 0
         pin_changed = False
@@ -836,14 +835,8 @@ def drop_answered_wakes(review_id: str, thread_id: str, request_id: Optional[str
             if (not isinstance(w, dict) or w.get("status") != "pending_notify" or w.get("thread_id") != thread_id
                     or int(w.get("round") or 0) != round_n or float(w.get("sending_until") or 0) > now):
                 continue
-            if delivered_at is not None:
-                posted_at = w.get("comment_created_at")
-                if not isinstance(posted_at, (int, float)):
-                    # Legacy `at` is floored to a second. Only drop if that whole second precedes delivery.
-                    queued_at = _parse_iso(w.get("at"))
-                    posted_at = queued_at + 1 if queued_at is not None else None
-                if posted_at is None or not posted_at <= delivered_at:
-                    continue
+            if visible is not None and w.get("comment_id") not in visible:
+                continue
             w.update(status="answered", sending_until=0.0, last_error=None, next_attempt=0.0)
             pin_changed = _set_mention_request(data, w.get("request_id"), "done", "answered before delivery") or pin_changed
             dropped += 1
@@ -984,7 +977,6 @@ def wake_thread_mention(review_id: str, thread: Dict[str, Any], comment_id: str,
         wake = {"thread_id": thread["id"], "comment_id": comment_id, "round": round_n,
                 "text": comment.get("text") or "", "anchor": anchor, "block": block,
                 "author_name": comment.get("author_name") or "", "at": store.now_iso(),
-                "comment_created_at": comment.get("created_at"),
                 "status": "pending_notify", "attempts": 0, "next_attempt": 0.0, "sending_until": 0.0,
                 "last_error": None, "request_id": None, "by_owner": bool(by_owner), "author": author,
                 "delivery_id": f"mockreview-{review_id}-m-{comment_id}"}
@@ -994,6 +986,19 @@ def wake_thread_mention(review_id: str, thread: Dict[str, Any], comment_id: str,
         store.save(review_id, data, pin_round=round_n if wake["request_id"] else None)
     return {"status": "pending_notify", "notified": False,
             "detail": "queued: the worker tick delivers it", "delivery_id": wake["delivery_id"]}
+
+
+def _comments_before_send(wakes: "list[Dict[str, Any]]") -> "dict[str, list[str]]":
+    """Snapshot committed comments, including ones whose mention wake has not been queued yet."""
+    try:
+        conn = db.connect()
+        if not conn.in_transaction:
+            return {tid: [row["id"] for row in conn.execute(
+                "SELECT id FROM comments WHERE thread_id = ? AND deleted_at IS NULL", (tid,))]
+                    for tid in {w["thread_id"] for w in wakes}}
+    except (OSError, sqlite3.Error):
+        log.warning("could not snapshot comments before sending a mention wake", exc_info=True)
+    return {}
 
 
 def _deliver_thread_wakes(review_id: str, comment_ids: "list[str]",
@@ -1128,12 +1133,12 @@ def _deliver_thread_wakes(review_id: str, comment_ids: "list[str]",
             state = newest["pin_fix"] = {}
         _stamp_wake(data, state, now)
         store.save(review_id, data, pin_round=round_n if pin_changed else None)
+    visible = _comments_before_send(picked)
     try:
         ok, msg = notify.send(payload, delivery_id)
     except Exception as e:
         log.exception("mention wake send raised for %s", review_id)
         ok, msg = False, f"mention wake send raised: {e}"
-    delivered_at = time.time() if ok else None   # keep subsecond ordering, before waiting for the review lock
     with store.locked(review_id):
         data = store.load(review_id)
         wakes = data.get("thread_wakes") or {}
@@ -1147,9 +1152,13 @@ def _deliver_thread_wakes(review_id: str, comment_ids: "list[str]",
             w["delivery_id"] = delivery_id
         changed = False
         if ok:
+            # A duplicate may refer to an earlier send whose acknowledgement was lost. Its original snapshot is
+            # unknown; neither this attempt's snapshot nor the acknowledgement time proves what the agent saw.
+            if msg.endswith(" duplicate") or msg.startswith("duplicate "):
+                visible = {}
             for w in current:
-                w.update(status="notified", notified_at=store.now_iso(), delivered_at=delivered_at,
-                         last_error=None, next_attempt=0.0)
+                w.update(status="notified", notified_at=store.now_iso(), last_error=None, next_attempt=0.0,
+                         comments_before_send=visible.get(w.get("thread_id")))
                 changed = _set_mention_request(data, w.get("request_id"), "woken") or changed
             log.info("mention wake delivered for %s comments %s (%s)",
                      review_id, ", ".join(comment_ids), msg)
