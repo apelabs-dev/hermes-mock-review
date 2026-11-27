@@ -249,7 +249,7 @@ BLOCK_TYPES = ("text", "recap", "decision", "cards", "callout", "mock", "table",
 ID_BLOCKS = ("decision", "mock", "question", "piece", "defaults", "artifact")   # one id namespace (recaps join it via the clash check)
 MAX_ARTIFACT_HTML = 2 * 1024 * 1024      # an artifact's own page, inline; media is bundled in later (bundle.py) under its caps
 ARTIFACT_HEIGHT = (80, 4000)
-ARTIFACT_DISPLAYS = ("frame", "page", "long")   # frame: a card; page: one viewport tall, scrolls inside; long: full length, inline
+ARTIFACT_DISPLAYS = ("frame", "page", "long", "canvas")
 # The meta CSP of every artifact page. The page runs with an opaque origin (sandbox="allow-scripts", no
 # allow-same-origin) and can load nothing but its own inline code and data:/blob: media: no network, no frames.
 ARTIFACT_CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; "
@@ -516,10 +516,12 @@ def _tone(v: Any, where: str, default: Optional[str] = None) -> str:
     return v
 
 
-def _width(b: Dict[str, Any], where: str) -> int:
-    dw = b.get("desktop_width") or settings.get("desktop_width")
-    if isinstance(dw, bool) or not isinstance(dw, int) or not 320 <= dw <= 1920:
-        raise ReviewError(f"{where}: desktop_width must be 320-1920 px")
+def _width(b: Dict[str, Any], where: str, *, canvas: bool = False) -> int:
+    dw = b["desktop_width"] if canvas else b.get("desktop_width") or settings.get("desktop_width")
+    max_width = 8000 if canvas else 1920
+    if isinstance(dw, bool) or not isinstance(dw, int) or not 320 <= dw <= max_width:
+        reason = " (a canvas page is a fixed-size world, so it may be up to 8000 px wide)" if canvas else " (only a canvas may go above 1920 px)"
+        raise ReviewError(f"{where}: desktop_width must be 320-{max_width} px{reason}")
     return dw
 
 
@@ -664,15 +666,16 @@ def _artifact(b: Dict[str, Any], where: str) -> Dict[str, Any]:
     if height != "auto" and (isinstance(height, bool) or not isinstance(height, int) or not lo <= height <= hi):
         raise ReviewError(f"{where}: artifact height must be {lo}-{hi} px or \"auto\"")
     out["height"] = height
-    out["desktop_width"] = _width(b, where) if b.get("desktop_width") is not None else None
+
     markable = b.get("markable", False)
     if not isinstance(markable, bool):
         raise ReviewError(f"{where}: artifact markable must be true or false")
     out["markable"] = markable
     display = b.get("display", "frame")
     if display not in ARTIFACT_DISPLAYS:
-        raise ReviewError(f"{where}: artifact display must be \"frame\", \"page\" or \"long\"")
+        raise ReviewError(f"{where}: artifact display must be \"frame\", \"page\", \"long\" or \"canvas\"")
     out["display"] = display
+    out["desktop_width"] = _width(b, where, canvas=display == "canvas") if b.get("desktop_width") is not None else None
     return out
 
 

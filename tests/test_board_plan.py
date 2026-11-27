@@ -12,7 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = (ROOT / 'mockreview/board/board.js').read_text(encoding='utf-8')
 NAMES = ['h', 'append', 'paras', 'entryKind', 'capCustom', 'isResolved', 'gateState', 'progressLine', 'isMarkableBlock',
          'groupBlocks', 'approveRestIds', 'groupHasBulk', 'gateIcon', 'endLine', 'icon', 'updateGate', 'gateReason', 'gateTitle', 'renderGate', 'updateSendbar', 'cleanMarks', 'payload', 'renderQuestion', 'renderPiece',
-         'renderSettled', 'renderRecapNote', 'renderAsked', 'renderNotesAnswered', 'renderBlock', 'savedCopy', 'markEmpty', 'submittedFeedback', 'watchWindowMs',
+         'renderSettled', 'renderRecapNote', 'renderAsked', 'renderNotesAnswered', 'renderBlock', 'artifactDisplayClass',
+         'savedCopy', 'markEmpty', 'submittedFeedback', 'watchWindowMs',
          'newPinId', 'uuid', 'isEl', 'closestOf', 'num', 'scrollPoint', 'docPoint', 'pct', 'sectionOf', 'sectionRef',
          'canvasBox', 'canvasClick', 'nextPinNo']
 

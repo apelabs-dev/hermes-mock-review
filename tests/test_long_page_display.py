@@ -48,7 +48,7 @@ def _open(chrome, server, data, width=1440, height=900):
     return b
 
 
-def test_the_validator_accepts_long_and_names_the_three_displays(tmp_path):
+def test_the_validator_accepts_long_and_names_the_displays(tmp_path):
     def spec(display):
         d = tmp_path / display
         d.mkdir()
@@ -61,7 +61,7 @@ def test_the_validator_accepts_long_and_names_the_three_displays(tmp_path):
         assert blocks[0]["display"] == display
     with pytest.raises(ReviewError) as e:
         spec("stage")
-    assert '"frame", "page" or "long"' in str(e.value), e.value
+    assert '"frame", "page", "long" or "canvas"' in str(e.value), e.value
 
 
 def test_a_long_page_is_as_tall_as_its_page_and_a_frame_is_still_capped(env, server, tmp_path, chrome):

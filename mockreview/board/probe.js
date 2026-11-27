@@ -129,8 +129,19 @@ import {LIVE, CONTROL, controlOf, presses, anchorFor, cleanTarget, surface, inst
   } };
   try { Object.defineProperty(window, 'mockreview', { value: hook, writable: false, configurable: false, enumerable: false }); } catch (e) {}
 
-  function post(m) { budget(); out.push(Date.now()); m.__mockreview = 1; try { if (P) P.postMessage(m, '*'); } catch (e) {} }
+  var canvas = false, wheelPending = null, wheelFrame = 0, middle = null, canvasSpaceDown = false;
+  var canvasCount = 0, canvasSince = 0;
+  function post(m) {
+    if (m.type === 'canvas-wheel' || m.type === 'canvas-key') {
+      var now = performance.now();
+      if (now - canvasSince >= 1000) { canvasSince = now; canvasCount = 0; }
+      if (++canvasCount > 144 && !(m.key === ' ' && !m.down)) return;
+    } else { budget(); out.push(Date.now()); }
+    m.__mockreview = 1;
+    try { if (P) P.postMessage(m, '*'); } catch (e) {}
+  }
   function size() {
+    if (canvas) return { w: innerWidth, h: Math.min(30000, Math.round(pageHeight())) };
     var d = document.documentElement, b = bodyOf();
     return { w: Math.max(d.scrollWidth, b ? b.scrollWidth : 0, 1), h: Math.max(d.scrollHeight, b ? b.scrollHeight : 0, 1) };
   }
@@ -261,8 +272,12 @@ import {LIVE, CONTROL, controlOf, presses, anchorFor, cleanTarget, surface, inst
       b.style.borderRadius = (z / 2) + 'px ' + (z / 2) + 'px ' + (z / 2) + 'px ' + Math.round(3 * k) + 'px';
       b.style.borderWidth = Math.max(2, Math.round(2 * k)) + 'px';
       b.style.fontSize = Math.round(12 * k) + 'px'; b.style.lineHeight = (z - 2 * Math.max(2, Math.round(2 * k))) + 'px';
-      b.style.left = (p.detached && p.target ? p.target.doc.x : p.x * s.w) + 'px';
-      b.style.top = (p.detached && p.target ? p.target.doc.y : p.y * s.h) + 'px';
+      var ax = p.detached && p.target ? p.target.doc.x : p.x * s.w;
+      var ay = p.detached && p.target ? p.target.doc.y : p.y * s.h;
+      b.style.left = ax + 'px';
+      b.style.top = ay + 'px';
+      // A marker hangs above its anchor; too close to the page's top edge it would be clipped, so it hangs below.
+      if (ay < z + 2) { b.style.marginTop = '0px'; b.style.borderRadius = Math.round(3 * k) + 'px ' + (z / 2) + 'px ' + (z / 2) + 'px ' + (z / 2) + 'px'; }
       b.setAttribute('data-i', String(p.i));
       b.addEventListener('click', function (e) {
         e.preventDefault(); e.stopPropagation();
@@ -288,6 +303,62 @@ import {LIVE, CONTROL, controlOf, presses, anchorFor, cleanTarget, surface, inst
     return pathOf(e).some(function (el) { return el instanceof Element && Element.prototype.matches.call(el, CONTROL); });
   }
   function pinning(e) { return comment && !fromUs(e) && !live(e); }
+
+  function flushCanvasWheel() {
+    var d = wheelPending;
+    wheelPending = null;
+    if (canvas && d) post(d);
+  }
+  function queueCanvasWheel(e, dx, dy, ctrl, meta, drag) {
+    // Don't merge a pan with a zoom when a modifier changes between adjacent events.
+    if (wheelPending && ((wheelPending.ctrlKey || wheelPending.metaKey) !== (ctrl || meta) || wheelPending.drag !== !!drag)) flushCanvasWheel();
+    var p = wheelPending || (wheelPending = {type: 'canvas-wheel', deltaX: 0, deltaY: 0});
+    p.deltaX = num(p.deltaX + dx, -1200, 1200); p.deltaY = num(p.deltaY + dy, -1200, 1200);
+    p.ctrlKey = ctrl; p.metaKey = meta; p.drag = !!drag; p.clientX = e.clientX; p.clientY = e.clientY;
+    if (!wheelFrame) wheelFrame = requestAnimationFrame(function () { wheelFrame = 0; flushCanvasWheel(); });
+  }
+  function canvasWheel(e) {
+    if (!e.isTrusted) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    var mode = e.deltaMode, unit = mode === 1 ? 16 : mode === 2 ? innerHeight : 1;
+    queueCanvasWheel(e, e.deltaX * unit, e.deltaY * unit, e.ctrlKey, e.metaKey);
+  }
+  function canvasKeys(e) {
+    var key = e.key, down = e.type === 'keydown';
+    if (!canvas || !e.isTrusted || (key !== ' ' && key !== '+' && key !== '-' && key !== '0' && key !== '1')) return;
+    if (!(key === ' ' && !down && canvasSpaceDown) && (e.isComposing || e.ctrlKey || e.metaKey || e.altKey ||
+        pathOf(e).some(function (n) { return n.isContentEditable || (n instanceof Element && n.matches('input,textarea,select')); }))) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    if (key === ' ') {
+      if (canvasSpaceDown === down) return;
+      canvasSpaceDown = down;
+    }
+    post({type: 'canvas-key', key: key, down: down});
+  }
+  addEventListener('keydown', canvasKeys, true);
+  addEventListener('keyup', canvasKeys, true);
+  addEventListener('blur', function () {
+    if (!canvasSpaceDown) return;
+    canvasSpaceDown = false;
+    post({type: 'canvas-key', key: ' ', down: false});
+  });
+  // The middle press starts inside the iframe. Capture it there and use screen deltas, since the iframe itself moves.
+  addEventListener('pointerdown', function (e) {
+    if (!canvas || !e.isTrusted || e.button !== 1) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    e.target.setPointerCapture(e.pointerId);
+    middle = {id: e.pointerId, x: e.screenX, y: e.screenY};
+  }, true);
+  addEventListener('pointermove', function (e) {
+    if (!middle || e.pointerId !== middle.id || !e.isTrusted || !(e.buttons & 4)) return;
+    e.stopImmediatePropagation();
+    queueCanvasWheel(e, middle.x - e.screenX, middle.y - e.screenY, false, false, true);
+    middle.x = e.screenX; middle.y = e.screenY;
+  }, true);
+  addEventListener('lostpointercapture', function (e) { if (middle && middle.id === e.pointerId) middle = null; }, true);
+  addEventListener('auxclick', function (e) {
+    if (canvas && e.button === 1) { e.preventDefault(); e.stopImmediatePropagation(); }
+  }, true);
 
   // A comment-mode press belongs to the pin, so the page's own handlers never see it. These are window capture listeners
   // and run before any page listener on the document or an element. An artifact page's probe is its first script, so
@@ -327,7 +398,8 @@ import {LIVE, CONTROL, controlOf, presses, anchorFor, cleanTarget, surface, inst
   addEventListener('keydown', function (e) { if (e.key === 'Escape' && comment) post({ type: 'escape' }); });
   // The pin cursor over everything a comment-mode click pins, controls included; LIVE elements keep their own.
   var cursor = document.createElement('style');
-  cursor.textContent = 'html.mr-comment,html.mr-comment *{cursor:crosshair!important}html.mr-comment :is(' + LIVE + '),html.mr-comment :is(' + LIVE + ') *{cursor:auto!important}';
+  cursor.textContent = 'html.mr-canvas{overflow:hidden!important}' +
+    'html.mr-comment,html.mr-comment *{cursor:crosshair!important}html.mr-comment :is(' + LIVE + '),html.mr-comment :is(' + LIVE + ') *{cursor:auto!important}';
   (document.head || document.documentElement).appendChild(cursor);
 
   addEventListener('message', function (e) {
@@ -344,7 +416,14 @@ import {LIVE, CONTROL, controlOf, presses, anchorFor, cleanTarget, surface, inst
     } else if (d.cmd === 'state') {
       comment = !!d.comment;
       if (!comment && anchors) anchors.clearHover();
-      k = 1 / num(d.scale, 0.2, 1);
+      var canvasNext = artifactPage && d.canvas === true;
+      if (canvasNext !== canvas) {
+        canvas = canvasNext;
+        document.documentElement.classList.toggle('mr-canvas', canvas);
+        if (canvas) addEventListener('wheel', canvasWheel, {capture: true, passive: false});
+        else removeEventListener('wheel', canvasWheel, true);
+      }
+      k = 1 / (canvas ? num(d.scale, 0.15, 2.5) : num(d.scale, 0.2, 1));
       document.documentElement.classList.toggle('mr-comment', comment);
       pins = (Array.isArray(d.pins) ? d.pins : []).slice(0, 60).map(function (p) {
         return { i: num(p.i, -1, 99) | 0, n: num(p.n, 0, 99) | 0, x: num(p.x, 0, 1), y: num(p.y, 0, 1), ghost: !!p.ghost, thread: typeof p.thread === 'string' ? p.thread : '', detached: !!p.detached,
@@ -353,7 +432,7 @@ import {LIVE, CONTROL, controlOf, presses, anchorFor, cleanTarget, surface, inst
           ...(cleanTarget(p.target) ? {target: cleanTarget(p.target)} : {}) };
       });
       draw(); if (anchors) anchors.schedule();
-    } else if (d.cmd === 'focus') {
+    } else if (d.cmd === 'focus' && !canvas) {
       var p = pins.filter(function (q) { return q.i === d.i; })[0];
       if (!p) return;
       var s = size();
@@ -380,11 +459,27 @@ import {LIVE, CONTROL, controlOf, presses, anchorFor, cleanTarget, surface, inst
     anchors = surface(bodyOf(), host, {enabled: function () { return comment; },
       box: function () { var s = size(); return {left: -scrollX, top: -scrollY, width: s.w, height: s.h}; },
       pins: function () { return pins; }, draw: function () { draw(); post({type: 'positions', pins: pins.map(function (p) { return {i: p.i, x: p.x, y: p.y, detached: !!p.detached, doc: p.target ? p.target.doc : null}; })}); } });
-    if (window.ResizeObserver) { sizeObserver = new ResizeObserver(changed); sizeObserver.observe(document.documentElement); }
+    if (window.ResizeObserver) {
+      sizeObserver = new ResizeObserver(changed);
+      sizeObserver.__seen = new Set();
+      // A canvas follows its page even when only a child's overflow grows or shrinks.
+      [document.documentElement, bodyOf()].concat(bodyOf() ? Array.prototype.slice.call(bodyOf().children, 0, 40) : [])
+        .forEach(function (n) { if (n) { sizeObserver.observe(n); sizeObserver.__seen.add(n); } });
+    }
     addEventListener('load', hello);
     hello();
   }
-  function changed() { clearTimeout(t); t = setTimeout(function () { hello(); if (pins.length) draw(); }, 120); }
+  function changed() {
+    clearTimeout(t);
+    t = setTimeout(function () {
+      hello();
+      if (pins.length) { draw(); if (anchors) anchors.schedule(); }
+      if (canvas && window.ResizeObserver) {
+        [document.documentElement, bodyOf()].concat(bodyOf() ? Array.prototype.slice.call(bodyOf().children, 0, 40) : [])
+          .forEach(function (n) { if (n && !sizeObserver.__seen.has(n)) { try { sizeObserver.observe(n); sizeObserver.__seen.add(n); } catch (e) {} } });
+      }
+    }, 120);
+  }
   addEventListener('pagehide', function () { if (anchors) anchors.dispose(); clearTimeout(t); if (sizeObserver) sizeObserver.disconnect(); });
   if (bodyOf()) boot(); else addEventListener('DOMContentLoaded', boot, { once: true });
 })();
