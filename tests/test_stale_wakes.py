@@ -5,7 +5,7 @@ Delivery is asserted on what the gateway receiver got (`env["receiver"].wakes`),
 
 import json
 
-from mockreview import service, threads
+from mockreview import service, store, threads
 from test_mention_wake import (bodies, board, call_tool, pin_requests, plugin_tools, post, tick,  # noqa: F401
                                wake_records)
 
@@ -127,4 +127,76 @@ def test_an_answer_naming_its_request_leaves_a_later_queued_wake(env, server, tm
 
     assert sorted(w["status"] for w in wake_records(rid).values()) == ["notified", "pending_notify"]
     assert service.retry_thread_wakes(rid, now=1e12) == 1
+    assert [b["text"] for b in bodies(env)] == ["@Hermes first", "@Hermes second"]
+
+
+def _deliver_only_first(env, server, tmp_path):
+    rid = board(tmp_path)["id"]
+    tid = _open(server, rid, "@Hermes first", "c1")
+    code, _, out = post(server, rid, "@Hermes second", idem="c2", thread_id=tid)
+    assert code == 200, out
+    second = json.loads(out)["comment"]["id"]
+    assert _statuses(rid) == ["pending_notify", "pending_notify"]
+
+    # Due wakes normally coalesce. Put the second on a retry delay so only the first is delivered.
+    with store.locked(rid):
+        data = store.load(rid)
+        data["thread_wakes"][second]["next_attempt"] = 1e12
+        store.save(rid, data)
+    tick()
+    first, = bodies(env)
+    assert [m["text"] for m in first["mentions"]] == ["@Hermes first"]
+    with store.locked(rid):
+        data = store.load(rid)
+        data["thread_wakes"][second]["next_attempt"] = 0.0
+        store.save(rid, data)
+    return rid, tid, first, second
+
+
+def test_a_named_reply_drops_a_queued_wake_for_a_comment_present_at_delivery(env, server, tmp_path):
+    rid, tid, first, second = _deliver_only_first(env, server, tmp_path)
+
+    replied = call_tool(plugin_tools(), "mock_review_reply",
+                        {"thread_id": tid, "text": "Both answered.", "request_id": first["request_id"]})
+    assert "error" not in replied, replied
+    tick()
+    tick()
+    assert [b["text"] for b in bodies(env)] == ["@Hermes first"]
+    requests = pin_requests(rid)
+    assert requests[first["request_id"]]["status"] == "done"
+    dropped = next(q for q in requests.values() if q["comment_id"] == second)
+    assert dropped["status"] == "done" and dropped["detail"] == "answered before delivery"
+
+
+def test_a_named_reply_leaves_the_queue_when_delivery_time_is_unknown(env, server, tmp_path):
+    rid, tid, first, _ = _deliver_only_first(env, server, tmp_path)
+    with store.locked(rid):
+        data = store.load(rid)
+        wake = data["thread_wakes"][first["comment_id"]]
+        wake.pop("notified_at")
+        wake.pop("delivered_at", None)
+        store.save(rid, data)
+
+    replied = call_tool(plugin_tools(), "mock_review_reply",
+                        {"thread_id": tid, "text": "First answered.", "request_id": first["request_id"]})
+    assert "error" not in replied, replied
+    assert pin_requests(rid)[first["request_id"]]["status"] == "done"
+    tick()
+    assert [b["text"] for b in bodies(env)] == ["@Hermes first", "@Hermes second"]
+
+
+def test_a_named_reply_leaves_a_comment_posted_later_in_the_same_second(env, server, tmp_path, monkeypatch):
+    stamp = store.now_iso()
+    monkeypatch.setattr(store, "now_iso", lambda: stamp)
+    rid = board(tmp_path)["id"]
+    tid = _open(server, rid, "@Hermes first", "c1")
+    tick()
+    first, = bodies(env)
+    code, _, out = post(server, rid, "@Hermes second", idem="c2", thread_id=tid)
+    assert code == 200, out
+
+    replied = call_tool(plugin_tools(), "mock_review_reply",
+                        {"thread_id": tid, "text": "First answered.", "request_id": first["request_id"]})
+    assert "error" not in replied, replied
+    tick()
     assert [b["text"] for b in bodies(env)] == ["@Hermes first", "@Hermes second"]
