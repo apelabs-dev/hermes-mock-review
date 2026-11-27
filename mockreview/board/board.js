@@ -1062,7 +1062,12 @@ import {paintAvatar} from './avatar.js';
     var f = frameFor(ev.source);
     if (!f) return;
     if (f.ctx === 'proto') return protoMessage(f, d);
-    if (f.ctx === 'artifact') return artifactMessage(f, d);
+    if (f.ctx === 'artifact') {
+      // A pin's y is a fraction of the page the probe measured, and hello carries that page's real height. The frame
+      // is clamped to ART.longMax, so keep the real height here for pin positioning.
+      if (d.type === 'hello') f.pageTrue = Math.round(num(d.h, ART.min, 1000000));
+      return artifactMessage(f, d);
+    }
     if (d.type === 'hello') {
       f.alive = true;
       f.pageH = Math.round(num(d.h, 100, 20000));
@@ -3066,7 +3071,7 @@ import {paintAvatar} from './avatar.js';
     if (!f || !f.long) return null;
     var r = rectOf(f.iframe);
     if (!r || !f.pageH) return null;
-    return r.top + scrollPoint().y + num(p.y, 0, 1) * num(f.pageH, 0, ART.longMax);
+    return r.top + scrollPoint().y + num(p.y, 0, 1) * num(f.pageTrue || f.pageH, 0, 1000000);
   }
   function focusLongPin(p) {   // true when p is on a long page and the board was scrolled toward it
     var y = longPinDocY(p);

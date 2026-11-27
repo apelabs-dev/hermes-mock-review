@@ -27,6 +27,11 @@ section{height:1500px;box-sizing:border-box;padding:24px;border-bottom:1px solid
 </style></head><body><section id="s1">One</section><section id="s2">Two</section>
 <section id="s3">Three</section><section id="s4">Four</section></body></html>"""
 
+# The same four sections grown to 7750 px each: a 31 000 px page, past the 30 000 px long-page cap. The frame is clamped
+# to the cap while a pin's y stays a fraction of the whole page.
+HUGE = TALL.replace("height:1500px", "height:7750px")
+HUGE_H = 31000
+
 
 def _review(tmp_path, blocks):
     d = tmp_path / "dec"
@@ -148,6 +153,13 @@ def _pin_viewport_y(block):
             "return r.top + p.y*r.height})()" % (DRAFT, json.dumps(block), block))
 
 
+def _pin_viewport_y_of_page(block, page_h, index=0):
+    """The same, with the page's real height when the frame is capped below it (a > 30 000 px long page)."""
+    return ("(function(){var p=(%s).pins.filter(p=>p.block===%s)[%d];"
+            "var r=document.querySelector('#dz-%s iframe').getBoundingClientRect();"
+            "return r.top + p.y*%d})()" % (DRAFT, json.dumps(block), index, block, page_h))
+
+
 def test_a_markable_long_page_and_page_are_full_bleed_and_a_markable_frame_is_not(env, server, tmp_path, chrome):
     """A markable artifact keeps its decision row but must break out of the column exactly like a plain one."""
     data = _review(tmp_path, [
@@ -186,14 +198,16 @@ def test_a_markable_long_page_and_page_are_full_bleed_and_a_markable_frame_is_no
 
 
 def test_a_pin_list_row_brings_a_far_long_page_pin_into_view(env, server, tmp_path, chrome):
-    """A long page has no inner scroll: the pin's row must scroll the board to the pin, and a frame must not change."""
+    """A long page has no inner scroll: the pin's row must scroll the board to the pin; frame and page must not change."""
     data = _review(tmp_path, [
         {"type": "artifact", "id": "cv", "title": "Long page", "html": TALL, "display": "long"},
         {"type": "artifact", "id": "fr", "title": "Frame", "html": TALL},
+        {"type": "artifact", "id": "pg", "title": "Page", "html": TALL, "display": "page"},
     ])
     b = Board(chrome, f"{server}/r/{data['id']}/", width=1440, height=900,
               wait="!!document.querySelector('#dz-cv iframe.art-frame') && "
-                   "!!document.querySelector('#dz-fr iframe.art-frame')")
+                   "!!document.querySelector('#dz-fr iframe.art-frame') && "
+                   "!!document.querySelector('#dz-pg iframe.art-frame')")
     b.review = data
     assert b.until("document.querySelector('#dz-cv iframe').getBoundingClientRect().height>5000", timeout=20)
     b.press("#comment-toggle")
@@ -220,6 +234,16 @@ def test_a_pin_list_row_brings_a_far_long_page_pin_into_view(env, server, tmp_pa
     assert b.until("!!document.querySelector('.popover.tpop')", timeout=10)
     time.sleep(0.5)   # a scroll, if one were started, would have moved by now
     assert b.js("scrollY") == 0, "a frame pin's row must not scroll the board"
+
+    # A page is unchanged too: its own frame scrolls inside, so the board stays where it is.
+    _add_pin(b, "pg", 200, "top of the page")
+    b.js("window.scrollTo(0, 0)")
+    b.cdp.pump(0.3)
+    assert b.js("scrollY") == 0
+    b.press("#pins-pg .pin-row")
+    assert b.until("!!document.querySelector('.popover.tpop')", timeout=10)
+    time.sleep(0.5)
+    assert b.js("scrollY") == 0, "a page pin's row must not scroll the board"
 
 
 def _reload_with_threadless_pin(b, block, page_y):
@@ -269,6 +293,36 @@ def test_a_pin_list_row_brings_a_threadless_far_long_page_pin_into_view(env, ser
         assert b.js("scrollY") > 1000
     finally:
         b.cdp.call("Page.removeScriptToEvaluateOnNewDocument", {"identifier": seed["identifier"]}, session=b.sid)
+
+
+def test_a_pin_list_row_brings_a_pin_into_view_on_a_page_over_the_long_page_cap(env, server, tmp_path, chrome):
+    """A 31 000 px page: the frame is capped at 30 000 px, but a pin's y is a fraction of the whole page, so the row
+    must scale by the height the probe reported; with the capped height, pins at 15 000 and 25 000 land off screen."""
+    data = _review(tmp_path, [{"type": "artifact", "id": "cv", "title": "Long page", "html": HUGE, "display": "long"}])
+    b = Board(chrome, f"{server}/r/{data['id']}/", width=1440, height=900,
+              wait="!!document.querySelector('#dz-cv iframe.art-frame')")
+    b.review = data
+    assert b.until("document.querySelector('#dz-cv iframe').getBoundingClientRect().height>29500", timeout=30)
+    b.press("#comment-toggle")
+    assert b.until("document.querySelector('#comment-toggle').getAttribute('aria-pressed')==='true'")
+    _add_pin(b, "cv", 15000, "lower third")
+    _add_pin(b, "cv", 25000, "near the bottom")
+    assert b.until("document.querySelectorAll('#pins-cv li').length===2", timeout=10)
+
+    for row, page_y in ((1, 15000), (2, 25000)):
+        if b.js("!!document.querySelector('.popover')"):
+            b.press(".popover .pop-close, .popover .tp-close")
+            assert b.until("!document.querySelector('.popover')", timeout=10)
+        b.js("window.scrollTo(0, 0)")
+        b.cdp.pump(0.3)
+        before = b.js("scrollY")   # near the top of a 31 000 px page (focus may nudge the board a little)
+        assert before < 500, before
+        b.press("#pins-cv li:nth-child(%d) .pin-row" % row)
+        assert b.until("!!document.querySelector('.popover.tpop')", timeout=10), "row %d opened no thread" % row
+        at = _pin_viewport_y_of_page("cv", HUGE_H, row - 1)
+        assert b.until("(function(){var y=%s;return y>0 && y<innerHeight})()" % at, timeout=10), \
+            "the pin at page y %d is at viewport y %s" % (page_y, b.js(at))
+        assert b.js("scrollY") > before + 10000
 
 
 def test_a_marker_tap_far_down_a_long_page_opens_the_editor_near_the_marker(env, server, tmp_path, chrome):
