@@ -138,21 +138,36 @@ import {LIVE, CONTROL, controlOf, presses, anchorFor, cleanTarget, surface, inst
   // never smaller than that viewport, so a frame sized from it can grow and never shrink again. The root element's
   // border box is the page's layout height instead: body margins that collapse at the page edge are inside it and the
   // viewport clamp is not. The body's scrollHeight adds content that escapes its own box, including under a scroll
-  // container (`overflow:auto|hidden`) whose `height:100%` box stays at the viewport size. A body child positioned
-  // absolutely against the initial containing block (no positioned ancestor) escapes both and is counted by its own
-  // bottom edge. A fixed child is not page content and stays out. A page that sizes itself with html/body{height:100%}
-  // or min-height:100vh is as tall as the viewport by its own CSS: it reports the viewport, grows to that, and stays
-  // there rather than shrinking to the smallest frame (and an absolutely positioned box that is not a child of the
-  // body is not counted).
+  // container (`overflow:auto|hidden`) whose `height:100%` box stays at the viewport size. An absolute box laid out
+  // against the initial containing block can escape both and is counted by its own bottom edge. Fixed boxes are not
+  // page content. A page that sizes itself with html/body{height:100%} or min-height:100vh reports the viewport by
+  // design rather than shrinking to the smallest frame.
   function pageHeight() {
     var d = document.documentElement, b = bodyOf();
     var h = d.getBoundingClientRect().height, y = scrollY || d.scrollTop || 0;
     if (b) {
       h = Math.max(h, b.getBoundingClientRect().height, b.scrollHeight);
-      for (var i = 0; i < b.children.length; i++) {
-        var c = b.children[i], cs;
-        try { cs = getComputedStyle(c); } catch (e) { continue; }
-        if (cs.position === 'absolute') h = Math.max(h, c.getBoundingClientRect().bottom + y);
+      function countAbsolute(c, nested) {
+        var cs;
+        try { cs = getComputedStyle(c); } catch (e) { return; }
+        if (cs.position !== 'absolute') return;
+        if (nested) {
+          // offsetParent can report the static body for a viewport-anchored box, as Chrome does.
+          // Leave boxes with their own containing ancestor to the normal scroll/overflow measurement.
+          var p = c.offsetParent;
+          if (p !== null && (p !== b || getComputedStyle(b).position !== 'static')) return;
+        }
+        // A display:none box (including one under a hidden ancestor) has no client rects.
+        if (c.getClientRects().length) h = Math.max(h, c.getBoundingClientRect().bottom + y);
+      }
+      // Keep direct children first. Walk incrementally within a fixed budget, without collecting a huge NodeList.
+      var limit = 4096, i = 0, c;
+      for (c = b.firstElementChild; c && i < limit; c = c.nextElementSibling, i++) countAbsolute(c, false);
+      if (i < limit) {
+        var walk = document.createTreeWalker(b, NodeFilter.SHOW_ELEMENT);
+        for (c = walk.nextNode(); c && i < limit; c = walk.nextNode(), i++) {
+          if (c.parentNode !== b) countAbsolute(c, true);
+        }
       }
     }
     return Math.max(h, 1);

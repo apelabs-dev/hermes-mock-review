@@ -5,8 +5,8 @@ measured `document.documentElement.scrollHeight`, which is never smaller than th
 grow and then never shrink: thousands of pixels of empty page stayed above the footer. These are real-browser tests for
 the measurement in both directions, the two caps, and a page that sizes itself to the viewport.
 
-One block per test where a resize is triggered: an offscreen cross-origin frame has its rendering (and so its
-ResizeObserver callback) throttled by the browser, which is a harness limit, not the board's behaviour.
+Shrink tests usually use one visible block. The two-block audit case also exercises a cross-origin frame below
+the fold, where the browser can throttle rendering and ResizeObserver until the frame is scrolled into view.
 """
 
 import json
@@ -46,7 +46,10 @@ function mrAdd(px) {
 }
 addEventListener('message', function (e) {
   var d = e.data || {};
-  if (typeof d.cut === 'number') mrCut(d.cut);
+  if (typeof d.cut === 'number') {
+    if (d.delay) setTimeout(function () { mrCut(d.cut); }, d.delay);
+    else mrCut(d.cut);
+  }
   if (d.add) mrAdd(d.add);
   if (d.measure) mrReport();
 });
@@ -138,6 +141,29 @@ def test_an_auto_height_frame_follows_its_page_down(env, server, tmp_path, chrom
     assert m["sections"] == 2 and m["bsh"] == 2000, m
 
 
+def test_p2c_a_long_page_and_the_auto_height_frame_below_it_both_shrink(env, server, tmp_path, chrome):
+    data = _review(tmp_path, [
+        {"type": "artifact", "id": "cv", "title": "Long page", "html": _page("cv", 8), "display": "long"},
+        {"type": "artifact", "id": "fr", "title": "Frame", "html": _page("fr", 3, rem=500)},
+    ])
+    b = _open(chrome, server, data, "cv", "fr")
+    assert _near(b, "cv", 8000, timeout=20), _h(b, "cv")
+    assert _near(b, "fr", 3500, timeout=20), _h(b, "fr")
+    assert b.js("document.querySelector('#dz-fr iframe').getBoundingClientRect().top >= innerHeight")
+    # Arm the audit's 2.5 s cut only after both starting heights are established.
+    for block in ("cv", "fr"):
+        _tell(b, block, {"cut": 2, "delay": 2500})
+    assert b.until("window.__mr.cv?.sections === 2 && window.__mr.fr?.sections === 2", timeout=10), \
+        "both artifact pages should have cut to two sections"
+    assert _near(b, "cv", 2000, timeout=5), _h(b, "cv")
+    # Chrome can defer the second frame's resize notification while it is offscreen. Don't require it to stall.
+    b.js("document.querySelector('#dz-fr iframe').scrollIntoView()")
+    assert _near(b, "fr", 2000, timeout=2), "the frame stayed at %s after scrolling" % _h(b, "fr")
+    _settle(b, 0.5)                                    # allow any resize feedback to reach the long page above
+    assert abs(_h(b, "cv") - 2000) <= 2, _h(b, "cv")
+    assert abs(_h(b, "fr") - 2000) <= 2, _h(b, "fr")
+
+
 def test_a_long_page_growth_still_follows_the_page(env, server, tmp_path, chrome):
     data = _review(tmp_path, [{"type": "artifact", "id": "cv", "title": "Long page",
                                "html": _page("cv", 2), "display": "long"}])
@@ -227,6 +253,35 @@ def test_an_absolute_footer_counts_and_a_fixed_one_does_not(env, server, tmp_pat
     assert _near(b, "cv", 6100, timeout=20), "the absolute footer was not the page height: %s" % _h(b, "cv")
     m = _measure(b, "cv")
     assert m["root"] == 2000, m                         # the height came from the absolute child, not the body
+
+
+def test_an_absolute_footer_nested_in_a_static_wrapper_counts(env, server, tmp_path, chrome):
+    tail = (
+        "<div><div style='position:absolute;top:6000px;height:100px'>footer</div>"
+        "<div style='position:absolute;display:none;top:8000px;height:100px'>hidden</div>"
+        "<div style='position:fixed;top:9000px;height:100px'>fixed</div></div>"
+        "<div style='position:relative;height:0;overflow:hidden'>"
+        "<div style='position:absolute;top:10000px;height:100px'>clipped</div></div>"
+    )
+    data = _review(tmp_path, [{"type": "artifact", "id": "cv", "title": "Nested footer", "display": "long",
+                               "html": _page("cv", 2, tail=tail)}])
+    b = _open(chrome, server, data, "cv")
+    assert _near(b, "cv", 6100, timeout=5), "expected 6100 px, got %s px" % _h(b, "cv")
+    m = _measure(b, "cv")
+    assert m["root"] == m["bsh"] == 2000, m
+
+
+def test_the_absolute_footer_scan_is_bounded_on_a_large_dom(env, server, tmp_path, chrome):
+    # A direct child after a huge subtree still counts. The nested footer past the walk budget does not.
+    tail = ("<div>" + "<span></span>" * 8000
+            + "<div style='position:absolute;top:12000px;height:100px'>late nested footer</div></div>"
+            + "<div style='position:absolute;top:6000px;height:100px'>direct footer</div>")
+    data = _review(tmp_path, [{"type": "artifact", "id": "cv", "title": "Large DOM", "display": "long",
+                               "html": _page("cv", 2, tail=tail)}])
+    b = _open(chrome, server, data, "cv")
+    assert _near(b, "cv", 6100, timeout=5), "expected 6100 px, got %s px" % _h(b, "cv")
+    m = _measure(b, "cv")
+    assert m["root"] == m["bsh"] == 2000 and m["dsh"] >= 12100, m
 
 
 def test_the_frame_cap_and_page_mode_are_unchanged(env, server, tmp_path, chrome):
