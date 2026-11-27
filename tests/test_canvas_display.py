@@ -6,6 +6,7 @@ real-browser tests for the geometry, plus a plain test for the validator.
 """
 
 import json
+import time
 
 import pytest
 
@@ -14,6 +15,10 @@ from mockreview.store import ReviewError
 from test_live_round_tool import Board, chrome  # noqa: F401  (chrome is the fixture)
 
 ORIGIN = {"platform": "discord", "chat_id": "test-chat"}
+
+# The draft the board keeps for this round, whichever review it belongs to.
+DRAFT = ("Object.values(localStorage).map(v=>{try{return JSON.parse(v)}catch(_){return null}})"
+         ".find(v=>v&&v.pins&&v.pins.length)")
 
 # Four sections of 1500 px: the document is 6000 px tall, far past the 4000 px cap of a frame.
 TALL = """<!doctype html><html><head><meta charset="utf-8"><style>
@@ -113,3 +118,186 @@ def test_a_pin_far_down_a_canvas_opens_its_composer_near_the_tap(env, server, tm
     assert b.until("!!document.querySelector('.popover')", timeout=10), "the tap opened no pin composer"
     top_of_popover = b.js("document.querySelector('.popover').getBoundingClientRect().top")
     assert abs(top_of_popover - y) < 450, f"composer at {top_of_popover}, tap at {y}"
+
+
+def _add_pin(b, block, page_y, text="Please adjust this"):
+    """Tap the artifact page at `page_y` and save the pin, so the draft holds a thread pin there."""
+    if b.js("!!document.querySelector('.popover')"):
+        b.press(".popover .pop-close, .popover .tp-close")
+        assert b.until("!document.querySelector('.popover')", timeout=10)
+    top = b.js("document.querySelector('#dz-%s iframe').getBoundingClientRect().top + scrollY" % block)
+    b.js("window.scrollTo(0, %d)" % round(top + page_y - 500))
+    b.cdp.pump(0.4)
+    y = b.js("document.querySelector('#dz-%s iframe').getBoundingClientRect().top" % block) + page_y
+    assert 150 < y < 750, y
+    b.click(300, y)
+    assert b.until("!!document.querySelector('.popover textarea')", timeout=10), "the tap opened no pin composer"
+    assert b.js("(document.querySelector('.popover').getAttribute('aria-label')||'').indexOf('New pin')===0"), \
+        b.js("document.querySelector('.popover').getAttribute('aria-label')")
+    b.js("(function(t){t.value=%s;t.dispatchEvent(new Event('input'));return 1})"
+         "(document.querySelector('.popover textarea'))" % json.dumps(text))
+    b.press(".popover .btn-primary")
+    assert b.until("!!(%s)" % DRAFT, timeout=10), "the saved pin never reached the draft"
+    time.sleep(0.3)   # saveDraft writes 250 ms after the change
+
+
+def _pin_viewport_y(block):
+    """A JS expression for where the block's pin page point sits in the viewport: a canvas frame is the page at scale 1."""
+    return ("(function(){var p=(%s).pins.find(p=>p.block===%s);"
+            "var r=document.querySelector('#dz-%s iframe').getBoundingClientRect();"
+            "return r.top + p.y*r.height})()" % (DRAFT, json.dumps(block), block))
+
+
+def test_a_markable_canvas_and_page_are_full_bleed_and_a_markable_frame_is_not(env, server, tmp_path, chrome):
+    """A markable artifact keeps its decision row but must break out of the column exactly like a plain one."""
+    data = _review(tmp_path, [
+        {"type": "artifact", "id": "mc", "title": "Markable canvas", "html": TALL, "display": "canvas", "markable": True},
+        {"type": "artifact", "id": "mp", "title": "Markable page", "html": TALL, "display": "page", "markable": True},
+        {"type": "artifact", "id": "mf", "title": "Markable frame", "html": TALL, "markable": True},
+    ])
+    b = Board(chrome, f"{server}/r/{data['id']}/", width=1440, height=900,
+              wait="!!document.querySelector('#dz-mc iframe.art-frame') && "
+                   "!!document.querySelector('#dz-mp iframe.art-frame') && "
+                   "!!document.querySelector('#dz-mf iframe.art-frame')")
+    b.review = data
+    assert b.until("document.querySelector('#dz-mc iframe').getBoundingClientRect().height>5000", timeout=20)
+    g = json.loads(b.js("""JSON.stringify((function(){
+      function box(sel){var s=document.querySelector(sel),f=s.querySelector('iframe'),r=f.getBoundingClientRect(),
+        a=f.parentElement,cs=getComputedStyle(a);
+        return {cls:s.className,left:r.left,width:r.width,height:r.height,radius:cs.borderRadius,
+                outline:cs.outlineStyle,head:!!s.querySelector('.ihead h3'),decide:!!s.querySelector('.decide'),
+                pins:!!s.querySelector('.ipins')};}
+      return {clientWidth:document.documentElement.clientWidth,mc:box('#dz-mc'),mp:box('#dz-mp'),mf:box('#dz-mf')};})())"""))
+    mc, mp, mf = g["mc"], g["mp"], g["mf"]
+    assert "blk-art-canvas" in mc["cls"], mc
+    assert "blk-art-page" in mp["cls"], mp
+    assert "blk-art-canvas" not in mf["cls"] and "blk-art-page" not in mf["cls"], mf
+    for named in (mc, mp):
+        assert abs(named["left"]) <= 1 and abs(named["width"] - g["clientWidth"]) <= 1, named   # full bleed
+        assert named["radius"] == "0px" and named["outline"].startswith("none"), named
+        assert named["head"] and named["decide"] and named["pins"], named                     # still a decision
+    assert abs(mc["height"] - 6000) <= 2, mc
+    assert mp["height"] > 700, mp
+    assert mf["radius"] == "14px" and mf["width"] < 1000, mf     # the markable frame is unchanged: a card in the column
+    assert abs(mf["height"] - 4000) <= 2, mf
+    b.press("#dz-mc .decide .s-approve")
+    assert b.until("document.querySelector('#dz-mc .ihead .status').textContent === 'Approved'"), \
+        b.js("document.querySelector('#dz-mc .ihead .status').textContent")
+
+
+def test_a_pin_list_row_brings_a_far_canvas_pin_into_view(env, server, tmp_path, chrome):
+    """A canvas has no inner scroll: the pin's row must scroll the board to the pin, and a frame must not change."""
+    data = _review(tmp_path, [
+        {"type": "artifact", "id": "cv", "title": "Canvas", "html": TALL, "display": "canvas"},
+        {"type": "artifact", "id": "fr", "title": "Frame", "html": TALL},
+    ])
+    b = Board(chrome, f"{server}/r/{data['id']}/", width=1440, height=900,
+              wait="!!document.querySelector('#dz-cv iframe.art-frame') && "
+                   "!!document.querySelector('#dz-fr iframe.art-frame')")
+    b.review = data
+    assert b.until("document.querySelector('#dz-cv iframe').getBoundingClientRect().height>5000", timeout=20)
+    b.press("#comment-toggle")
+    assert b.until("document.querySelector('#comment-toggle').getAttribute('aria-pressed')==='true'")
+    _add_pin(b, "cv", 5000, "far down the canvas")
+    assert b.until("document.querySelectorAll('#pins-cv li').length===1", timeout=10)
+
+    b.js("window.scrollTo(0, 0)")
+    b.cdp.pump(0.3)
+    assert b.js("scrollY") == 0
+    b.press("#pins-cv .pin-row")
+    assert b.until("!!document.querySelector('.popover.tpop')", timeout=10), "the row opened no thread"
+    at = _pin_viewport_y("cv")
+    assert b.until("(function(){var y=%s;return y>0 && y<innerHeight})()" % at, timeout=10), \
+        "the pin is at viewport y %s" % b.js(at)
+    assert b.js("scrollY") > 1000
+
+    # A frame is unchanged: a thread pin's row opens the thread and never moves the board.
+    _add_pin(b, "fr", 1000, "up on the frame")
+    b.js("window.scrollTo(0, 0)")
+    b.cdp.pump(0.3)
+    assert b.js("scrollY") == 0
+    b.press("#pins-fr .pin-row")
+    assert b.until("!!document.querySelector('.popover.tpop')", timeout=10)
+    time.sleep(0.5)   # a scroll, if one were started, would have moved by now
+    assert b.js("scrollY") == 0, "a frame pin's row must not scroll the board"
+
+
+def _reload_with_threadless_pin(b, block, page_y):
+    """Reload over a draft holding one pin with no thread.
+
+    No server thread exists for it, so no thread marker is drawn over it: the marker the test taps is the pin's own.
+    The guideline field makes the board write its draft, which is where the key comes from.
+    """
+    b.js("(function(){var t=document.querySelector('.blk-else .field');if(!t)return 0;"
+         "t.value='seed';t.dispatchEvent(new Event('input'));return 1})()")
+    time.sleep(0.35)   # saveDraft writes 250 ms after the change
+    page_h = b.js("document.querySelector('#dz-%s iframe').getBoundingClientRect().height" % block)
+    old = json.loads(b.js(
+        "JSON.stringify((()=>{let e=Object.entries(localStorage).find(([k,v])=>{try{return JSON.parse(v).pins}"
+        "catch(_){return false}});let d=JSON.parse(e[1]);"
+        "d.pins=[{block:%s,option:null,w:'desktop',x:%s,y:%s,text:'far down'}];d.guidelines='';"
+        "return [e[0],JSON.stringify(d)]})())" % (json.dumps(block), round(300 / 1440, 5), round(page_y / page_h, 5))))
+    script = b.cdp.call("Page.addScriptToEvaluateOnNewDocument",
+                        {"source": "localStorage.setItem(%s,%s)" % (json.dumps(old[0]), json.dumps(old[1]))},
+                        session=b.sid)
+    b.cdp.call("Page.reload", session=b.sid)
+    return script
+
+
+def test_a_pin_list_row_brings_a_threadless_far_canvas_pin_into_view(env, server, tmp_path, chrome):
+    """A pin whose thread never reached the server takes the same row path: scroll the board before the flash."""
+    data = _review(tmp_path, [{"type": "artifact", "id": "cv", "title": "Canvas", "html": TALL, "display": "canvas"}])
+    b = Board(chrome, f"{server}/r/{data['id']}/", width=1440, height=900,
+              wait="!!document.querySelector('#dz-cv iframe.art-frame')")
+    b.review = data
+    assert b.until("document.querySelector('#dz-cv iframe').getBoundingClientRect().height>5000", timeout=20)
+    seed = _reload_with_threadless_pin(b, "cv", 5000)
+    try:
+        assert b.until("document.querySelector('#dz-cv iframe') && "
+                       "document.querySelector('#dz-cv iframe').getBoundingClientRect().height>5000", timeout=30)
+        assert b.until("document.querySelectorAll('#pins-cv li').length===1", timeout=10)
+        b.js("window.scrollTo(0, 0)")
+        b.cdp.pump(0.3)
+        assert b.js("scrollY") == 0
+        b.press("#pins-cv .pin-row")
+        assert b.until("!!document.querySelector('.popover textarea')", timeout=10), "the row opened no pin editor"
+        assert b.js("(document.querySelector('.popover').getAttribute('aria-label')||'').indexOf('Pin 1')===0"), \
+            b.js("document.querySelector('.popover').getAttribute('aria-label')")
+        at = _pin_viewport_y("cv")
+        assert b.until("(function(){var y=%s;return y>0 && y<innerHeight})()" % at, timeout=10), \
+            "the pin is at viewport y %s" % b.js(at)
+        assert b.js("scrollY") > 1000
+    finally:
+        b.cdp.call("Page.removeScriptToEvaluateOnNewDocument", {"identifier": seed["identifier"]}, session=b.sid)
+
+
+def test_a_marker_tap_far_down_a_canvas_opens_the_editor_near_the_marker(env, server, tmp_path, chrome):
+    """The 'pin' message from an existing marker is clamped like the first tap: a 4000 px clamp puts the editor ~1000 px away."""
+    data = _review(tmp_path, [{"type": "artifact", "id": "cv", "title": "Canvas", "html": TALL, "display": "canvas"}])
+    b = Board(chrome, f"{server}/r/{data['id']}/", width=1440, height=900,
+              wait="!!document.querySelector('#dz-cv iframe.art-frame')")
+    b.review = data
+    assert b.until("document.querySelector('#dz-cv iframe').getBoundingClientRect().height>5000", timeout=20)
+    seed = _reload_with_threadless_pin(b, "cv", 5200)
+    try:
+        assert b.until("document.querySelector('#dz-cv iframe') && "
+                       "document.querySelector('#dz-cv iframe').getBoundingClientRect().height>5000", timeout=30)
+        assert b.until("document.querySelectorAll('#pins-cv li').length===1", timeout=10)
+        time.sleep(0.5)   # the probe redraws its markers from the state the board pushes after load
+        info = json.loads(b.js("""JSON.stringify((function(){var p=(%s).pins[0],
+          r=document.querySelector('#dz-cv iframe').getBoundingClientRect();
+          return {y:p.y,w:p.x,top:r.top+scrollY,h:r.height};})())""" % DRAFT))
+        b.js("window.scrollTo(0, %d)" % round(info["top"] + info["y"] * info["h"] - 500))
+        b.cdp.pump(0.4)
+        top = b.js("document.querySelector('#dz-cv iframe').getBoundingClientRect().top")
+        tap_y = top + info["y"] * info["h"] - 14          # the middle of the 28 px marker
+        tap_x = info["w"] * b.js("document.querySelector('#dz-cv iframe').getBoundingClientRect().width") + 14
+        assert 300 < tap_y < 700, tap_y
+        b.click(tap_x, tap_y)
+        assert b.until("!!document.querySelector('.popover textarea')", timeout=10), "the marker tap opened no editor"
+        assert b.js("(document.querySelector('.popover').getAttribute('aria-label')||'').indexOf('Pin 1')===0"), \
+            b.js("document.querySelector('.popover').getAttribute('aria-label')")
+        top_of_popover = b.js("document.querySelector('.popover').getBoundingClientRect().top")
+        assert abs(top_of_popover - tap_y) < 200, f"editor at {top_of_popover}, marker at {tap_y}"
+    finally:
+        b.cdp.call("Page.removeScriptToEvaluateOnNewDocument", {"identifier": seed["identifier"]}, session=b.sid)

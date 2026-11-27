@@ -1942,7 +1942,10 @@ import {paintAvatar} from './avatar.js';
     else if (b.type === 'recap' && b.markable === false) el = renderRecapNote(b);
     else if (!isMarkableBlock(b)) el = null;
     else {
-      el = h('section', { class: 'blk item', id: 'dz-' + b.id, 'data-id': b.id, 'data-kind': b.type });
+      // A markable page or canvas is still a decision (header, decision row, pins list) but it must break out of the
+      // document column exactly like the non-markable one, so it wears the same display class renderArtifact adds.
+      var cls = 'blk item' + (b.type === 'artifact' && (b.display === 'page' || b.display === 'canvas') ? ' blk-art-' + b.display : '');
+      el = h('section', { class: cls, id: 'dz-' + b.id, 'data-id': b.id, 'data-kind': b.type });
       var head = h('div', { class: 'ihead' }, b.tag ? h('span', { class: 'tag', text: b.tag }) : b.type === 'question' ? h('span', { class: 'tag', text: 'Question' }) : null,
         h('h3', { text: b.title || (b.type === 'recap' ? 'Is this record right?' : b.type === 'defaults' ? 'How I read the rest' : b.id.toUpperCase()) }),
         b.revised ? h('span', { class: 'rev', text: b.revised }) : null, h('span', { class: 'status' }));
@@ -2458,7 +2461,7 @@ import {paintAvatar} from './avatar.js';
       list.textContent = '';
       S.draft.pins.forEach(function (p, i) {
         if (p.block !== id || !pinVisible(p)) return;
-        list.appendChild(h('li', null, h('button', { class: 'pin-row', onclick: function () { if (p.thread) T.open(p.thread, {detached: p.detached}); else focusDzPin(i); } },
+        list.appendChild(h('li', null, h('button', { class: 'pin-row', onclick: function () { if (p.thread) { focusCanvasPin(p); T.open(p.thread, {detached: p.detached}); } else focusDzPin(i); } },
           h('span', { class: 'pin-num', text: String(pinNo(p, i)) }),
           h('span', { class: 'pin-body' }, h('span', { class: 'pin-where', text: (p.option ? p.option.toUpperCase() + ' · ' : '') + wlabel(p.w) }), h('span', { class: 'pin-text', text: p.text })))));
       });
@@ -3052,6 +3055,25 @@ import {paintAvatar} from './avatar.js';
         redrawCanvasPins();
       } });
   }
+  // A canvas has no inner scroll, so a pin-list row must bring the pin itself into view by scrolling the board. The
+  // pin's y is a fraction of the artifact page (the probe measured it against the page's full height) and, for a
+  // canvas, the iframe is that page at scale 1: page position = iframe top in document coordinates + y × page height.
+  function artifactFrameFor(p) {
+    return S.frames.filter(function (x) { return x.ctx === 'artifact' && x.b.id === p.block && x.device === p.w; })[0] || null;
+  }
+  function canvasPinDocY(p) {
+    var f = artifactFrameFor(p);
+    if (!f || !f.canvas) return null;
+    var r = rectOf(f.iframe);
+    if (!r || !f.pageH) return null;
+    return r.top + scrollPoint().y + num(p.y, 0, 1) * num(f.pageH, 0, ART.canvasMax);
+  }
+  function focusCanvasPin(p) {   // true when p is on a canvas and the board was scrolled toward it
+    var y = canvasPinDocY(p);
+    if (y === null) return false;
+    window.scrollTo({ top: Math.max(0, Math.round(y - window.innerHeight / 2)), behavior: 'smooth' });
+    return true;
+  }
   function focusDzPin(i) {
     var p = S.draft.pins[i]; if (!p) return;
     if (p.w !== S.width && widths().indexOf(p.w) >= 0) { S.width = p.w; render(); setTimeout(function () { focusDzPin(i); }, 300); return; }
@@ -3066,7 +3088,7 @@ import {paintAvatar} from './avatar.js';
     if (p.block === 'proto') { var fr = S.frames[0]; if (fr && fr.ctx === 'proto') try { fr.iframe.contentWindow.postMessage({ __mockreview: 1, cmd: 'focus', i: i }, '*'); } catch (e) {} return; }
     var af = S.frames.filter(function (x) { return x.ctx === 'artifact' && x.b.id === p.block; })[0];
     if (af) {
-      af.iframe.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (!focusCanvasPin(p)) af.iframe.scrollIntoView({ behavior: 'smooth', block: 'center' });
       try { af.iframe.contentWindow.postMessage({ __mockreview: 1, cmd: 'focus', i: i }, '*'); } catch (e) {}
       return;
     }
