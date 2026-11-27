@@ -249,7 +249,7 @@ BLOCK_TYPES = ("text", "recap", "decision", "cards", "callout", "mock", "table",
 ID_BLOCKS = ("decision", "mock", "question", "piece", "defaults", "artifact")   # one id namespace (recaps join it via the clash check)
 MAX_ARTIFACT_HTML = 2 * 1024 * 1024      # an artifact's own page, inline; media is bundled in later (bundle.py) under its caps
 ARTIFACT_HEIGHT = (80, 4000)
-ARTIFACT_DISPLAYS = ("frame", "page", "canvas")   # frame: a card; page: one viewport tall, scrolls inside; canvas: full length, inline
+ARTIFACT_DISPLAYS = ("frame", "page", "long")   # frame: a card; page: one viewport tall, scrolls inside; long: full length, inline
 # The meta CSP of every artifact page. The page runs with an opaque origin (sandbox="allow-scripts", no
 # allow-same-origin) and can load nothing but its own inline code and data:/blob: media: no network, no frames.
 ARTIFACT_CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; "
@@ -671,7 +671,7 @@ def _artifact(b: Dict[str, Any], where: str) -> Dict[str, Any]:
     out["markable"] = markable
     display = b.get("display", "frame")
     if display not in ARTIFACT_DISPLAYS:
-        raise ReviewError(f"{where}: artifact display must be \"frame\", \"page\" or \"canvas\"")
+        raise ReviewError(f"{where}: artifact display must be \"frame\", \"page\" or \"long\"")
     out["display"] = display
     return out
 

@@ -1,7 +1,7 @@
 """examples/body-demo builds four reviews, one per board body, and each of them is a valid round.
 
 The bodies: decision rows, a stage of frames, a page with section marks kept in the page's own data, and an artifact with
-display "canvas". No browser here: the round goes through the same parse and create path as `mockreview create`.
+display "long". No browser here: the round goes through the same parse and create path as `mockreview create`.
 """
 
 import importlib.util
@@ -71,10 +71,10 @@ def test_stage_and_page_keep_their_marks_in_the_page_not_on_the_block(built, nam
         assert f'data-mr-part="{"part-" if name == "plan" else ""}{part}"' in html, part
 
 
-def test_the_deck_is_a_canvas_of_six_slides(built):
+def test_the_deck_is_a_long_page_of_six_slides(built):
     (block,) = store.parse_round_spec(decisions=str(built["deck"]))["decisions"]["blocks"]
-    assert block["type"] == "artifact" and block["display"] == "canvas"
-    assert not block.get("markable"), "a markable artifact sits in the document column; a canvas is full width"
+    assert block["type"] == "artifact" and block["display"] == "long"
+    assert not block.get("markable"), "a markable artifact sits in the document column; a long page is full width"
     html = (built["deck"].parent / "page" / "page.html").read_text(encoding="utf-8")
     assert len(re.findall(r'<section class="slide', html)) == 6
 

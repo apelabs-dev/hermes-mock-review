@@ -1,6 +1,6 @@
 """An artifact frame sized from its own page follows the page down when the page shrinks.
 
-`display: "canvas"` and an auto-height artifact frame are as tall as the page's own content. Until this fix the probe
+`display: "long"` and an auto-height artifact frame are as tall as the page's own content. Until this fix the probe
 measured `document.documentElement.scrollHeight`, which is never smaller than the frame's own viewport, so a frame could
 grow and then never shrink: thousands of pixels of empty page stayed above the footer. These are real-browser tests for
 the measurement in both directions, the two caps, and a page that sizes itself to the viewport.
@@ -16,7 +16,7 @@ from mockreview import store
 from test_live_round_tool import Board, chrome  # noqa: F401  (chrome is the fixture)
 
 ORIGIN = {"platform": "discord", "chat_id": "test-chat"}
-ART_MIN, ART_MAX, CANVAS_MAX = 80, 4000, 30000
+ART_MIN, ART_MAX, LONG_MAX = 80, 4000, 30000
 
 # 1000 px sections. The page can lose sections (`cut`) or append one (`add`) on a message from the test, and it reports
 # its own content measurements back, so an assertion can tell the frame height from the page's own height.
@@ -106,15 +106,15 @@ def _settle(board, seconds):
         board.cdp.pump(max(0.05, min(0.2, end - time.monotonic())))
 
 
-def test_a_canvas_follows_its_page_down(env, server, tmp_path, chrome):
-    data = _review(tmp_path, [{"type": "artifact", "id": "cv", "title": "Canvas",
-                               "html": _page("cv", 8), "display": "canvas"}])
+def test_a_long_page_follows_its_page_down(env, server, tmp_path, chrome):
+    data = _review(tmp_path, [{"type": "artifact", "id": "cv", "title": "Long page",
+                               "html": _page("cv", 8), "display": "long"}])
     b = _open(chrome, server, data, "cv")
     assert b.until("(function(){var f=document.querySelector('#dz-cv iframe');"
                    "return !!f && f.getBoundingClientRect().height > 7000})()", timeout=20), _h(b, "cv")
     assert _measure(b, "cv")["sections"] == 8
     _tell(b, "cv", {"cut": 2})                          # all but two sections go: 2000 px of content
-    assert _near(b, "cv", 2000, timeout=5.0), "the canvas stayed at %s" % _h(b, "cv")
+    assert _near(b, "cv", 2000, timeout=5.0), "the long page stayed at %s" % _h(b, "cv")
     m = _measure(b, "cv")
     assert m["sections"] == 2 and m["bsh"] == 2000, m
     assert abs(m["root"] - 2000) <= 2, m                # the page's own box is 2000, not the old 8000 viewport
@@ -134,13 +134,13 @@ def test_an_auto_height_frame_follows_its_page_down(env, server, tmp_path, chrom
     assert m["sections"] == 2 and m["bsh"] == 2000, m
 
 
-def test_a_canvas_growth_still_follows_the_page(env, server, tmp_path, chrome):
-    data = _review(tmp_path, [{"type": "artifact", "id": "cv", "title": "Canvas",
-                               "html": _page("cv", 2), "display": "canvas"}])
+def test_a_long_page_growth_still_follows_the_page(env, server, tmp_path, chrome):
+    data = _review(tmp_path, [{"type": "artifact", "id": "cv", "title": "Long page",
+                               "html": _page("cv", 2), "display": "long"}])
     b = _open(chrome, server, data, "cv")
     assert _near(b, "cv", 2000, timeout=20), _h(b, "cv")
     _tell(b, "cv", {"add": 3000})
-    assert _near(b, "cv", 5000, timeout=5.0), "the canvas did not follow the page up: %s" % _h(b, "cv")
+    assert _near(b, "cv", 5000, timeout=5.0), "the long page did not follow the page up: %s" % _h(b, "cv")
     m = _measure(b, "cv")
     assert m["sections"] == 3 and abs(m["root"] - 5000) <= 2, m
 
@@ -156,12 +156,12 @@ def test_a_frame_growth_stops_at_the_frame_cap(env, server, tmp_path, chrome):
     assert m["sections"] == 3 and abs(m["root"] - 5000) <= 2, m
 
 
-def test_a_canvas_stops_at_the_canvas_cap(env, server, tmp_path, chrome):
+def test_a_long_page_stops_at_the_long_page_cap(env, server, tmp_path, chrome):
     data = _review(tmp_path, [{"type": "artifact", "id": "cv", "title": "Huge",
-                               "html": _page("cv", 42), "display": "canvas"}])
+                               "html": _page("cv", 42), "display": "long"}])
     b = _open(chrome, server, data, "cv")
     assert b.until("(function(){var f=document.querySelector('#dz-cv iframe');"
-                   "return !!f && Math.abs(f.getBoundingClientRect().height - %d) <= 2})()" % CANVAS_MAX,
+                   "return !!f && Math.abs(f.getBoundingClientRect().height - %d) <= 2})()" % LONG_MAX,
                    timeout=25), _h(b, "cv")
     m = _measure(b, "cv")
     assert m["root"] >= 42000 and m["dsh"] >= 42000, m
@@ -197,7 +197,7 @@ def test_body_margins_are_part_of_the_page_height(env, server, tmp_path, chrome)
 
 
 def test_an_absolute_footer_counts_and_a_fixed_one_does_not(env, server, tmp_path, chrome):
-    data = _review(tmp_path, [{"type": "artifact", "id": "cv", "title": "Floats", "display": "canvas",
+    data = _review(tmp_path, [{"type": "artifact", "id": "cv", "title": "Floats", "display": "long",
                                "html": _page("cv", 2, tail="<div style='position:absolute;top:6000px;height:100px'>abs</div>"
                                                         "<div style='position:fixed;top:9000px;height:100px'>fixed</div>")}])
     b = _open(chrome, server, data, "cv")

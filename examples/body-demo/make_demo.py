@@ -7,7 +7,7 @@
     rows    decision rows with a mock per option: pick a look (native blocks, no page of your own)
     stage   an artboard: three layouts of one settings screen side by side, marked one by one in the page
     plan    one long page with four parts, each marked in the page's own data
-    deck    an artifact with display "canvas": six full-width slides as one long page
+    deck    an artifact with display "long": six full-width slides as one long page
 
 Each review is OUTDIR/<name>/decisions.json; a page lives in OUTDIR/<name>/page/page.html, apart from decisions.json (a
 sibling assets/ folder would be copied into the round). Nothing here is real: Acme Notes does not exist and every address
@@ -151,7 +151,7 @@ def deck_review(src):
         "intro": "A six-slide overview of Acme Notes, shown as one long page. Scroll through it and pin what you want changed.",
         "next": "Press Send and I fix the pinned slides, then send the deck again.",
         "blocks": [
-            {"type": "artifact", "id": "deck", "title": "Acme Notes: product overview", "src": str(src), "display": "canvas",
+            {"type": "artifact", "id": "deck", "title": "Acme Notes: product overview", "src": str(src), "display": "long",
              "markable": False,
              "text": "Six slides, full width, in order. The page scrolls with the board, so the header and the footer stay in reach."},
         ],

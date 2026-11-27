@@ -608,16 +608,16 @@ figure.ctx-fig { margin-top: 16px; }
 .art-hint { margin: 8px 0 0; font-size: 13px; color: var(--faint); }
 .art-missing { margin: 0; padding: 14px; border-radius: 14px; outline: 1px dashed var(--line); color: var(--muted); font-size: 14px; }
 
-/* an artifact with "display": "page" or "canvas": the same full-bleed frame, breaking out of the document column.
-   A page is one viewport tall and scrolls inside; a canvas is as tall as its own page and scrolls with the board. */
-.blk-art-page, .blk-art-canvas { border-bottom: 0; }
-.blk-art-page .art-fig, .blk-art-canvas .art-fig { margin-left: calc(50% - var(--page-w, 100vw) / 2);
+/* an artifact with "display": "page" or "long": the same full-bleed frame, breaking out of the document column.
+   A page is one viewport tall and scrolls inside; a long page is as tall as its own page and scrolls with the board. */
+.blk-art-page, .blk-art-long { border-bottom: 0; }
+.blk-art-page .art-fig, .blk-art-long .art-fig { margin-left: calc(50% - var(--page-w, 100vw) / 2);
                          margin-right: calc(50% - var(--page-w, 100vw) / 2); margin-top: 10px; }
-.blk-art-page .art, .blk-art-canvas .art { margin: 0; border-radius: 0; outline: 0; background: var(--bg); overflow: hidden; }
-.blk-art-page .art-frame, .blk-art-canvas .art-frame { width: 100%; display: block; border: 0; }
+.blk-art-page .art, .blk-art-long .art { margin: 0; border-radius: 0; outline: 0; background: var(--bg); overflow: hidden; }
+.blk-art-page .art-frame, .blk-art-long .art-frame { width: 100%; display: block; border: 0; }
 .blk-art-page .art-frame { height: calc(100dvh - var(--barh, 52px) - var(--footh, 0px)); }
-.blk-art-page .ctx-cap, .blk-art-canvas .ctx-cap { margin: 10px 0 0; }
-.blk-art-page .ipins, .blk-art-canvas .ipins { margin-top: 12px; }
+.blk-art-page .ctx-cap, .blk-art-long .ctx-cap { margin: 10px 0 0; }
+.blk-art-page .ipins, .blk-art-long .ipins { margin-top: 12px; }
 
 /* prototype round: page mode — the clickable page fills the canvas edge to edge under the bar */
 .dz-prototype { padding: 0; }

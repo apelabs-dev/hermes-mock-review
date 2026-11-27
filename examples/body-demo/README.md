@@ -14,7 +14,7 @@ on `example.test`.
 | rows | `rows`: pick a look for the app, three mocks per decision | The reviewer chooses between a few options and needs to see each one first. Native `decision` blocks; the board draws the rows, the tally and the mocks. |
 | stage | `stage`: three layouts of one settings screen side by side | The options are whole screens to compare in context. One artifact with `display: "page"`; the page is a pannable canvas of frames with its own zoom, and a mark group under each frame. |
 | page with section marks | `plan`: a launch plan in four parts | The thing is a document and the reviewer's answer is a verdict per part. An artifact with `display: "page"` and `markable: false`; the page keeps `{part: {status, note}}` in its own data. |
-| canvas | `deck`: a six-slide product overview as one long page | The thing is presentational and should be read in order at full width. An artifact with `display: "canvas"`: no frame of its own, the page scrolls with the board, and the reviewer pins what to change. |
+| long page | `deck`: a six-slide product overview as one long page | The thing is presentational and should be read in order at full width. An artifact with `display: "long"`: no frame of its own, the page scrolls with the board, and the reviewer pins what to change. |
 
 ## Marks kept in the page
 
@@ -28,4 +28,4 @@ Outside a board the marks stay in memory, so the page also works when opened on 
 `data-mr-part` as well, so a pin can name the same thing a mark does.
 
 Checked by `tests/test_body_demo.py`: each review builds and validates, the marked pages carry one mark group per
-part, and the canvas block has `display: "canvas"`.
+part, and the long-page block has `display: "long"`.

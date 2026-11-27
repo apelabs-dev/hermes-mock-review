@@ -275,6 +275,9 @@
   .flex-grow {
     flex-grow: 1;
   }
+  .grow {
+    flex-grow: 1;
+  }
   .border-collapse {
     border-collapse: collapse;
   }
@@ -319,6 +322,9 @@
   }
   .lowercase {
     text-transform: lowercase;
+  }
+  .uppercase {
+    text-transform: uppercase;
   }
   .italic {
     font-style: italic;
@@ -2879,22 +2885,22 @@
     color: var(--muted);
     font-size: 14px;
   }
-  .blk-art-page, .blk-art-canvas {
+  .blk-art-page, .blk-art-long {
     border-bottom: 0;
   }
-  .blk-art-page .art-fig, .blk-art-canvas .art-fig {
+  .blk-art-page .art-fig, .blk-art-long .art-fig {
     margin-left: calc(50% - var(--page-w, 100vw) / 2);
     margin-right: calc(50% - var(--page-w, 100vw) / 2);
     margin-top: 10px;
   }
-  .blk-art-page .art, .blk-art-canvas .art {
+  .blk-art-page .art, .blk-art-long .art {
     margin: 0;
     border-radius: 0;
     outline: 0;
     background: var(--bg);
     overflow: hidden;
   }
-  .blk-art-page .art-frame, .blk-art-canvas .art-frame {
+  .blk-art-page .art-frame, .blk-art-long .art-frame {
     width: 100%;
     display: block;
     border: 0;
@@ -2902,10 +2908,10 @@
   .blk-art-page .art-frame {
     height: calc(100dvh - var(--barh, 52px) - var(--footh, 0px));
   }
-  .blk-art-page .ctx-cap, .blk-art-canvas .ctx-cap {
+  .blk-art-page .ctx-cap, .blk-art-long .ctx-cap {
     margin: 10px 0 0;
   }
-  .blk-art-page .ipins, .blk-art-canvas .ipins {
+  .blk-art-page .ipins, .blk-art-long .ipins {
     margin-top: 12px;
   }
   .dz-prototype {

@@ -146,7 +146,7 @@ Nothing was removed. “More” means the control moved into the header's More m
 Sign-in and the other server-rendered pages, the exported HTML, tablet (768–820), prototype and artifact rounds,
 presence, unread and activity, toasts, empty and loading states, and the option tiles' Recommended badge. The content
 inside a mock frame is the reviewed project's own UI and is never restyled. An artifact with `display: "page"` fills the
-window and scrolls inside its frame; one with `display: "canvas"` runs the page's full length and scrolls with the board
+window and scrolls inside its frame; one with `display: "long"` runs the page's full length and scrolls with the board
 between the same header and footer.
 
 ## Tests that hold the rules

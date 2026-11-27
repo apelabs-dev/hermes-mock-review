@@ -1,6 +1,6 @@
-"""An artifact with display "canvas": a full-length, inline page for presentational bodies.
+"""An artifact with display "long": a full-length, inline page for presentational bodies.
 
-A frame is a card capped at 4000 px, a page is one viewport tall and scrolls inside. A canvas is as tall as its own page
+A frame is a card capped at 4000 px, a page is one viewport tall and scrolls inside. A long page is as tall as its own page
 and scrolls with the board, so the board's header and footer (the essential controls) stay where they are. These are
 real-browser tests for the geometry, plus a plain test for the validator.
 """
@@ -32,7 +32,7 @@ def _review(tmp_path, blocks):
     d = tmp_path / "dec"
     d.mkdir()
     (d / "decisions.json").write_text(json.dumps({"blocks": blocks}), encoding="utf-8")
-    return store.create_review("Canvas", "", ORIGIN, "local",
+    return store.create_review("Long page", "", ORIGIN, "local",
                                store.parse_round_spec(decisions=str(d / "decisions.json")), wake=False)
 
 
@@ -43,7 +43,7 @@ def _open(chrome, server, data, width=1440, height=900):
     return b
 
 
-def test_the_validator_accepts_canvas_and_names_the_three_displays(tmp_path):
+def test_the_validator_accepts_long_and_names_the_three_displays(tmp_path):
     def spec(display):
         d = tmp_path / display
         d.mkdir()
@@ -51,17 +51,17 @@ def test_the_validator_accepts_canvas_and_names_the_three_displays(tmp_path):
             {"type": "artifact", "id": "cv", "title": "Deck", "html": TALL, "display": display}]}), encoding="utf-8")
         return store.parse_round_spec(decisions=str(d / "decisions.json"))
 
-    for display in ("frame", "page", "canvas"):
+    for display in ("frame", "page", "long"):
         blocks = spec(display)["decisions"]["blocks"]
         assert blocks[0]["display"] == display
     with pytest.raises(ReviewError) as e:
         spec("stage")
-    assert '"frame", "page" or "canvas"' in str(e.value), e.value
+    assert '"frame", "page" or "long"' in str(e.value), e.value
 
 
-def test_a_canvas_is_as_tall_as_its_page_and_a_frame_is_still_capped(env, server, tmp_path, chrome):
+def test_a_long_page_is_as_tall_as_its_page_and_a_frame_is_still_capped(env, server, tmp_path, chrome):
     data = _review(tmp_path, [
-        {"type": "artifact", "id": "cv", "title": "Canvas", "html": TALL, "display": "canvas"},
+        {"type": "artifact", "id": "cv", "title": "Long page", "html": TALL, "display": "long"},
         {"type": "artifact", "id": "fr", "title": "Frame", "html": TALL},
     ])
     b = _open(chrome, server, data)
@@ -74,13 +74,13 @@ def test_a_canvas_is_as_tall_as_its_page_and_a_frame_is_still_capped(env, server
               art:getComputedStyle(document.querySelector('#dz-cv .art')).borderRadius};})())"""))
     assert abs(g["cv"]["h"] - 6000) <= 2, g
     assert abs(g["cv"]["w"] - g["cw"]) <= 1 and abs(g["cv"]["l"]) <= 1, g   # full bleed, like a page
-    assert "blk-art-canvas" in g["cls"] and g["art"] == "0px", g
+    assert "blk-art-long" in g["cls"] and g["art"] == "0px", g
     assert abs(g["fr"]["h"] - 4000) <= 2, g                                  # the plain frame keeps its cap
 
 
-def test_the_header_and_footer_stay_on_screen_over_a_long_canvas(env, server, tmp_path, chrome):
+def test_the_header_and_footer_stay_on_screen_over_a_long_page(env, server, tmp_path, chrome):
     data = _review(tmp_path, [
-        {"type": "artifact", "id": "cv", "title": "Canvas", "html": TALL, "display": "canvas"},
+        {"type": "artifact", "id": "cv", "title": "Long page", "html": TALL, "display": "long"},
         {"type": "artifact", "id": "fr", "title": "Frame", "html": TALL},
     ])
     b = _open(chrome, server, data)
@@ -100,9 +100,9 @@ def test_the_header_and_footer_stay_on_screen_over_a_long_canvas(env, server, tm
             assert g[part] and g[part]["w"] > 0, (y, part, g)
 
 
-def test_a_pin_far_down_a_canvas_opens_its_composer_near_the_tap(env, server, tmp_path, chrome):
+def test_a_pin_far_down_a_long_page_opens_its_composer_near_the_tap(env, server, tmp_path, chrome):
     """Taps are measured in the frame, which is the page's whole height: the 4000 px clamp put the composer ~1000 px away."""
-    data = _review(tmp_path, [{"type": "artifact", "id": "cv", "title": "Canvas", "html": TALL, "display": "canvas"},
+    data = _review(tmp_path, [{"type": "artifact", "id": "cv", "title": "Long page", "html": TALL, "display": "long"},
                               {"type": "artifact", "id": "fr", "title": "Frame", "html": TALL}])
     b = _open(chrome, server, data)
     assert b.until("document.querySelector('#dz-cv iframe').getBoundingClientRect().height>5000", timeout=20)
@@ -142,16 +142,16 @@ def _add_pin(b, block, page_y, text="Please adjust this"):
 
 
 def _pin_viewport_y(block):
-    """A JS expression for where the block's pin page point sits in the viewport: a canvas frame is the page at scale 1."""
+    """A JS expression for where the block's pin page point sits in the viewport: a long-page frame is the page at scale 1."""
     return ("(function(){var p=(%s).pins.find(p=>p.block===%s);"
             "var r=document.querySelector('#dz-%s iframe').getBoundingClientRect();"
             "return r.top + p.y*r.height})()" % (DRAFT, json.dumps(block), block))
 
 
-def test_a_markable_canvas_and_page_are_full_bleed_and_a_markable_frame_is_not(env, server, tmp_path, chrome):
+def test_a_markable_long_page_and_page_are_full_bleed_and_a_markable_frame_is_not(env, server, tmp_path, chrome):
     """A markable artifact keeps its decision row but must break out of the column exactly like a plain one."""
     data = _review(tmp_path, [
-        {"type": "artifact", "id": "mc", "title": "Markable canvas", "html": TALL, "display": "canvas", "markable": True},
+        {"type": "artifact", "id": "mc", "title": "Markable long page", "html": TALL, "display": "long", "markable": True},
         {"type": "artifact", "id": "mp", "title": "Markable page", "html": TALL, "display": "page", "markable": True},
         {"type": "artifact", "id": "mf", "title": "Markable frame", "html": TALL, "markable": True},
     ])
@@ -169,9 +169,9 @@ def test_a_markable_canvas_and_page_are_full_bleed_and_a_markable_frame_is_not(e
                 pins:!!s.querySelector('.ipins')};}
       return {clientWidth:document.documentElement.clientWidth,mc:box('#dz-mc'),mp:box('#dz-mp'),mf:box('#dz-mf')};})())"""))
     mc, mp, mf = g["mc"], g["mp"], g["mf"]
-    assert "blk-art-canvas" in mc["cls"], mc
+    assert "blk-art-long" in mc["cls"], mc
     assert "blk-art-page" in mp["cls"], mp
-    assert "blk-art-canvas" not in mf["cls"] and "blk-art-page" not in mf["cls"], mf
+    assert "blk-art-long" not in mf["cls"] and "blk-art-page" not in mf["cls"], mf
     for named in (mc, mp):
         assert abs(named["left"]) <= 1 and abs(named["width"] - g["clientWidth"]) <= 1, named   # full bleed
         assert named["radius"] == "0px" and named["outline"].startswith("none"), named
@@ -185,10 +185,10 @@ def test_a_markable_canvas_and_page_are_full_bleed_and_a_markable_frame_is_not(e
         b.js("document.querySelector('#dz-mc .ihead .status').textContent")
 
 
-def test_a_pin_list_row_brings_a_far_canvas_pin_into_view(env, server, tmp_path, chrome):
-    """A canvas has no inner scroll: the pin's row must scroll the board to the pin, and a frame must not change."""
+def test_a_pin_list_row_brings_a_far_long_page_pin_into_view(env, server, tmp_path, chrome):
+    """A long page has no inner scroll: the pin's row must scroll the board to the pin, and a frame must not change."""
     data = _review(tmp_path, [
-        {"type": "artifact", "id": "cv", "title": "Canvas", "html": TALL, "display": "canvas"},
+        {"type": "artifact", "id": "cv", "title": "Long page", "html": TALL, "display": "long"},
         {"type": "artifact", "id": "fr", "title": "Frame", "html": TALL},
     ])
     b = Board(chrome, f"{server}/r/{data['id']}/", width=1440, height=900,
@@ -198,7 +198,7 @@ def test_a_pin_list_row_brings_a_far_canvas_pin_into_view(env, server, tmp_path,
     assert b.until("document.querySelector('#dz-cv iframe').getBoundingClientRect().height>5000", timeout=20)
     b.press("#comment-toggle")
     assert b.until("document.querySelector('#comment-toggle').getAttribute('aria-pressed')==='true'")
-    _add_pin(b, "cv", 5000, "far down the canvas")
+    _add_pin(b, "cv", 5000, "far down the long page")
     assert b.until("document.querySelectorAll('#pins-cv li').length===1", timeout=10)
 
     b.js("window.scrollTo(0, 0)")
@@ -244,9 +244,9 @@ def _reload_with_threadless_pin(b, block, page_y):
     return script
 
 
-def test_a_pin_list_row_brings_a_threadless_far_canvas_pin_into_view(env, server, tmp_path, chrome):
+def test_a_pin_list_row_brings_a_threadless_far_long_page_pin_into_view(env, server, tmp_path, chrome):
     """A pin whose thread never reached the server takes the same row path: scroll the board before the flash."""
-    data = _review(tmp_path, [{"type": "artifact", "id": "cv", "title": "Canvas", "html": TALL, "display": "canvas"}])
+    data = _review(tmp_path, [{"type": "artifact", "id": "cv", "title": "Long page", "html": TALL, "display": "long"}])
     b = Board(chrome, f"{server}/r/{data['id']}/", width=1440, height=900,
               wait="!!document.querySelector('#dz-cv iframe.art-frame')")
     b.review = data
@@ -271,9 +271,9 @@ def test_a_pin_list_row_brings_a_threadless_far_canvas_pin_into_view(env, server
         b.cdp.call("Page.removeScriptToEvaluateOnNewDocument", {"identifier": seed["identifier"]}, session=b.sid)
 
 
-def test_a_marker_tap_far_down_a_canvas_opens_the_editor_near_the_marker(env, server, tmp_path, chrome):
+def test_a_marker_tap_far_down_a_long_page_opens_the_editor_near_the_marker(env, server, tmp_path, chrome):
     """The 'pin' message from an existing marker is clamped like the first tap: a 4000 px clamp puts the editor ~1000 px away."""
-    data = _review(tmp_path, [{"type": "artifact", "id": "cv", "title": "Canvas", "html": TALL, "display": "canvas"}])
+    data = _review(tmp_path, [{"type": "artifact", "id": "cv", "title": "Long page", "html": TALL, "display": "long"}])
     b = Board(chrome, f"{server}/r/{data['id']}/", width=1440, height=900,
               wait="!!document.querySelector('#dz-cv iframe.art-frame')")
     b.review = data
