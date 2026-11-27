@@ -2494,11 +2494,11 @@
   @keyframes hermes-pin-pulse {
     0%, 100% {
       transform: scale(1);
-      box-shadow: 0 0 0 0 rgba(220, 38, 38, .55);
+      box-shadow: 0 0 0 0 color-mix(in srgb, var(--err) 55%, transparent);
     }
     50% {
       transform: scale(1.25);
-      box-shadow: 0 0 0 5px rgba(220, 38, 38, 0);
+      box-shadow: 0 0 0 5px color-mix(in srgb, var(--err) 0%, transparent);
     }
   }
   @media (prefers-reduced-motion: reduce) {
@@ -2926,6 +2926,24 @@
   .art-canvas-doc > .blk-art-canvas {
     margin-top: 0;
   }
+  .dz .doc .blk-art-bare {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+  }
+  .dz .blk-art-bare .art-fig {
+    margin-top: 0;
+    margin-bottom: 0;
+  }
+  .blk-art-bare .ipins {
+    margin: 0;
+    padding: 12px 16px 0;
+  }
+  .dz:has(> .doc > .blk-art-bare:only-child:is(.blk-art-page, .blk-art-canvas)) {
+    padding-bottom: 0;
+  }
   .blk-art-canvas .art-fig {
     margin: 0 calc(50% - var(--page-w, 100vw) / 2) 16px;
   }
@@ -2939,7 +2957,17 @@
     overflow: clip;
     border-radius: 0;
     outline: none;
-    background: var(--surface-2);
+    --cv-a: 24%;
+    background-color: var(--accent);
+    @supports (color: color-mix(in lab, red, red)) {
+      background-color: color-mix(in srgb, var(--accent) 7%, var(--bg));
+    }
+    background-image: radial-gradient(circle, var(--text) 1.1px, transparent 1.5px);
+    @supports (color: color-mix(in lab, red, red)) {
+      background-image: radial-gradient(circle, color-mix(in srgb, var(--text) var(--cv-a), transparent) 1.1px, transparent 1.5px);
+    }
+    background-size: calc(24px * var(--cv-z, 1)) calc(24px * var(--cv-z, 1));
+    background-position: var(--cv-x, 0px) var(--cv-y, 0px);
   }
   .blk-art-canvas .art-canvas:focus-visible {
     outline: 2px solid var(--accent);
@@ -3621,7 +3649,7 @@
     background: var(--err);
     border: 2px solid var(--surface);
   }
-  .mpin.un::after, .tpin.un::after {
+  .tpin.un::after {
     content: "";
     position: absolute;
     top: -3px;
@@ -3631,6 +3659,22 @@
     border-radius: 50%;
     background: var(--err);
     border: 2px solid var(--bg);
+  }
+  .mpin.un::after {
+    content: "";
+    position: absolute;
+    right: -5px;
+    top: 50%;
+    margin-top: -5px;
+    width: 10px;
+    height: 10px;
+    box-sizing: border-box;
+    border-radius: 50%;
+    background: var(--err);
+    border: 2px solid var(--surface);
+  }
+  .mpin[data-hermes-state="working"].un::after {
+    display: none;
   }
   .tpin {
     background: var(--pin);

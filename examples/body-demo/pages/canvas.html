@@ -5,8 +5,9 @@
 :root{--bg:#f2ede0;--dot:#cfc6af;--surface:#fffdf7;--line:#ddd4be;--text:#1f1d18;--muted:#5b5649;--accent:#1f6f5a;--onacc:#fff;
   --warn:#b4531f;--warnbg:#fbe9d9;--ok:#1f6f5a;--okbg:#dcefe6}
 *{box-sizing:border-box;margin:0;padding:0}
+html{background:transparent}
 html,body{width:2400px;height:1200px}
-body{position:relative;background:var(--bg);background-image:radial-gradient(var(--dot) 1.4px,transparent 1.8px);background-size:32px 32px;
+body{position:relative;background:transparent;   /* the board draws the dotted ground under the page */
   color:var(--text);font:20px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased;overflow:hidden}
 .ic{width:26px;height:26px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
 

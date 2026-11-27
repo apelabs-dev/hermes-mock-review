@@ -33,7 +33,7 @@ window.wheelBurst = () => {
 
 def _spec(tmp_path, **kwargs):
     p = tmp_path / 'decisions.json'
-    p.write_text(json.dumps({'blocks': [dict(type='artifact', id='deck', title='Layout', html=PAGE, **kwargs)]}))
+    p.write_text(json.dumps({'blocks': [dict(type='artifact', id='deck', title='Layout', html=PAGE, **kwargs)]}), encoding='utf-8')
     return store.parse_round_spec(decisions=str(p))
 
 

@@ -1215,6 +1215,7 @@ import {paintAvatar} from './avatar.js';
   function commentAvailable() { return canComment(); }
   function setCommentMode(on) {
     var want = !!on && commentAvailable();
+    if (want) S.frames.forEach(function (f) { if (f.canvas && f.hand && f.setHand) f.setHand(false); });
     if (want === S.commentMode && document.querySelector('[data-comment-toggle]')) { syncComment(); return; }
     S.commentMode = want;
     closePopover();
@@ -1753,13 +1754,14 @@ import {paintAvatar} from './avatar.js';
       canComment() ? commentHint('hint-line') : null);
     head.setAttribute('data-mr-ref', 'page');
     head.setAttribute('data-mr-title', 'Board');
+    var showIntro = dec.show_intro !== false, showOutro = dec.show_outro !== false;   // old rounds have neither key
     // When the artifact is the entire body, put it directly under the sticky bar. Keep the title and review rows below it.
     var loneCanvas = dec.blocks.length === 1 && dec.blocks[0].type === 'artifact' && dec.blocks[0].display === 'canvas';
     if (loneCanvas) {
       doc.classList.add('art-canvas-doc');
       append(doc, renderBlock(r, a, dec.blocks[0]));
     }
-    append(doc, head);
+    if (showIntro) append(doc, head);
     var body = dec.blocks.filter(function (b) { return b.type !== 'settled' && b.type !== 'defaults'; });
     var grouped = plan ? groupBlocks(dec.blocks) : null;
     append(doc, renderDocNav(r, grouped));
@@ -1770,8 +1772,10 @@ import {paintAvatar} from './avatar.js';
       grouped.lead.forEach(function (b) { append(doc, renderBlock(r, a, b)); });
       grouped.groups.forEach(function (g, i) { append(doc, renderGroup(r, a, g, i)); });
     } else if (!loneCanvas) body.forEach(function (b) { append(doc, renderBlock(r, a, b)); });
-    append(doc, renderElse());
-    append(doc, h('div', { class: 'doc-end', id: 'dz-end' }));
+    if (showOutro) {
+      append(doc, renderElse());
+      append(doc, h('div', { class: 'doc-end', id: 'dz-end' }));
+    }
     if (dec.gate && footerButton() === 'build') append(doc, renderGate(r, dec));
     requestAnimationFrame(updateTally);
     DOC = { r: r, dec: dec, el: doc };
@@ -1791,12 +1795,14 @@ import {paintAvatar} from './avatar.js';
   // status.label, the milestones and the live progress line ("3/5 plan · 1/2 questions · 0/1 picks")
   function renderStatusLine(dec) {
     var s = dec.status || {}, ms = s.milestones || [];
+    var progress = progressLine(viewed().decisions, S.draft.marks);
+    if (!s.label && !ms.length && !progress) return null;
     return h('div', { class: 'statusline' },
       s.label ? h('p', { class: 'st-label', text: s.label }) : null,
       ms.length ? h('ul', { class: 'st-miles', 'aria-label': 'Milestones' }, ms.map(function (m) {
         return h('li', null, h('span', { text: m.label }), m.date ? h('span', { class: 'st-date', text: m.date }) : null);
       })) : null,
-      h('p', { class: 'st-progress', id: 'dz-progress', text: progressLine(viewed().decisions, S.draft.marks) }));
+      h('p', { class: 'st-progress', id: 'dz-progress', text: progress }));
   }
   var NOTE_CHIP = { done: 'Done', 'second-look': 'Needs a second look', 'needs-pick': 'Needs a pick' };
   function jumpTo(id) {
@@ -2149,6 +2155,10 @@ import {paintAvatar} from './avatar.js';
     var v = f.view;
     f.world.style.transform = 'translate(' + v.x + 'px, ' + v.y + 'px) scale(' + v.zoom + ')';
     f.percent.textContent = Math.round(v.zoom * 100) + '%';
+    f.el.style.setProperty('--cv-x', v.x + 'px');   // the dotted ground moves and scales with the camera
+    f.el.style.setProperty('--cv-y', v.y + 'px');
+    f.el.style.setProperty('--cv-z', String(v.zoom));
+    f.el.style.setProperty('--cv-a', v.zoom < .3 ? '0%' : '24%');
   }
   function setArtifactView(f, x, y, zoom) {
     // Clamp the camera, not only each frame's deltas, so a frame cannot park its own page out of reach.
@@ -2211,11 +2221,16 @@ import {paintAvatar} from './avatar.js';
       return h('button', { type: 'button', class: image ? 'icon-btn' : 'canvas-text-btn', title: label,
         'aria-label': label, onclick: run }, image ? icon(image) : label);
     }
-    var hand = control('Hand tool', 'grab', function () {
-      f.hand = !f.hand;
+    function setHand(on) {
+      f.hand = !!on;
       hand.setAttribute('aria-pressed', String(f.hand));
       canvasSpace(f, f.space);
+    }
+    var hand = control('Hand tool', 'grab', function () {
+      if (!f.hand && S.commentMode) setCommentMode(false);   // moving the canvas and pinning on it are one choice
+      setHand(!f.hand);
     });
+    f.setHand = setHand;
     hand.setAttribute('aria-pressed', 'false');
     var controls = h('div', { class: 'canvas-controls', role: 'group', 'aria-label': 'Canvas controls' },
       hand, control('Zoom out', 'minus', function () { artifactCanvasKey(f, '-', true); }), f.percent,
@@ -2224,6 +2239,7 @@ import {paintAvatar} from './avatar.js';
       control('100%', null, function () { zoomArtifactCanvas(f, 1); }));
     var el = h('div', { class: 'art art-canvas', role: 'region', 'aria-label': (f.b.title || 'Artifact') + ' canvas',
       tabindex: '0', 'data-mr-no-pin': '' }, f.world, f.shield, controls);
+    f.el = el;   // the first paint sets the ground's camera variables on it
     canvasSpace(f, false);
     paintArtifactCanvas(f);
     el.addEventListener('wheel', function (e) {
@@ -2305,15 +2321,16 @@ import {paintAvatar} from './avatar.js';
     }
     if (b.caption) fig.appendChild(h('figcaption', { class: 'ctx-cap', text: b.caption }));
     return [
-      b.text ? paras(b.text, 'itext') : null,
+      b.text && b.header !== false ? paras(b.text, 'itext') : null,
       fig,
-      canComment() && S.commentMode && f
+      canComment() && S.commentMode && f && b.header !== false
         ? h('p', { class: 'art-hint', text: 'Comment mode: tap the artifact to comment on that spot. Press Exit comment in the header to use it.' }) : null,
       h('ol', { class: 'ipins', id: 'pins-' + b.id })];
   }
   function renderArtifact(r, b) {   // not a decision: a neutral block, no "mock" framing
-    var el = h('section', { class: 'blk blk-art' + artifactDisplayClass(b), id: 'dz-' + b.id, 'data-id': b.id },
-      b.title ? h('h2', { text: b.title }) : null, artifactBody(r, b));
+    var bare = b.header === false;   // the page speaks for itself: no title, no text above it, no hint
+    var el = h('section', { class: 'blk blk-art' + artifactDisplayClass(b) + (bare ? ' blk-art-bare' : ''), id: 'dz-' + b.id, 'data-id': b.id },
+      b.title && !bare ? h('h2', { text: b.title }) : null, artifactBody(r, b));
     leadWithCanvas(el, b);
     setTimeout(function () { redrawPins(b.id); }, 0);
     return el;

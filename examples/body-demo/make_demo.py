@@ -123,11 +123,10 @@ def page(name):
 
 def stage_review(src):
     return {
-        "intro": "Three layouts of the same settings screen, side by side on a stage. Try each one, then mark it.",
-        "next": "The layout you approve is the one I build; a Change note tells me what to adjust.",
+        "intro": False, "outro": False,   # the page is the whole body: no opening or closing block
         "blocks": [
             {"type": "artifact", "id": "stage", "title": "Settings screen: three layouts", "src": str(src), "display": "page",
-             "markable": False,
+             "markable": False, "header": False,
              "text": "Each layout has its own Approve, Change and Skip with a note. The marks are kept in the page and arrive with "
                      "your feedback as page state. Fit and 100% zoom the stage."},
         ],
@@ -136,11 +135,10 @@ def stage_review(src):
 
 def plan_review(src):
     return {
-        "intro": "The launch plan for Acme Notes 2.0, in four parts. Mark each part as you read.",
-        "next": "I start on the parts you approve and rewrite the ones you changed.",
+        "intro": False, "outro": False,   # the page is the whole body: no opening or closing block
         "blocks": [
             {"type": "artifact", "id": "plan", "title": "Acme Notes 2.0 launch plan", "src": str(src), "display": "page",
-             "markable": False,
+             "markable": False, "header": False,
              "text": "Each part has Approve, Change and Skip with a note. The marks are kept in the page and arrive with "
                      "your feedback as page state."},
         ],
@@ -149,11 +147,10 @@ def plan_review(src):
 
 def deck_review(src):
     return {
-        "intro": "A six-slide overview of Acme Notes, shown as one long page. Scroll through it and pin what you want changed.",
-        "next": "Press Send and I fix the pinned slides, then send the deck again.",
+        "intro": False, "outro": False,   # the page is the whole body: no opening or closing block
         "blocks": [
             {"type": "artifact", "id": "deck", "title": "Acme Notes: product overview", "src": str(src), "display": "long",
-             "markable": False,
+             "markable": False, "header": False,
              "text": "Six slides, full width, in order. The page scrolls with the board, so the header and the footer stay in reach."},
         ],
     }
@@ -161,11 +158,10 @@ def deck_review(src):
 
 def map_review(src):
     return {
-        "intro": "The first week with Acme Notes as a map: four moments, where each one hurts and what changes. Pan and zoom to read it.",
-        "next": "Press Send and I fix the pinned spots, then send the map again.",
+        "intro": False, "outro": False,   # the page is the whole body: no opening or closing block
         "blocks": [
             {"type": "artifact", "id": "map", "title": "Acme Notes: first-week journey", "src": str(src), "display": "canvas",
-             "desktop_width": 2400, "markable": False,
+             "desktop_width": 2400, "markable": False, "header": False,
              "text": "A fixed-size map on a surface you move around: scroll to pan, Ctrl or Cmd with the wheel (or pinch) to zoom, "
                      "Fit to see all of it. Pin a spot to say what to change."},
         ],
