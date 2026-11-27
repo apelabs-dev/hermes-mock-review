@@ -47,8 +47,8 @@ def test_canvas_width_validation(tmp_path):
 
 
 def test_canvas_exports_use_the_same_untransformed_document_as_long(env, tmp_path):
-    """The export is the page at 100%, like a long page: no canvas wrapper, no camera, and no display branch."""
-    import inspect
+    """The export is the page at 100%, like a long page: no canvas wrapper and no camera. A canvas page only gets a
+    class and a quiet ground, so a page that paints none is still readable in the viewer."""
     review = store.create_review('Canvas review', '', {'platform': 'discord', 'chat_id': 'test-chat'}, 'local',
                                  _spec(tmp_path, display='canvas'), wake=False)
     data = store.load(review['id'])
@@ -56,8 +56,7 @@ def test_canvas_exports_use_the_same_untransformed_document_as_long(env, tmp_pat
         html = export.build_export_html(data, 1, False, csp=csp)
         assert 'mr-artifact-page' in html and 'Open details' in html
         assert 'canvas-world' not in html and 'translate(' not in html
-    source = inspect.getsource(export._artifact_figure)
-    assert 'display' not in source and 'canvas' not in source
+    assert 'mr-artifact-d-canvas' in html and 'transform' not in html.split('mr-artifact-page', 1)[1].split('</figure>')[0]
 
 
 def _open(tmp_path, server, chrome, width=1440, markable=False):

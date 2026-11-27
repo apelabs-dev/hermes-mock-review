@@ -115,7 +115,7 @@ def test_the_canvas_ground_is_dotted_tinted_and_follows_the_camera(env, server, 
     _zoom(b, 0.2)
     assert b.js(f"document.querySelector('{SURFACE}').style.getPropertyValue('--cv-a')") == '0%', 'dots are noise this far out'
     _zoom(b, 1)
-    assert b.js(f"document.querySelector('{SURFACE}').style.getPropertyValue('--cv-a')") == '24%'
+    assert b.js(f"document.querySelector('{SURFACE}').style.getPropertyValue('--cv-a')") == '11%'
 
 
 @pytest.mark.browser
@@ -132,3 +132,20 @@ def test_the_working_dot_and_the_unread_dot_are_the_same_dot(env, server, tmp_pa
     assert unread == working, (unread, working)
     assert b.js("getComputedStyle(document.querySelector('[data-test=\"unworking\"]'), '::after').display") == 'none', \
         'a pin that is both unread and being worked on shows one dot'
+
+
+@pytest.mark.browser
+def test_the_working_dot_on_a_page_pin_sits_at_45_degrees(env, server, tmp_path, chrome):
+    """Pins inside a page or canvas are drawn by the probe, not the board: their dot is on the circle's upper right."""
+    from pathlib import Path
+    src = (Path(store.__file__).parent / 'board' / 'probe.js').read_text(encoding='utf-8')
+    css = src[src.index('var CSS = ') + len('var CSS = '):src.index(";\n\n  function ensureHost")]
+    b = _open_canvas(tmp_path, server, chrome)
+    got = json.loads(b.js("""(() => { const css = %s, st = document.createElement('style'); st.textContent = css; document.head.append(st);
+      const p = document.createElement('div'); p.className = 'p h-working'; p.style.cssText = 'left:200px;top:300px';
+      const d = document.createElement('span'); d.className = 'hermes-pin-indicator'; p.append(d); document.body.append(p);
+      const a = p.getBoundingClientRect(), r = d.getBoundingClientRect();
+      return JSON.stringify({dx: (r.left + r.width / 2) - (a.left + a.width / 2), dy: (r.top + r.height / 2) - (a.top + a.height / 2),
+                             w: r.width, bg: getComputedStyle(d).backgroundColor}); })()""" % css))
+    assert got['dx'] > 9 and got['dy'] < -9 and abs(got['dx'] + got['dy']) < 2, f'the dot is not at 45 degrees on the circle: {got}'
+    assert got['w'] == 10 and got['bg'] == 'rgb(220, 38, 38)', got

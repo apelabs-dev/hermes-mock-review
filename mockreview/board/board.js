@@ -2158,7 +2158,7 @@ import {paintAvatar} from './avatar.js';
     f.el.style.setProperty('--cv-x', v.x + 'px');   // the dotted ground moves and scales with the camera
     f.el.style.setProperty('--cv-y', v.y + 'px');
     f.el.style.setProperty('--cv-z', String(v.zoom));
-    f.el.style.setProperty('--cv-a', v.zoom < .3 ? '0%' : '24%');
+    f.el.style.setProperty('--cv-a', v.zoom < .3 ? '0%' : '11%');
   }
   function setArtifactView(f, x, y, zoom) {
     // Clamp the camera, not only each frame's deltas, so a frame cannot park its own page out of reach.

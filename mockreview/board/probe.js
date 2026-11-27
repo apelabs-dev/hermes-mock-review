@@ -225,7 +225,7 @@ import {LIVE, CONTROL, controlOf, presses, anchorFor, cleanTarget, surface, inst
     '.p:hover{transform:scale(1.12)}.p.g{background:#5b5bf0;animation:mrp 1s ease-in-out infinite}' +
     '.p.det{background:#5b5bf0;opacity:.55}.p.f{animation:mrf .7s ease-out 2}@keyframes mrp{50%{transform:scale(1.15)}}@keyframes mrf{50%{transform:scale(1.5)}}' +
     '.p .hermes-pin-indicator{position:absolute;pointer-events:none;box-sizing:border-box;border-radius:50%}' +
-    '.p.h-working .hermes-pin-indicator{right:-6px;top:50%;width:10px;height:10px;margin-top:-5px;background:#dc2626;border:2px solid #fff;animation:mrpulse 1.2s ease-in-out infinite}' +
+    '.p.h-working .hermes-pin-indicator{right:-3px;top:-3px;width:10px;height:10px;background:#dc2626;border:2px solid #fff;animation:mrpulse 1.2s ease-in-out infinite}' +
     '.p.h-failed .hermes-pin-indicator{right:-5px;bottom:-5px;width:16px;height:16px;background:#fff;border:1px solid #dc2626;color:#dc2626;line-height:14px}' +
     '@keyframes mrpulse{0%,100%{transform:scale(1);box-shadow:0 0 0 0 rgba(220,38,38,.55)}50%{transform:scale(1.25);box-shadow:0 0 0 5px rgba(220,38,38,0)}}@media(prefers-reduced-motion:reduce){.p.h-working .hermes-pin-indicator{animation:none}}';
 

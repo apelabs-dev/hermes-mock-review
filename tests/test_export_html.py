@@ -101,10 +101,10 @@ def test_mock_markup_cannot_bring_script_handlers_or_external_urls(decisions_rev
 
 def test_artifact_is_a_figure_with_its_static_page(decisions_review):
     html = build(decisions_review)
-    assert '<figure class="mr-artifact">' in html
+    assert '<figure class="mr-artifact mr-artifact-d-frame">' in html
     assert "<figcaption>" in html and "Click sound" in html and "Take 3" in html
     assert "Artifact body" in html
-    assert "inside-artifact{color:red}" in html
+    assert re.search(r"\.mr-aw-\d+-art \.inside-artifact\{color:red\}", html), "the page's CSS is scoped to its wrapper"
     assert "window.__artifactPwned" not in html
 
 

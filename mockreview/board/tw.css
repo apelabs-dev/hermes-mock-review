@@ -2957,7 +2957,7 @@
     overflow: clip;
     border-radius: 0;
     outline: none;
-    --cv-a: 24%;
+    --cv-a: 11%;
     background-color: var(--accent);
     @supports (color: color-mix(in lab, red, red)) {
       background-color: color-mix(in srgb, var(--accent) 7%, var(--bg));

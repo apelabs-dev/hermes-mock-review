@@ -636,7 +636,7 @@ figure.ctx-fig { margin-top: 16px; }
   isolation: isolate; overflow: clip; border-radius: 0; outline: none;
   /* The ground is the project's own colour with a touch of its accent, dotted, and the dots travel with the camera
      (--cv-x/y/z are set by the board). Below about a third of full size the dots would only be noise, so they fade out. */
-  --cv-a: 24%;
+  --cv-a: 11%;
   background-color: color-mix(in srgb, var(--accent) 7%, var(--bg));
   background-image: radial-gradient(circle, color-mix(in srgb, var(--text) var(--cv-a), transparent) 1.1px, transparent 1.5px);
   background-size: calc(24px * var(--cv-z, 1)) calc(24px * var(--cv-z, 1));

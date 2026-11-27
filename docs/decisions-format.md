@@ -8,13 +8,20 @@ file itself, so there is no page to build. The file must be under 3 MB.
 
     {
       "preset": "design",
-      "intro": "Optional text shown above the first block (3000 characters).",
+      "intro": "Optional text shown above the first block (3000 characters), or false for no opening block.",
+      "outro": true,
       "next": "Optional text for the footer: what happens once everything is decided (600 characters).",
       "extra_css": "Optional CSS applied to the mocks, as a string.",
       "status": {"label": "Round 2 · awaiting your approval", "milestones": []},
       "notes_answered": [],
       "blocks": [ ... ]
     }
+
+`intro` and `outro` switch the two blocks of the document column that are not yours to fill. `"intro": false` drops the
+opening block (the board's title line, your intro text and the status line) so the first block starts right under the
+board header; any text keeps it, and leaving the key out keeps it. `"outro": false` drops the closing block (the
+"Anything else" box and the closing line), `true` or no key keeps it. Any other value is an error, so a typo does not
+silently keep a block. Only the board header and footer are fixed: a round whose body is one page can switch both off.
 
 `blocks` is required, holds 1 to 60 entries and renders in order. Every block has a `type` and an optional `title`; exports render every block type statically.
 (200 characters). `decision`, `question`, `piece`, `mock` and `artifact` blocks need an `id`: lowercase letters, digits and dashes,
@@ -101,7 +108,8 @@ mark it.
 video players, a timeline, anything that needs script. Give exactly one of `html` (the page, up to 2 MB) or `src` (an
 absolute path to an `.html` file). Optional `text` (2000) and `caption` (300), both plain text; `height` (`"auto"`, the
 default, follows the page up to 4000 px, or a fixed 80 to 4000); `desktop_width` as for `mock`; `display` (`"frame"`,
-the default, `"page"` or `"long"`); `markable` (default `false`; `true` adds the keys every markable block takes, and
+the default, `"page"`, `"long"` or `"canvas"`); `header` (default `true`; `false` drops the block's title, text and
+caption around the page, so the page is the whole block); `markable` (default `false`; `true` adds the keys every markable block takes, and
 the reviewer can approve or change it). Reviewers can pin it in comment mode either way.
 
     {"type": "artifact", "id": "clip", "title": "Click sound", "html": "<audio controls src=\"data:audio/wav;base64,UklGRg==\"></audio><script>document.title = 'ok'</script>", "caption": "Take 3", "markable": true}
@@ -115,6 +123,18 @@ in the document column, and its pins keep working.
 artifact page itself, up to 30000 px, with no inner scroll. It ignores `height` and `desktop_width`. The long page scrolls
 with the board, so the board header and footer (the essential controls) stay on screen however far down the page runs.
 A long page takes pins down to 30000 px; a frame keeps the 4000 px limit.
+
+`display: "canvas"` is a pan and zoom surface for one page: the page is a fixed-size world (`desktop_width` 320 to 8000,
+as tall as the page itself) laid out on an endless ground, and the reviewer moves around it with the wheel or a
+two-finger drag, zooms with the buttons, pinch or Ctrl and the wheel, and fits it to the window. The ground is dotted,
+tinted from the project's design, and moves with the camera. Use it for a map, a flow, a journey or an architecture
+picture that is meant to be seen as a whole and then looked at up close. A page that paints no background of its own
+shows that ground. The toolbar's hand and the board's comment mode are one choice: switching one on switches the other
+off. Pins stay on the spot they were placed at every zoom. A canvas is one page: it has no frames of its own, and the
+reviewer's feedback on it is its pins.
+
+With `header: false` and the round's `intro` and `outro` off, a `"page"` or `"canvas"` block fills the space between the
+board header and footer exactly, with no scroll box inside a scroll box.
 
 With `src` the block is `{"type": "artifact", "id": "film", "src": "/abs/film/page.html"}` and the page's folder supplies the media.
 

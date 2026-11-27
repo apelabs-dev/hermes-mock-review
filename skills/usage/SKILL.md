@@ -87,7 +87,7 @@ list, and put your best answer in `recommendation`. Never make the user type an 
 - `callout` `{tone, title?, text}`: one constraint or risk. tone is neutral, ok, warn, err or accent.
 - `cards` `{title?, items: [{title, text?, pill?, tone?}]}`: 1 to 12 items, for "what is changing".
 - `mock` `{id, html, title?, text?, caption?, desktop_width?}`: a context mock such as "today". Pins are allowed on it.
-- `artifact` `{id, src | html, title?, text?, caption?, height?, desktop_width?, display?, markable?}`: your own page
+- `artifact` `{id, src | html, title?, text?, caption?, height?, desktop_width?, display?, header?, markable?}`: your own page
   with script, in a sandbox. Use it only when a mock cannot do the job: audio or video players, a timeline, a small
   widget. `src` is an absolute .html path (its local images, audio, video, fonts, CSS and scripts are bundled in; keep
   the page and its media in their own folder), or `html` inline (2 MB). The page has no network and cannot reach the
@@ -95,8 +95,9 @@ list, and put your best answer in `recommendation`. Never make the user type an 
   per value, 64 keys and 256 KB per round, saved per round and returned in the feedback), set a mark on a markable block
   with `use('marks').set({status, note})`, and copy with `use('clipboard').writeText(text)` after a real tap. `display:
   "page"` makes the frame fill the board edge to edge at viewport height, with the page scrolling inside it so fixed and
-  sticky content work; `"long"` makes it as tall as its own page and scrolls with the board (see "Choose the body for
-  the task"); the default is `"frame"`. `markable: true` lets the user approve or change it; pins are allowed
+  sticky content work; `"long"` makes it as tall as its own page and scrolls with the board; `"canvas"` puts it on a pan
+  and zoom surface (see "Choose the body for the task"); the default is `"frame"`. `header: false` drops the block's own
+  title, text and caption so the page is the whole block. `markable: true` lets the user approve or change it; pins are allowed
   either way. Local ES module imports are refused (use a classic script). Names other than `data`, `marks` and
   `clipboard` return null, and so do all three outside an artifact page.
 - `table` `{title?, columns: [2 to 6], rows: [[one cell per column]] (1 to 30 rows), highlight_col?}`: compares options.
@@ -144,6 +145,15 @@ starting points, not a closed list, and combine or invent your own (one round ho
   whole page; a mark the page sets with `use('marks')` never overrides the reviewer's.
 - **Long page**: an `artifact` with `display: "long"`, full length and inline, scrolling with the board while the header
   and footer stay on screen. It is presentational: use it for a presentation, a demo, a report or a long visual page.
+
+- **Canvas**: an `artifact` with `display: "canvas"`, one page on a pan and zoom surface with a dotted ground in the
+  project's colour. For a map, a flow, a journey or an architecture picture that is read whole and then up close. Set
+  `desktop_width` to the width of your page (up to 8000) and leave its background transparent to show the ground. The
+  reviewer pins what is wrong; the pins are the feedback.
+
+Every block of the document column is yours to keep or drop: `"intro": false` drops the opening block, `"outro": false`
+drops the closing block ("Anything else" and the closing line) and `header: false` drops an artifact's own title and
+caption. A body that is one page usually wants all three off, so it fills the space between the header and the footer.
 
 A long page ignores `height` and `desktop_width`, and its frame follows the page's height only up to 30000 px (and a
 bounded number of changes), so split a longer page across two blocks. The reviewer can pin it anywhere in comment mode;
