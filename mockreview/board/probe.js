@@ -137,20 +137,18 @@ import {LIVE, CONTROL, controlOf, presses, anchorFor, cleanTarget, surface, inst
   // The height of the page's own content, independent of the viewport this probe runs in. The root's scrollHeight is
   // never smaller than that viewport, so a frame sized from it can grow and never shrink again. The root element's
   // border box is the page's layout height instead: body margins that collapse at the page edge are inside it and the
-  // viewport clamp is not. A body whose overflow is visible adds content that escapes its own box, and a body child
-  // positioned absolutely against the initial containing block (no positioned ancestor) escapes both: it is counted by
-  // its own bottom edge. A fixed child is not page content and stays out. A page that sizes itself with
-  // html/body{height:100%} or min-height:100vh is as tall as the viewport by its own CSS: it reports the viewport,
-  // grows to that, and stays there rather than shrinking to the smallest frame (and an absolutely positioned box that
-  // is not a child of the body is not counted).
+  // viewport clamp is not. The body's scrollHeight adds content that escapes its own box, including under a scroll
+  // container (`overflow:auto|hidden`) whose `height:100%` box stays at the viewport size. A body child positioned
+  // absolutely against the initial containing block (no positioned ancestor) escapes both and is counted by its own
+  // bottom edge. A fixed child is not page content and stays out. A page that sizes itself with html/body{height:100%}
+  // or min-height:100vh is as tall as the viewport by its own CSS: it reports the viewport, grows to that, and stays
+  // there rather than shrinking to the smallest frame (and an absolutely positioned box that is not a child of the
+  // body is not counted).
   function pageHeight() {
     var d = document.documentElement, b = bodyOf();
     var h = d.getBoundingClientRect().height, y = scrollY || d.scrollTop || 0;
     if (b) {
-      h = Math.max(h, b.getBoundingClientRect().height);
-      var oy = '';
-      try { oy = getComputedStyle(b).overflowY; } catch (e) {}
-      if (!oy || oy === 'visible') h = Math.max(h, b.scrollHeight);
+      h = Math.max(h, b.getBoundingClientRect().height, b.scrollHeight);
       for (var i = 0; i < b.children.length; i++) {
         var c = b.children[i], cs;
         try { cs = getComputedStyle(c); } catch (e) { continue; }

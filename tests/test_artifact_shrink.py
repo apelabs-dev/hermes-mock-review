@@ -12,8 +12,12 @@ ResizeObserver callback) throttled by the browser, which is a harness limit, not
 import json
 import time
 
+import pytest
+
 from mockreview import store
 from test_live_round_tool import Board, chrome  # noqa: F401  (chrome is the fixture)
+
+pytestmark = pytest.mark.browser
 
 ORIGIN = {"platform": "discord", "chat_id": "test-chat"}
 ART_MIN, ART_MAX, LONG_MAX = 80, 4000, 30000
@@ -185,6 +189,25 @@ def test_a_page_that_sizes_itself_to_the_viewport_does_not_collapse_or_oscillate
     assert len({round(h) for h in heights}) == 1, heights
     m = _measure(b, "hp")
     assert m["sections"] == 0 and m["root"] >= 1998, m
+
+
+def test_a_viewport_sized_scroll_body_still_grows_to_its_content(env, server, tmp_path, chrome):
+    # html,body{height:100%} makes the body's own box the viewport, and body{overflow:auto|hidden} makes it a scroll
+    # container; only its scrollHeight still covers the 2000 px of content. A height that skipped a scroll container
+    # would leave both displays at the 120 px initial height for ever (the old code counted them, so this must too).
+    data = _review(tmp_path, [
+        {"type": "artifact", "id": "sa", "title": "Scroll body, long page", "display": "long",
+         "html": _page("sa", 2, extra="html,body{height:100%}body{overflow:auto}")},
+        {"type": "artifact", "id": "sh", "title": "Hidden overflow, frame",
+         "html": _page("sh", 2, extra="html,body{height:100%}body{overflow:hidden}")},
+    ])
+    b = _open(chrome, server, data, "sa", "sh")
+    b.js("document.querySelector('#dz-sa').scrollIntoView()")
+    assert _near(b, "sa", 2000, timeout=20), "the long page of a scroll body stayed at %s" % _h(b, "sa")
+    b.js("document.querySelector('#dz-sh').scrollIntoView()")
+    assert _near(b, "sh", 2000, timeout=20), "the frame of a hidden-overflow body stayed at %s" % _h(b, "sh")
+    m = _measure(b, "sa")
+    assert m["bsh"] == 2000 and m["root"] == 2000, m
 
 
 def test_body_margins_are_part_of_the_page_height(env, server, tmp_path, chrome):
