@@ -510,13 +510,13 @@ def _txt(v: Any, limit: int) -> str:
 
 def _switch(v: Any, name: str, text_ok: bool) -> bool:
     """Whether a round shows a block of the document column: `intro` is the opening text or false (no opening block),
-    `outro` is true or false (the closing block: the free-text box and the closing line). Anything else is an error, so
-    a typo does not silently keep the block."""
+    `outro` is true or false (the closing block: the free-text box and the closing line). `true` keeps the block for
+    both, as the default does. Anything else is an error, so a typo does not silently keep the block."""
     if v is False:
         return False
-    if v is None or (text_ok and isinstance(v, str)) or (not text_ok and v is True):
+    if v is None or v is True or (text_ok and isinstance(v, str)):
         return True
-    raise ReviewError(f"decisions.json: {name} must be {'text or false' if text_ok else 'true or false'}")
+    raise ReviewError(f"decisions.json: {name} must be {'text, true or false' if text_ok else 'true or false'}")
 
 
 def _tone(v: Any, where: str, default: Optional[str] = None) -> str:

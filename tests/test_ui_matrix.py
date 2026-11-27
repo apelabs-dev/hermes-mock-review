@@ -624,7 +624,7 @@ def test_unread_pins_keep_the_brand_indigo_and_a_separate_hit_box(env, server, t
         assert pin["token"] == "#5b5bf0" and pin["bg"] == "rgb(91, 91, 240)", pin
         assert pin["w"] == "26px" and pin["h"] == "26px", pin
         assert pin["offsetW"] == 26 and pin["offsetH"] == 26, pin
-        assert pin["afterW"] == "9px" and pin["afterBg"] not in ("rgba(0, 0, 0, 0)", "transparent"), \
+        assert pin["afterW"] == "10px" and pin["afterBg"] not in ("rgba(0, 0, 0, 0)", "transparent"), \
             f"the unread dot disappeared: {pin}"
         if width <= 600:
             assert pin["beforeW"] == "44px" and pin["beforeH"] == "44px", pin

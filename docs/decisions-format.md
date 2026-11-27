@@ -8,7 +8,7 @@ file itself, so there is no page to build. The file must be under 3 MB.
 
     {
       "preset": "design",
-      "intro": "Optional text shown above the first block (3000 characters), or false for no opening block.",
+      "intro": "Optional text shown above the first block (3000 characters), true for the default opening, or false for no opening block.",
       "outro": true,
       "next": "Optional text for the footer: what happens once everything is decided (600 characters).",
       "extra_css": "Optional CSS applied to the mocks, as a string.",
@@ -19,7 +19,7 @@ file itself, so there is no page to build. The file must be under 3 MB.
 
 `intro` and `outro` switch the two blocks of the document column that are not yours to fill. `"intro": false` drops the
 opening block (the board's title line, your intro text and the status line) so the first block starts right under the
-board header; any text keeps it, and leaving the key out keeps it. `"outro": false` drops the closing block (the
+board header; any text or `true` keeps it, and leaving the key out keeps it. `"outro": false` drops the closing block (the
 "Anything else" box and the closing line), `true` or no key keeps it. Any other value is an error, so a typo does not
 silently keep a block. Only the board header and footer are fixed: a round whose body is one page can switch both off.
 

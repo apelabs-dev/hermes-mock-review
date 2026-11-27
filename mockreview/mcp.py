@@ -575,7 +575,7 @@ def _resolve(args: Dict[str, Any], options: Options) -> Dict[str, Any]:
                 if thread is None:
                     raise ReviewError("the board server did not return the thread it wrote", 502)
         if base is None:
-            thread = threads.set_status(review_id, row["id"], status, actor, principal=actor)
+            thread = threads.set_status(review_id, row["id"], status, actor, principal=actor, drop_wakes=role == "owner")
         _audit(actor, "mcp.reopen" if reopen else "mcp.resolve", f"review:{review_id}", thread_id=row["id"])
         return {"review_id": review_id, "as": _as(user, role), "status": status, "thread": thread,
                 "delivery": "live" if base else "stored"}

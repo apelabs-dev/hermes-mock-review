@@ -1085,16 +1085,13 @@ def _artifact_figure(block: Dict[str, Any], opts: _Options) -> str:
     # The page's own CSS is written for a page of its own (`html`, `body`, `h1`, absolute boxes). Inlined bare it would
     # restyle this document's title and layout, so it is scoped to one wrapper per artifact, and the page's root
     # selectors (`html`, `body`, `:root`) become that wrapper: it is the page's body here.
-    scope = "mr-aw-%d-%s" % (opts.round_n, re.sub(r"[^a-z0-9]", "", str(block.get("id") or "x").lower())[:40] or "x")
+    scope = "mr-aw-%d-%s" % (opts.round_n, re.sub(r"[^a-z0-9-]", "", str(block.get("id") or "x").lower())[:40] or "x")
     style_tag = ""
     if styles:
         css = _sanitize_css("\n".join(styles), sheet=True, scope="." + scope) or ""
-        root_sel = re.compile(r"\." + re.escape(scope) + r"\s+(?:html|body|:root)(?![\w-])")
-        while True:
-            swapped = root_sel.sub("." + scope, css)
-            if swapped == css:
-                break
-            css = swapped
+        # One pass: the group takes a whole chain (`html body :root`), so the sheet is never rescanned.
+        root_sel = re.compile(r"\." + re.escape(scope) + r"(?:\s+(?:html|body|:root)(?![\w-]))+")
+        css = root_sel.sub("." + scope, css)
         if css:
             style_tag = "<style>" + css + "</style>"
     display = block.get("display") if block.get("display") in ("page", "long", "canvas") else "frame"

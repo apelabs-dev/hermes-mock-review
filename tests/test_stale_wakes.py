@@ -9,6 +9,8 @@ from threading import Event
 
 import pytest
 
+from authkit import account, signed_in
+from conftest import http
 from mockreview import notify, service, store, threads
 from test_mention_wake import (bodies, board, call_tool, pin_requests, plugin_tools, post, tick,  # noqa: F401
                                wake_records)
@@ -282,3 +284,45 @@ def test_a_named_reply_keeps_a_wake_for_a_comment_posted_after_receipt(env, serv
     tick()
     expected = ["@Hermes first"] * (2 if lose_ack else 1) + ["@Hermes second"]
     assert [b["text"] for b in bodies(env)] == expected
+
+
+def test_a_reviewers_resolve_leaves_the_owners_queued_wake_alone(env, server, tmp_path):
+    """A resolve by a reviewer is theirs: it does not cancel a wake the owner queued for that thread. The owner's own
+    resolve still covers it (test above)."""
+    rid = board(tmp_path)["id"]
+    tid = _open(server, rid, "@Hermes is this right?", "c1")
+    reviewer = account(review_id=rid, role="reviewer", name="Rae")
+
+    code, _, out = http("POST", f"{server}/r/{rid}/api/threads/{tid}/status", {"status": "resolved"}, signed_in(reviewer))
+
+    assert code == 200, out
+    assert _statuses(rid) == ["pending_notify"], "a reviewer's resolve cancelled the owner's wake"
+    tick()
+    assert len(env["receiver"].wakes) == 1
+
+
+def test_the_owners_resolve_over_http_drops_the_queued_wake(env, server, tmp_path):
+    rid = board(tmp_path)["id"]
+    tid = _open(server, rid, "@Hermes is this right?", "c1")
+
+    code, _, out = http("POST", f"{server}/r/{rid}/api/threads/{tid}/status", {"status": "resolved"})
+
+    assert code == 200, out
+    assert _statuses(rid) == ["answered"]
+    tick()
+    assert env["receiver"].wakes == []
+
+
+def test_a_round_pinned_viewers_activity_carries_no_global_thread_number(env, server, tmp_path):
+    """The live stream strips `n` for a round-pinned viewer; the persisted activity must project the same way."""
+    from mockreview import users
+    rid = board(tmp_path)["id"]
+    _open(server, rid, "@Hermes hello", "c1")
+    actor = f"user:{users.owner_user()['id']}"
+    pinned = threads.Scope(viewed=1, rounds=frozenset({1}), pinned=1)
+
+    full = [e for e in threads.activity(rid, actor) if isinstance(e["data"].get("thread"), dict)]
+    narrow = [e for e in threads.activity(rid, actor, scope=pinned) if isinstance(e["data"].get("thread"), dict)]
+
+    assert full and "n" in full[0]["data"]["thread"], "the unrestricted feed lost its thread number"
+    assert narrow and all("n" not in e["data"]["thread"] for e in narrow), "a pinned viewer's feed carries n"

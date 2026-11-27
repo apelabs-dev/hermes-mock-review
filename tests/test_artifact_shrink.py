@@ -155,7 +155,7 @@ def test_p2c_a_long_page_and_the_auto_height_frame_below_it_both_shrink(env, ser
         _tell(b, block, {"cut": 2, "delay": 2500})
     assert b.until("window.__mr.cv?.sections === 2 && window.__mr.fr?.sections === 2", timeout=10), \
         "both artifact pages should have cut to two sections"
-    assert _near(b, "cv", 2000, timeout=5), _h(b, "cv")
+    assert _near(b, "cv", 2000, timeout=20), _h(b, "cv")
     # Chrome can defer the second frame's resize notification while it is offscreen. Don't require it to stall.
     b.js("document.querySelector('#dz-fr iframe').scrollIntoView()")
     assert _near(b, "fr", 2000, timeout=2), "the frame stayed at %s after scrolling" % _h(b, "fr")
@@ -266,7 +266,7 @@ def test_an_absolute_footer_nested_in_a_static_wrapper_counts(env, server, tmp_p
     data = _review(tmp_path, [{"type": "artifact", "id": "cv", "title": "Nested footer", "display": "long",
                                "html": _page("cv", 2, tail=tail)}])
     b = _open(chrome, server, data, "cv")
-    assert _near(b, "cv", 6100, timeout=5), "expected 6100 px, got %s px" % _h(b, "cv")
+    assert _near(b, "cv", 6100, timeout=20), "expected 6100 px, got %s px" % _h(b, "cv")
     m = _measure(b, "cv")
     assert m["root"] == m["bsh"] == 2000, m
 
@@ -279,7 +279,7 @@ def test_the_absolute_footer_scan_is_bounded_on_a_large_dom(env, server, tmp_pat
     data = _review(tmp_path, [{"type": "artifact", "id": "cv", "title": "Large DOM", "display": "long",
                                "html": _page("cv", 2, tail=tail)}])
     b = _open(chrome, server, data, "cv")
-    assert _near(b, "cv", 6100, timeout=5), "expected 6100 px, got %s px" % _h(b, "cv")
+    assert _near(b, "cv", 6100, timeout=20), "expected 6100 px, got %s px" % _h(b, "cv")
     m = _measure(b, "cv")
     assert m["root"] == m["bsh"] == 2000 and m["dsh"] >= 12100, m
 

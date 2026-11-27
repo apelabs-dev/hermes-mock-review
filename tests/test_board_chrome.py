@@ -43,9 +43,11 @@ def test_intro_outro_and_header_can_each_be_switched_off(tmp_path):
     dec = _spec(tmp_path, [_art(header=False)], intro=False, outro=False)['decisions']
     assert dec['show_intro'] is False and dec['show_outro'] is False and dec['blocks'][0]['header'] is False
     assert _spec(tmp_path, [_art()], intro='Hello', outro=True)['decisions']['show_intro'] is True
+    dec = _spec(tmp_path, [_art()], intro=True, outro=True)['decisions']   # true is the default, spelt out
+    assert dec['show_intro'] is True and dec['show_outro'] is True
 
 
-@pytest.mark.parametrize('top, block', [({'intro': True}, {}), ({'intro': 0}, {}), ({'outro': 'no'}, {}),
+@pytest.mark.parametrize('top, block', [({'intro': 0}, {}), ({'outro': 'no'}, {}),
                                         ({'outro': 1}, {}), ({}, {'header': 'no'}), ({}, {'header': 0})])
 def test_a_misspelt_switch_is_an_error_not_a_silent_default(tmp_path, top, block):
     with pytest.raises(store.ReviewError):

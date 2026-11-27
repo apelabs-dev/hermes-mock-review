@@ -633,6 +633,8 @@ def activity(review_id: str, principal: str = "", limit: int = 100,
             payload = {}
         if restricted and not sees_round(scope, _event_round(r, thread_rounds)):
             continue
+        if restricted and isinstance(payload.get("thread"), dict):   # the live stream strips it too (live.Hub._shape)
+            payload = {**payload, "thread": {k: v for k, v in payload["thread"].items() if k != "n"}}
         out.append({"id": r["id"], "kind": r["kind"], "thread_id": r["thread_id"], "actor": r["actor"],
                     "actor_kind": _author_kind(r["actor"]),
                     "at": r["at"], "data": payload, "unread": bool(principal and r["actor"] != principal
