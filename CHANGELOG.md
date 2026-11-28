@@ -3,6 +3,13 @@
 All notable changes to this project are listed here. The format follows Keep a Changelog, and the project follows
 semantic versioning.
 
+## [2.5.0](https://github.com/apelabs-dev/hermes-mock-review/compare/v2.4.2...v2.5.0) (2026-11-28)
+
+
+### Features
+
+* **board:** the agent picks each board's body; optional intro, outro and header; a pan/zoom canvas; pin, viewer and wake fixes ([#74](https://github.com/apelabs-dev/hermes-mock-review/issues/74)) ([eb670c2](https://github.com/apelabs-dev/hermes-mock-review/commit/eb670c27c319dd3efda3582eccb9d8934d48e9af))
+
 ## [2.4.2](https://github.com/apelabs-dev/hermes-mock-review/compare/v2.4.1...v2.4.2) (2026-11-26)
 
 
