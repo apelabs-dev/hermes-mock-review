@@ -393,7 +393,7 @@ def test_a_long_chain_of_root_selectors_is_rewritten_in_one_pass(env, tmp_path):
     html = _artifact_doc(tmp_path, [{"type": "artifact", "id": "map", "title": "T", "html": page}])
     assert time.monotonic() - started < 3, "the root-selector rewrite is not linear"
     scope = re.search(r'class="mr-aw (mr-aw-[\w-]+)"', html).group(1)
-    assert "." + scope + " h1{color:red}" in html or "." + scope + "h1" not in html
+    assert "." + scope + " h1{color:red}" in html, "the rule was dropped instead of rewritten"
     assert not re.search(r"\." + re.escape(scope) + r"\s+html", html), "a root selector survived the rewrite"
 
 
