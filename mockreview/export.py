@@ -1082,16 +1082,27 @@ def _artifact_figure(block: Dict[str, Any], opts: _Options) -> str:
         root = _tree(markup)
         styles = _variant_styles(root, opts.review_id, opts.round_n, opts.variant)
         body = _variant_body(root, opts)
+    # The page's own CSS is written for a page of its own (`html`, `body`, `h1`, absolute boxes). Inlined bare it would
+    # restyle this document's title and layout, so it is scoped to one wrapper per artifact, and the page's root
+    # selectors (`html`, `body`, `:root`) become that wrapper: it is the page's body here.
+    scope = "mr-aw-%d-%s" % (opts.round_n, re.sub(r"[^a-z0-9-]", "", str(block.get("id") or "x").lower())[:40] or "x")
     style_tag = ""
     if styles:
-        css = _escape_css("\n".join(styles))
-        style_tag = "<style>" + css + "</style>"
-    caption = '<figcaption><strong>' + _escape_text(block.get("title") or "Artifact") + "</strong>"
-    if block.get("caption"):
-        caption += " <span>" + _escape_text(block.get("caption")) + "</span>"
-    caption += "</figcaption>"
-    return ('<figure class="mr-artifact">' + style_tag + '<div class="mr-artifact-page">' + body
-            + "</div>" + caption + "</figure>")
+        css = _sanitize_css("\n".join(styles), sheet=True, scope="." + scope) or ""
+        # One pass: the group takes a whole chain (`html body :root`), so the sheet is never rescanned.
+        root_sel = re.compile(r"\." + re.escape(scope) + r"(?:\s+(?:html|body|:root)(?![\w-]))+")
+        css = root_sel.sub("." + scope, css)
+        if css:
+            style_tag = "<style>" + css + "</style>"
+    display = block.get("display") if block.get("display") in ("page", "long", "canvas") else "frame"
+    caption = ""
+    if block.get("header") is not False:   # a page that speaks for itself has no caption either
+        caption = '<figcaption><strong>' + _escape_text(block.get("title") or "Artifact") + "</strong>"
+        if block.get("caption"):
+            caption += " <span>" + _escape_text(block.get("caption")) + "</span>"
+        caption += "</figcaption>"
+    return ('<figure class="mr-artifact mr-artifact-d-' + display + '">' + style_tag + '<div class="mr-artifact-page">'
+            + '<div class="mr-aw ' + scope + '">' + body + "</div></div>" + caption + "</figure>")
 
 
 def _prototype_html(variant: Dict[str, Any], opts: _Options) -> str:
@@ -1205,7 +1216,15 @@ color:var(--a);font-size:12px;font-weight:600;vertical-align:middle}
 .mr-designed .app[data-theme=dark]{color-scheme:dark}
 .mr-designed .app[data-theme=light]{color-scheme:light}
 .mr-artifact{border:1px solid var(--l);border-radius:var(--r);margin:12px 0;background:var(--s2);overflow:hidden}
-.mr-artifact-page{padding:12px;background:var(--s);overflow:hidden}
+.mr-artifact-page{padding:12px;background:var(--s);overflow:auto}
+/* The page's own body: a box of its own, so what the page positions or sizes stays inside it. A fixed-size page (a
+   canvas, a page with a set width) scrolls inside the figure rather than widening the document. */
+.mr-aw{position:relative;isolation:isolate;overflow:clip;min-width:0}
+.mr-artifact-d-canvas .mr-artifact-page{padding:0}
+/* A canvas page is drawn on the board's ground and usually paints none of its own, so this document gives it one: a
+   light dotted ground, whatever the theme of the window around it. */
+.mr-artifact-d-canvas .mr-aw{background-color:#f3f1fa;background-image:radial-gradient(rgba(31,29,24,.14) 1.1px,transparent 1.5px);
+background-size:24px 24px;color:#1f1d18}
 .mr-artifact figcaption{padding:8px 12px;border-top:1px solid var(--l);color:var(--m);font-size:12px}
 .mr-variant{margin:0 0 28px}
 .mr-variant-head h2{margin:0 0 4px}

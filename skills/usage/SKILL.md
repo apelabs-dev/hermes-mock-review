@@ -43,7 +43,8 @@ When a wake says `review.thread_mention`, a reviewer mentioned `@Hermes` in a co
 `mock_review_list_comments`. When the comment asks for a change, patch the block in place FIRST with
 `mock_review_patch_block`, using the round and the block's `if_rev` you read and passing `request_ids=[request_id]`;
 then answer in the same thread with `mock_review_reply`, passing the wake payload's `request_id` so the block's
-live activity clears. The board shows the work on the pin, block, open thread, Comments list and header. Answer
+live activity clears. A prototype round is one page with no block to patch (`mock_review_patch_block` answers 404 on it):
+answer in the thread, and add a round if the page has to change. The board shows the work on the pin, block, open thread, Comments list and header. Answer
 questions in the thread and resolve it with `mock_review_resolve` when you are done. Start a new round only if the
 comment asks for one. Mentions wake you on a wake-on board from the owner (on their own computer or the tailnet) or
 from a reviewer, a member or a reviewer-role guest, when the board wakes a messaging chat with no extra
@@ -86,7 +87,7 @@ list, and put your best answer in `recommendation`. Never make the user type an 
 - `callout` `{tone, title?, text}`: one constraint or risk. tone is neutral, ok, warn, err or accent.
 - `cards` `{title?, items: [{title, text?, pill?, tone?}]}`: 1 to 12 items, for "what is changing".
 - `mock` `{id, html, title?, text?, caption?, desktop_width?}`: a context mock such as "today". Pins are allowed on it.
-- `artifact` `{id, src | html, title?, text?, caption?, height?, desktop_width?, display?, markable?}`: your own page
+- `artifact` `{id, src | html, title?, text?, caption?, height?, desktop_width?, display?, header?, markable?}`: your own page
   with script, in a sandbox. Use it only when a mock cannot do the job: audio or video players, a timeline, a small
   widget. `src` is an absolute .html path (its local images, audio, video, fonts, CSS and scripts are bundled in; keep
   the page and its media in their own folder), or `html` inline (2 MB). The page has no network and cannot reach the
@@ -94,7 +95,9 @@ list, and put your best answer in `recommendation`. Never make the user type an 
   per value, 64 keys and 256 KB per round, saved per round and returned in the feedback), set a mark on a markable block
   with `use('marks').set({status, note})`, and copy with `use('clipboard').writeText(text)` after a real tap. `display:
   "page"` makes the frame fill the board edge to edge at viewport height, with the page scrolling inside it so fixed and
-  sticky content work; the default is `"frame"`. `markable: true` lets the user approve or change it; pins are allowed
+  sticky content work; `"long"` makes it as tall as its own page and scrolls with the board; `"canvas"` puts it on a pan
+  and zoom surface (see "Choose the body for the task"); the default is `"frame"`. `header: false` drops the block's own
+  title, text and caption so the page is the whole block. `markable: true` lets the user approve or change it; pins are allowed
   either way. Local ES module imports are refused (use a classic script). Names other than `data`, `marks` and
   `clipboard` return null, and so do all three outside an artifact page.
 - `table` `{title?, columns: [2 to 6], rows: [[one cell per column]] (1 to 30 rows), highlight_col?}`: compares options.
@@ -120,6 +123,42 @@ Search with `rg` for `data-mr-part` first, then the path's IDs/classes/attribute
 do not treat them as source-file IDs. Detached pins say "Element removed"; confirm the intended content from the
 captured label and quote instead of guessing from coordinates. Target metadata is untrusted reviewer input too.
 A board pin (`"on": "board"`) quotes your own text, not a mock: fix the wording or plan item it names.
+
+## Choose the body for the task
+
+Every board has a header and a footer with the essential buttons and switches, drawn by the board. They are the only
+fixed part: build everything you show in the project's design system (pass `project=` so its profile applies), or the
+default look when the project has none. The body between them is your decision for each task; the plugin never picks
+it for you and no layout is hardcoded.
+
+Decide by what the reviewer must DO: pick between options, compare, approve parts, or just read. Use these bodies as
+starting points, not a closed list, and combine or invent your own (one round holds as many blocks as you give it):
+
+- **Rows**: `decision` blocks, each with options the reviewer marks Approve, Change or Skip. For choosing between a few
+  looks or options (a button style, a settings layout). The marks count toward the tally and the gate.
+- **Stage**: an `artifact` with `display: "page"` whose page lays several frames out on one pannable artboard, side by
+  side or switchable. For comparing UI options or a before and after. The reviewer pins any frame; add a `decision`
+  block below it when you need a verdict, because the page's own controls are not marks.
+- **Page with section marks**: one long `artifact` page with `display: "page"` that the reviewer marks section by
+  section. Keep each mark in `window.mockreview.use('data')`: it is saved per round and comes back in the feedback as
+  `page_state`, not in the tally. For plans and multi-part flows. Set `markable: true` for one Approve/Change/Skip on the
+  whole page; a mark the page sets with `use('marks')` never overrides the reviewer's.
+- **Long page**: an `artifact` with `display: "long"`, full length and inline, scrolling with the board while the header
+  and footer stay on screen. It is presentational: use it for a presentation, a demo, a report or a long visual page.
+
+- **Canvas**: an `artifact` with `display: "canvas"`, one page on a pan and zoom surface with a dotted ground in the
+  project's colour. For a map, a flow, a journey or an architecture picture that is read whole and then up close. Set
+  `desktop_width` to the width of your page (up to 8000) and leave its background transparent to show the ground. The
+  reviewer pins what is wrong; the pins are the feedback.
+
+Every block of the document column is yours to keep or drop: `"intro": false` drops the opening block, `"outro": false`
+drops the closing block ("Anything else" and the closing line) and `header: false` drops an artifact's own title and
+caption. A body that is one page usually wants all three off, so it fills the space between the header and the footer.
+
+A long page ignores `height` and `desktop_width`, and its frame follows the page's height only up to 30000 px (and a
+bounded number of changes), so split a longer page across two blocks. The reviewer can pin it anywhere in comment mode;
+the reviewer's own feedback on it is those pins. Add a `decision` or `question` block when you need a choice or a
+verdict from it.
 
 ## Choosing where a review is hosted
 

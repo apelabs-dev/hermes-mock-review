@@ -101,10 +101,10 @@ def test_mock_markup_cannot_bring_script_handlers_or_external_urls(decisions_rev
 
 def test_artifact_is_a_figure_with_its_static_page(decisions_review):
     html = build(decisions_review)
-    assert '<figure class="mr-artifact">' in html
+    assert '<figure class="mr-artifact mr-artifact-d-frame">' in html
     assert "<figcaption>" in html and "Click sound" in html and "Take 3" in html
     assert "Artifact body" in html
-    assert "inside-artifact{color:red}" in html
+    assert re.search(r"\.mr-aw-\d+-art \.inside-artifact\{color:red\}", html), "the page's CSS is scoped to its wrapper"
     assert "window.__artifactPwned" not in html
 
 
@@ -373,3 +373,33 @@ def test_the_export_view_uses_the_first_live_comment_and_skips_empty_bodies(revi
 
     out = threads.threads_for_export(rid)
     assert [(t["body"], t["replies"]) for t in out] == [("Kept reply", [])]
+
+
+def _artifact_doc(tmp_path, blocks):
+    spec = tmp_path / "decisions.json"
+    spec.write_text(json.dumps({"intro": False, "outro": False, "blocks": blocks}), encoding="utf-8")
+    review = store.create_review("Scope", "", {"platform": "discord", "chat_id": "test-chat"}, "local",
+                                 store.parse_round_spec(decisions=str(spec)), wake=False)
+    return export.build_export_html(store.load(review["id"]), 1, False)
+
+
+def test_a_long_chain_of_root_selectors_is_rewritten_in_one_pass(env, tmp_path):
+    """The rewrite of `html`, `body` and `:root` inside an artifact's CSS must not rescan the sheet once per token: a
+    chain of 20 000 of them took tens of seconds when each pass removed one."""
+    import time
+    css = "html " * 120000 + "h1{color:red}"
+    page = "<!doctype html><style>" + css + "</style><h1>x</h1>"
+    started = time.monotonic()
+    html = _artifact_doc(tmp_path, [{"type": "artifact", "id": "map", "title": "T", "html": page}])
+    assert time.monotonic() - started < 3, "the root-selector rewrite is not linear"
+    scope = re.search(r'class="mr-aw (mr-aw-[\w-]+)"', html).group(1)
+    assert "." + scope + " h1{color:red}" in html, "the rule was dropped instead of rewritten"
+    assert not re.search(r"\." + re.escape(scope) + r"\s+html", html), "a root selector survived the rewrite"
+
+
+def test_two_artifacts_whose_ids_differ_only_by_a_hyphen_keep_their_own_wrapper(env, tmp_path):
+    blocks = [{"type": "artifact", "id": i, "title": i, "html": "<style>h1{color:red}</style><h1>a</h1>"}
+              for i in ("map-a", "mapa")]
+    html = _artifact_doc(tmp_path, blocks)
+    wrappers = re.findall(r'class="mr-aw (mr-aw-[\w-]+)"', html)
+    assert len(wrappers) == 2 and wrappers[0] != wrappers[1], wrappers

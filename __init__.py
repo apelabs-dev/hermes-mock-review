@@ -254,7 +254,7 @@ def _comment_reply(args: Dict[str, Any]) -> Dict[str, Any]:
         review_id = str(row["review_id"])
         thread, comment_id = threads.reply_comment(
             review_id, thread_id, threads.AGENT_ACTOR, threads.AGENT_NAME, "agent", text,
-            mentions=mentions, can_activate=False, principal=actor)
+            mentions=mentions, can_activate=False, principal=actor, request_id=request_id)
         comment = next((c for c in thread.get("comments") or [] if c["id"] == comment_id), None)
         with db.tx() as conn:
             users.audit(conn, actor, "plugin.reply", f"review:{review_id}",
@@ -281,7 +281,8 @@ def _comment_resolve(args: Dict[str, Any]) -> Dict[str, Any]:
         user, actor = _comment_actor()
         row = threads.by_id(thread_id)
         review_id = str(row["review_id"])
-        thread = threads.set_status(review_id, thread_id, status, threads.AGENT_ACTOR, principal=actor)
+        thread = threads.set_status(review_id, thread_id, status, threads.AGENT_ACTOR, principal=actor,
+                                    drop_wakes=not request_id)
         with db.tx() as conn:
             users.audit(conn, actor, "plugin.reopen" if reopen else "plugin.resolve",
                         f"review:{review_id}", thread_id=thread_id)

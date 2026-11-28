@@ -1259,3 +1259,52 @@ def test_a_design_profile_mock_is_styled_in_the_desk_viewer(env, tmp_path, chrom
         assert got["h1"] != "rgb(255, 0, 0)" and got["header_display"] != "none", f"design CSS restyled chrome: {got}"
     finally:
         close_page(page)
+
+
+CANVAS_PAGE = (
+    '<!doctype html><style>html,body{margin:0;width:2400px;height:1200px;background:transparent;color:#1f1d18}'
+    'h1{font-size:96px;position:absolute;left:40px;top:40px;margin:0}.card{position:absolute;left:900px;top:400px;'
+    'width:300px;height:200px;background:#fff}:root{--x:#123456}.t{color:var(--x)}</style>'
+    '<h1>Journey</h1><div class="card t">Card</div>')
+
+
+def artifact_review(tmp_path, **block):
+    spec = tmp_path / "decisions.json"
+    spec.write_text(json.dumps({"intro": False, "outro": False, "blocks": [dict(
+        type="artifact", id="map", title="Journey", html=CANVAS_PAGE, **block)]}), encoding="utf-8")
+    return store.create_review("Journey review", "", {"platform": "discord", "chat_id": "test-chat"}, "local",
+                               store.parse_round_spec(decisions=str(spec)), wake=False)
+
+
+def test_an_artifact_pages_css_stays_in_its_own_box_in_the_desk_viewer(env, tmp_path, chrome):
+    """The Desktop viewer is the export document. A page's `h1`, `html, body{width:2400px}` and absolute boxes are the
+    page's own: the title above stays 20 px, the document is not widened, the page's `:root` variable reaches its
+    content and its absolute boxes stay inside the page's box."""
+    from mockreview import api
+    for display in ("canvas", "long", "page"):
+        (tmp_path / display).mkdir()
+        review = artifact_review(tmp_path / display, display=display)
+        view = api.desk_view(review["id"])
+        page = Page(chrome, view["data_url"], width=1100, height=800)
+        try:
+            assert page.until("!!document.querySelector('.mr-aw')"), "the desk document has no artifact page"
+            got = json.loads(page.js(
+                "JSON.stringify((function(){var w=document.querySelector('.mr-aw'),r=w.getBoundingClientRect(),"
+                "c=w.querySelector('.card').getBoundingClientRect(),o=document.querySelector('.mr-artifact-page');"
+                "return {title:getComputedStyle(document.querySelector('.mr-header h1')).fontSize,"
+                "doc:document.documentElement.scrollWidth,vw:innerWidth,world:r.width,"
+                "var:getComputedStyle(w.querySelector('.t')).color,inside:c.left>=r.left&&c.right<=r.right&&c.top>=r.top,"
+                "caption:!!document.querySelector('figcaption'),scrolls:o.scrollWidth>o.clientWidth}})())"))
+            assert got["title"] == "20px", f"the page's h1 restyled the document title ({display}): {got}"
+            assert got["doc"] <= got["vw"], f"the page widened the document ({display}): {got}"
+            assert got["var"] == "rgb(18, 52, 86)", f"the page's :root variable did not reach its content: {got}"
+            assert got["inside"], f"an absolute box left the page's box: {got}"
+            assert got["world"] == 2400 and got["scrolls"] is True, got   # a page that sets its own width scrolls inside its figure
+        finally:
+            close_page(page)
+
+
+def test_an_artifact_without_a_header_has_no_caption_in_the_desk_viewer(env, tmp_path, chrome):
+    from mockreview import api
+    html = api.export.build_export_html(store.load(artifact_review(tmp_path, display="canvas", header=False)["id"]), 1, False)
+    assert "<figcaption>" not in html and "mr-aw-1-map" in html

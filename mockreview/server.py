@@ -1333,7 +1333,9 @@ class Handler(BaseHTTPRequestHandler):
             # tool require the reviewer role, so this route enforces the same rule instead of trusting the client.
             if who.source == "token" and decision.role not in ("owner", "reviewer"):
                 raise ReviewError("a personal access token needs the reviewer role to resolve or reopen a thread", 403)
-            thread = threads.set_status(rid, rest[1], str(body.get("status") or ""), who.actor, principal=who.actor)
+            # A reviewer's or commenter's resolve is theirs: it must not cancel a wake the owner queued for that thread.
+            thread = threads.set_status(rid, rest[1], str(body.get("status") or ""), who.actor, principal=who.actor,
+                                        drop_wakes=decision.role == "owner")
             return self._json(200, {"ok": True, "thread": thread})
         if len(rest) == 3 and rest[0] == "threads" and rest[2] == "read":
             threads.mark_read(rid, who.actor, rest[1])

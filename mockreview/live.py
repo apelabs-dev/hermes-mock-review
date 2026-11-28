@@ -418,6 +418,16 @@ class Registry:
             return True, [], tip
         return False, [r for r in rows if int(r["id"]) > last], tip
 
+    @staticmethod
+    def _shape(sub: Subscription, kind: str, data: Any) -> Any:
+        """The frame as this subscriber may see it. A thread's `n` counts every thread up to the viewed round, but a
+        round-pinned viewer lists only its own round: the number would jump on each live frame and reveal how many
+        threads the earlier rounds hold. The board keeps the number its own listing gave it."""
+        thread = data.get("thread") if isinstance(data, dict) else None
+        if sub.allow_round is not None and kind in THREAD_KINDS and isinstance(thread, dict) and "n" in thread:
+            return {**data, "thread": {k: v for k, v in thread.items() if k != "n"}}
+        return data
+
     def _visible(self, sub: Subscription, kind: str, data: Any) -> bool:
         allow = sub.allow_round
         if allow is None:
@@ -454,7 +464,8 @@ class Registry:
             visible = self._visible(sub, kind, data)
             if sub.closed:
                 return False
-            return not visible or stream.write(json.dumps(data, ensure_ascii=False), event=kind, id=event_id)
+            return not visible or stream.write(json.dumps(self._shape(sub, kind, data), ensure_ascii=False),
+                                               event=kind, id=event_id)
 
         def emit_rows(rows: Iterable[Any]) -> bool:
             for row in rows:

@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Acme Notes 2.0 launch plan</title>
+<style>
+:root{--bg:#f6f2e8;--surface:#fffdf7;--surface2:#efe9db;--line:#e1d9c6;--line2:#cdc4ad;--text:#1f1d18;--muted:#5b5649;--faint:#6d6657;
+  --accent:#1f6f5a;--ok:#14704f;--warn:#9a5a00}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+button,input{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+::selection{background:rgba(31,111,90,.25)}
+.ic{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+
+.shell{display:grid;grid-template-columns:230px minmax(0,780px);gap:56px;max-width:1160px;margin:0 auto;padding:0 32px}
+.rail{position:sticky;top:0;align-self:start;padding:40px 0;display:grid;gap:2px}
+.rail .brand{font:650 18px/1.25 ui-serif,Georgia,serif;margin-bottom:14px}
+.rail a{display:flex;gap:10px;align-items:center;justify-content:space-between;color:var(--muted);text-decoration:none;padding:9px 10px;
+  border-radius:10px;font-size:15px;min-height:42px}
+.rail a:hover{background:var(--surface2)}
+.rail a.cur{background:var(--surface);color:var(--text);font-weight:600;box-shadow:0 0 0 1px var(--line)}
+.dot{width:11px;height:11px;border-radius:50%;border:1.5px solid var(--faint);flex:none}
+.dot.approve{background:var(--ok);border-color:var(--ok)}
+.dot.change{background:var(--warn);border-color:var(--warn)}
+.dot.skip{background:var(--faint);border-color:var(--faint)}
+.tally{margin-top:14px;padding:0 10px;font-size:14px;color:var(--muted);font-variant-numeric:tabular-nums}
+
+.page{padding:40px 0 120px}
+.page>header{padding-bottom:28px}
+h1{font:650 clamp(30px,4.2vw,40px)/1.1 ui-serif,Georgia,serif;text-wrap:balance;letter-spacing:-.01em}
+.sub{color:var(--muted);margin-top:10px;max-width:60ch}
+.sec{padding:30px 0 34px;border-top:1px solid var(--line);display:grid;gap:14px;scroll-margin-top:8px}
+.sh{display:flex;gap:12px 20px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap}
+.sh h2{font:650 24px/1.2 ui-serif,Georgia,serif;text-wrap:balance}
+.lede{max-width:64ch}
+.pts{list-style:none;display:grid;gap:10px;max-width:64ch}
+.pts li{display:flex;gap:12px;align-items:flex-start}
+.pts .ic{color:var(--accent);margin-top:4px}
+table{border-collapse:collapse;width:100%;font-size:15px}
+th,td{text-align:left;padding:11px 14px 11px 0;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-weight:600;color:var(--muted);font-size:14px}
+td:first-child{font-weight:600;white-space:nowrap}
+.num{font-variant-numeric:tabular-nums}
+.chan{list-style:none;display:grid;max-width:64ch}
+.chan li{display:grid;grid-template-columns:150px 1fr;gap:4px 20px;padding:13px 0;border-bottom:1px solid var(--line)}
+.chan b{font-weight:600}
+.chan span{color:var(--muted)}
+
+.markrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding-top:6px}
+.marks{display:inline-flex;gap:4px;flex:none;flex-wrap:wrap}
+.marks button{display:inline-flex;gap:6px;align-items:center;background:var(--surface);border:1px solid var(--line2);border-radius:10px;
+  padding:6px 12px;font-size:14px;color:var(--muted);min-height:40px}
+.marks button:hover{border-color:var(--faint);color:var(--text)}
+.marks button[aria-pressed=true]{color:var(--text);font-weight:600}
+.marks button[data-status=approve][aria-pressed=true]{border-color:var(--ok);background:#e3f1ea}
+.marks button[data-status=change][aria-pressed=true]{border-color:var(--warn);background:#faedd5}
+.marks button[data-status=skip][aria-pressed=true]{border-color:var(--faint);background:var(--surface2)}
+.markrow input{flex:1;min-width:200px;background:var(--surface);border:1px solid var(--line2);border-radius:10px;padding:8px 12px;min-height:40px;font-size:15px}
+.markrow input::placeholder{color:#7a7364}
+
+@media (max-width:900px){
+  .shell{grid-template-columns:1fr;gap:0;padding:0 18px}
+  .rail{position:sticky;top:0;z-index:3;padding:10px 0 8px;display:flex;gap:4px;overflow-x:auto;background:var(--bg);border-bottom:1px solid var(--line)}
+  .rail .brand,.tally{display:none}
+  .rail a{flex:1 1 auto;justify-content:center;padding:6px 8px;min-height:42px;font-size:14px;border-radius:10px 10px 0 0}
+  .rail .dot{display:none}
+  .rail a[data-status=approve]{box-shadow:inset 0 -3px 0 var(--ok)}
+  .rail a[data-status=change]{box-shadow:inset 0 -3px 0 var(--warn)}
+  .rail a[data-status=skip]{box-shadow:inset 0 -3px 0 var(--faint)}
+  .page{padding-top:24px}
+  .chan li{grid-template-columns:1fr}
+  td:first-child{white-space:normal}
+}
+</style></head><body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></symbol>
+  <symbol id="i-skip" viewBox="0 0 24 24"><path d="m5 4 10 8-10 8Z"/><path d="M19 5v14"/></symbol>
+  <symbol id="i-dot" viewBox="0 0 24 24"><path d="M5 12.5 10 17.5 19 7"/></symbol>
+</defs></svg>
+
+<div class="shell">
+<nav class="rail" aria-label="Plan parts">
+  <div class="brand">Acme Notes 2.0</div>
+  <a href="#message" data-s="message"><span>Message</span><span class="dot"></span></a>
+  <a href="#week" data-s="week"><span>Launch week</span><span class="dot"></span></a>
+  <a href="#channels" data-s="channels"><span>Channels</span><span class="dot"></span></a>
+  <a href="#measures" data-s="measures"><span>Measures</span><span class="dot"></span></a>
+  <div class="tally" id="tally">0 of 4 marked</div>
+</nav>
+
+<main class="page">
+  <header>
+    <h1>Acme Notes 2.0 launch plan</h1>
+    <p class="sub">Four parts. Mark each one: Approve it, ask for a Change, or Skip it. Add a note where it helps.</p>
+  </header>
+
+  <section class="sec" id="message" data-mr-part="part-message">
+    <div class="sh"><h2>What we say</h2></div>
+    <p class="lede">Acme Notes 2.0 is for people who keep notes in three places and trust none of them. Everything we publish comes back to three points.</p>
+    <ul class="pts">
+      <li><svg class="ic"><use href="#i-dot"/></svg><span><b>One inbox for every note.</b> Type it, paste it or share it in; it lands in the same place.</span></li>
+      <li><svg class="ic"><use href="#i-dot"/></svg><span><b>Search that finds a phrase,</b> not just a title, even inside long notes.</span></li>
+      <li><svg class="ic"><use href="#i-dot"/></svg><span><b>Works without a signal.</b> Edits are saved on the device first and sync when you are back online.</span></li>
+    </ul>
+    <div class="markrow" data-mark-group="message">
+      <div class="marks" role="group" aria-label="Mark What we say">
+        <button data-status="approve" aria-pressed="false"><svg class="ic"><use href="#i-check"/></svg>Approve</button>
+        <button data-status="change" aria-pressed="false"><svg class="ic"><use href="#i-edit"/></svg>Change</button>
+        <button data-status="skip" aria-pressed="false"><svg class="ic"><use href="#i-skip"/></svg>Skip</button></div>
+      <input data-note type="text" maxlength="280" placeholder="Note on this part" aria-label="Note on What we say"></div>
+  </section>
+
+  <section class="sec" id="week" data-mr-part="part-week">
+    <div class="sh"><h2>Launch week</h2></div>
+    <p class="lede">Release on Monday morning, then one thing a day so the team can answer questions the day they come in.</p>
+    <table>
+      <thead><tr><th>Day</th><th>What happens</th><th>Who</th></tr></thead>
+      <tbody>
+        <tr><td>Monday</td><td>Release notes and the new site page go live</td><td>Product</td></tr>
+        <tr><td>Tuesday</td><td>Email to everyone who already has an account</td><td>Marketing</td></tr>
+        <tr><td>Wednesday</td><td>Live walkthrough at example.test/live</td><td>Product</td></tr>
+        <tr><td>Thursday</td><td>Answer questions and fix first-week bugs</td><td>Support</td></tr>
+        <tr><td>Friday</td><td>Read the numbers and write what we learned</td><td>Everyone</td></tr>
+      </tbody>
+    </table>
+    <div class="markrow" data-mark-group="week">
+      <div class="marks" role="group" aria-label="Mark Launch week">
+        <button data-status="approve" aria-pressed="false"><svg class="ic"><use href="#i-check"/></svg>Approve</button>
+        <button data-status="change" aria-pressed="false"><svg class="ic"><use href="#i-edit"/></svg>Change</button>
+        <button data-status="skip" aria-pressed="false"><svg class="ic"><use href="#i-skip"/></svg>Skip</button></div>
+      <input data-note type="text" maxlength="280" placeholder="Note on this part" aria-label="Note on Launch week"></div>
+  </section>
+
+  <section class="sec" id="channels" data-mr-part="part-channels">
+    <div class="sh"><h2>Where we announce it</h2></div>
+    <p class="lede">Three places, each with a job. Nothing is posted anywhere else.</p>
+    <ul class="chan">
+      <li><b>Email</b><span>The one message existing users get. Short, with a link to the walkthrough.</span></li>
+      <li><b>Site and blog</b><span>Release notes with a short screen recording of each of the three points.</span></li>
+      <li><b>Community forum</b><span>A pinned thread where Support answers within a working day.</span></li>
+    </ul>
+    <div class="markrow" data-mark-group="channels">
+      <div class="marks" role="group" aria-label="Mark Where we announce it">
+        <button data-status="approve" aria-pressed="false"><svg class="ic"><use href="#i-check"/></svg>Approve</button>
+        <button data-status="change" aria-pressed="false"><svg class="ic"><use href="#i-edit"/></svg>Change</button>
+        <button data-status="skip" aria-pressed="false"><svg class="ic"><use href="#i-skip"/></svg>Skip</button></div>
+      <input data-note type="text" maxlength="280" placeholder="Note on this part" aria-label="Note on Where we announce it"></div>
+  </section>
+
+  <section class="sec" id="measures" data-mr-part="part-measures">
+    <div class="sh"><h2>How we know it worked</h2></div>
+    <p class="lede">Three numbers, read on Friday of launch week and again after thirty days.</p>
+    <table>
+      <thead><tr><th>Measure</th><th>Target</th></tr></thead>
+      <tbody>
+        <tr><td>Notebooks created in week one</td><td class="num">2,000</td></tr>
+        <tr><td>New users who finish their first sync</td><td class="num">70%</td></tr>
+        <tr><td>Support tickets about signing in</td><td class="num">Under 40</td></tr>
+      </tbody>
+    </table>
+    <div class="markrow" data-mark-group="measures">
+      <div class="marks" role="group" aria-label="Mark How we know it worked">
+        <button data-status="approve" aria-pressed="false"><svg class="ic"><use href="#i-check"/></svg>Approve</button>
+        <button data-status="change" aria-pressed="false"><svg class="ic"><use href="#i-edit"/></svg>Change</button>
+        <button data-status="skip" aria-pressed="false"><svg class="ic"><use href="#i-skip"/></svg>Skip</button></div>
+      <input data-note type="text" maxlength="280" placeholder="Note on this part" aria-label="Note on How we know it worked"></div>
+  </section>
+</main>
+</div>
+
+<script>
+/*MARKS_JS*/
+</script>
+<script>
+(function () {
+  var links = Array.prototype.slice.call(document.querySelectorAll('.rail a'));
+  var total = links.length;
+
+  /* the rail follows the part in view: the last part whose top has passed a line a third of the way down */
+  var secs = Array.prototype.slice.call(document.querySelectorAll('.sec')), ticking = false;
+  function follow() {
+    ticking = false;
+    var line = innerHeight * 0.33, cur = secs[0];
+    secs.forEach(function (s) { if (s.getBoundingClientRect().top <= line) cur = s; });
+    if (scrollY + innerHeight >= document.documentElement.scrollHeight - 2) cur = secs[secs.length - 1];
+    links.forEach(function (l) { l.classList.toggle('cur', l.dataset.s === cur.id); });
+  }
+  function queue() { if (!ticking) { ticking = true; requestAnimationFrame(follow); } }
+  addEventListener('scroll', queue, { passive: true });
+  addEventListener('resize', queue);
+  follow();
+
+  wireMarks(function (marks) {
+    var n = 0;
+    links.forEach(function (l) {
+      var m = marks[l.dataset.s] || {};
+      l.querySelector('.dot').className = 'dot' + (m.status ? ' ' + m.status : '');
+      if (m.status) l.dataset.status = m.status; else delete l.dataset.status;
+      if (m.status) n += 1;
+    });
+    document.getElementById('tally').textContent = n + ' of ' + total + ' marked';
+  });
+})();
+</script>
+</body></html>

@@ -23,8 +23,8 @@ A thread is one anchored conversation:
 - **Activation.** `activated` means the owner or a reviewer mentioned `@Hermes` in it and the request gate let that
   mention wake Hermes (see "Who" below). An activating comment wakes Hermes once through the same wake route Send uses; the payload names the review, round, thread, comment
   and block. The POST answers without waiting for the gateway: the worker tick delivers the wake, a burst inside the
-  spacing window becomes one wake carrying every mention, and a request on an editable block shows live Hermes
-  activity. Replaying the same `idem` is a duplicate and never wakes twice. A commenter, an agent's token and a
+  spacing window becomes one wake carrying every mention, and a request on an editable block, or on a pin in a
+  prototype round, shows live Hermes activity. Replaying the same `idem` is a duplicate and never wakes twice. A commenter, an agent's token and a
   wake-off board never activate, so they never wake anyone.
 
 ## Waking Hermes from a thread
@@ -45,10 +45,13 @@ An `@Hermes` mention in a comment starts a Hermes session without anyone pressin
 - **In the chat.** The mention sends no ack message and no stalled ping; those belong to Send. The woken session reads
   the thread, answers it with `mock_review_reply` and can close it with `mock_review_resolve`. The reply appears in the
   thread on the board, not in the chat.
-- **On the board.** On the current round, an accepted request on an editable block adds a pulsing red dot on the
+- **On the board.** On the current round, an accepted request on an editable block (or a pin in a prototype round) adds a pulsing red dot on the
   pin's right side,
   one **Hermes is working…** chip to the block, an elapsed timer in the open thread and a **Working** badge in
-  Comments. **Hermes · N working** in the header opens the working comments for that round. Reviewer pin fixes use
+  Comments. **Hermes · N working** in the header opens the working comments for that round. When several requests are
+  open on a round, only the oldest is running: each younger one shows **Queued behind N** (N older open requests
+  ahead of it) instead, on the pin label, the thread status, the block chip and the Comments badge, and switches to
+  working when the older ones finish. Reviewer pin fixes use
   the same indicator, including standalone pins. `pin_fix` controls reviewer pin fixes. Mentions can still wake
   Hermes and patch supported blocks when that setting is off.
 - **Completion.** A patch, Hermes reply or Hermes resolve clears the working state on the requests it completes.
@@ -276,7 +279,14 @@ feed has its own cursor, moved by `activity/read`. More shows the open-thread an
 ## Hermes and external agent replies
 
 An owner's or reviewer's `@Hermes` mention wakes Hermes once per comment. The worker coalesces a burst into one wake
-that names each mention. Mentions of people do not send notifications. A woken session answers through the plugin's
+that names each mention. When Hermes replies with a `request_id`, it settles that request and drops queued wakes on the
+same thread for comments that were already visible before its wake was sent. Later comments keep their wakes. If the
+board can't tell what was visible before the wake, nothing extra is dropped. A Hermes reply without a `request_id`
+or a resolution by the owner or Hermes drops all queued wakes on that thread for the current round, except a
+resolution naming a `request_id` leaves the queue alone. A reviewer's or commenter's resolution drops nothing, so it
+cannot cancel a wake the owner queued. Dropped wakes close their working chips as "answered before delivery".
+Wakes already sent or being sent, wakes on other threads or older rounds, and the queue after a human reply are left alone.
+Mentions of people do not send notifications. A woken session answers through the plugin's
 `mock_review_list_comments`, `mock_review_reply` and `mock_review_resolve` tools. Its reply and resolve are Hermes's:
 the comment is stored under the fixed agent author `agent:hermes`, shown with the name Hermes, its own avatar and a
 small **Hermes** mark, and `author_kind` is `hermes`. It is nobody's own comment (`mine` is false for everyone, so no

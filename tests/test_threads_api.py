@@ -166,6 +166,23 @@ def test_edit_and_delete_are_own_only(server, review):
         assert code == 200, (name, code, out)
 
 
+def test_a_reviewer_cannot_delete_a_hermes_reply_over_http(server, review):
+    """Only the owner may delete Hermes's reply, and the route must decide `owner` from the database role: a reviewer
+    session that may post on the thread still gets 403, and the reply stays."""
+    rid = review["id"]
+    thread = make_thread(rid)
+    _, cid = threads.reply_comment(rid, thread["id"], threads.AGENT_ACTOR, threads.AGENT_NAME, None,
+                                   "Yes, it matches.")
+    reviewer = account(review_id=rid, role="reviewer", name="Rae")
+    path, body = route(rid, "delete", thread["id"], cid)
+    code, _, out = http("POST", server + path, body, signed_in(reviewer))
+    assert code == 403, (code, out)
+    code, _, out = http("GET", server + f"/r/{rid}/api/threads", headers=signed_in(reviewer, False))
+    assert code == 200, out
+    comments = next(t for t in json.loads(out)["threads"] if t["id"] == thread["id"])["comments"]
+    assert next(c for c in comments if c["id"] == cid)["deleted_at"] is None, "a reviewer deleted Hermes's reply"
+
+
 # ---------------------------------------------------------------- state.json and body rules
 
 

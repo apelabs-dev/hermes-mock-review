@@ -12,9 +12,10 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = (ROOT / 'mockreview/board/board.js').read_text(encoding='utf-8')
 NAMES = ['h', 'append', 'paras', 'entryKind', 'capCustom', 'isResolved', 'gateState', 'progressLine', 'isMarkableBlock',
          'groupBlocks', 'approveRestIds', 'groupHasBulk', 'gateIcon', 'endLine', 'icon', 'updateGate', 'gateReason', 'gateTitle', 'renderGate', 'updateSendbar', 'cleanMarks', 'payload', 'renderQuestion', 'renderPiece',
-         'renderSettled', 'renderRecapNote', 'renderAsked', 'renderNotesAnswered', 'renderBlock', 'savedCopy', 'markEmpty', 'submittedFeedback', 'watchWindowMs',
+         'renderSettled', 'renderRecapNote', 'renderAsked', 'renderNotesAnswered', 'renderBlock', 'artifactDisplayClass',
+         'savedCopy', 'markEmpty', 'submittedFeedback', 'watchWindowMs',
          'newPinId', 'uuid', 'isEl', 'closestOf', 'num', 'scrollPoint', 'docPoint', 'pct', 'sectionOf', 'sectionRef',
-         'canvasBox', 'canvasClick']
+         'canvasBox', 'canvasClick', 'nextPinNo']
 
 
 def run(test):
@@ -355,6 +356,7 @@ def test_canvas_pin_skips_controls_and_records_section():
     run('''
     global.window = { crypto: globalThis.crypto };
 global.S = {commentMode: true, width: 'desktop', draft: {pins: []}};
+global.T = {threads: () => []};
 global.isEditable = () => true; global.pinsOn = () => true; global.viewed = () => ({}); global.canComment = () => true;
 global.canvasBox = () => ({left: 0, top: 0, width: 200, height: 100});
 global.wlabel = w => w; global.anchorFor = () => null;

@@ -152,6 +152,7 @@ button:disabled { cursor: default; }
 .jump { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; background: var(--surface); border: 1px solid var(--line); color: var(--text); font-weight: 700; font-size: 13px; text-decoration: none; }
 
 /* banners */
+.dz-banners { display: flow-root; }
 .banner { max-width: 1680px; margin: 14px auto 0; padding: 0 var(--pad); display: flex; gap: 12px; align-items: center; flex-wrap: wrap; font-size: 14px; }
 .banner span { flex: 1; min-width: 200px; }
 .banner-muted span, .banner-warn span { padding: 10px 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface-2); color: var(--muted); }
@@ -527,8 +528,8 @@ figure.opt.picked .mock { outline: 2px solid var(--accent); }
 }
 .hermes-pin-indicator .ico { width: 12px; height: 12px; }
 @keyframes hermes-pin-pulse {
-  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(220, 38, 38, .55); }
-  50% { transform: scale(1.25); box-shadow: 0 0 0 5px rgba(220, 38, 38, 0); }
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 color-mix(in srgb, var(--err) 55%, transparent); }
+  50% { transform: scale(1.25); box-shadow: 0 0 0 5px color-mix(in srgb, var(--err) 0%, transparent); }
 }
 @media (prefers-reduced-motion: reduce) {
   .mpin[data-hermes-state="working"] .hermes-pin-indicator { animation: none; }
@@ -608,14 +609,49 @@ figure.ctx-fig { margin-top: 16px; }
 .art-hint { margin: 8px 0 0; font-size: 13px; color: var(--faint); }
 .art-missing { margin: 0; padding: 14px; border-radius: 14px; outline: 1px dashed var(--line); color: var(--muted); font-size: 14px; }
 
-/* an artifact with "display": "page": the same full-bleed page frame, breaking out of the document column */
-.blk-art-page { border-bottom: 0; }
-.blk-art-page .art-fig { margin-left: calc(50% - var(--page-w, 100vw) / 2);
+/* an artifact with "display": "page" or "long": the same full-bleed frame, breaking out of the document column.
+   A page is one viewport tall and scrolls inside; a long page is as tall as its own page and scrolls with the board. */
+.blk-art-page, .blk-art-long { border-bottom: 0; }
+.blk-art-page .art-fig, .blk-art-long .art-fig { margin-left: calc(50% - var(--page-w, 100vw) / 2);
                          margin-right: calc(50% - var(--page-w, 100vw) / 2); margin-top: 10px; }
-.blk-art-page .art { margin: 0; border-radius: 0; outline: 0; background: var(--bg); overflow: hidden; }
-.blk-art-page .art-frame { width: 100%; height: calc(100dvh - var(--barh, 52px) - var(--footh, 0px)); display: block; border: 0; }
-.blk-art-page .ctx-cap { margin: 10px 0 0; }
-.blk-art-page .ipins { margin-top: 12px; }
+.blk-art-page .art, .blk-art-long .art { margin: 0; border-radius: 0; outline: 0; background: var(--bg); overflow: hidden; }
+.blk-art-page .art-frame, .blk-art-long .art-frame { width: 100%; display: block; border: 0; }
+.blk-art-page .art-frame { height: calc(100dvh - var(--barh, 52px) - var(--footh, 0px)); }
+.blk-art-page .ctx-cap, .blk-art-long .ctx-cap { margin: 10px 0 0; }
+.blk-art-page .ipins, .blk-art-long .ipins { margin-top: 12px; }
+
+/* Canvas: the iframe is sized in world pixels; only its wrapper is transformed. */
+.dz .doc .blk-art-canvas { padding: 0 0 24px; border: 0; border-radius: 0; background: none; }
+.art-canvas-doc > .blk-art-canvas { margin-top: 0; }
+/* header: false on an artifact: nothing around the page, so a page fills the space between the bar and the footer exactly */
+.dz .doc .blk-art-bare { margin: 0; padding: 0; border: 0; border-radius: 0; background: none; }
+.dz .blk-art-bare .art-fig { margin-top: 0; margin-bottom: 0; }
+.blk-art-bare .ipins { margin: 0; padding: 12px 16px 0; }
+/* A lone bare page or canvas is exactly as tall as the space between the bar and the footer, so the column's own bottom
+   padding (kept for the end of a long document) would only add a second scrollbar. */
+.dz:has(> .doc > .blk-art-bare:only-child:is(.blk-art-page, .blk-art-canvas)) { padding-bottom: 0; }
+.blk-art-canvas .art-fig { margin: 0 calc(50% - var(--page-w, 100vw) / 2) 16px; }
+.blk-art-canvas .ctx-cap { padding-inline: 16px; }
+.blk-art-canvas .art-canvas { height: calc(100dvh - var(--barh, 52px) - var(--footh, 0px) - var(--bannerh, 0px)); margin: 0;
+  isolation: isolate; overflow: clip; border-radius: 0; outline: none;
+  /* The ground is the project's own colour with a touch of its accent, dotted, and the dots travel with the camera
+     (--cv-x/y/z are set by the board). Below about a third of full size the dots would only be noise, so they fade out. */
+  --cv-a: 11%;
+  background-color: color-mix(in srgb, var(--accent) 7%, var(--bg));
+  background-image: radial-gradient(circle, color-mix(in srgb, var(--text) var(--cv-a), transparent) 1.1px, transparent 1.5px);
+  background-size: calc(24px * var(--cv-z, 1)) calc(24px * var(--cv-z, 1));
+  background-position: var(--cv-x, 0px) var(--cv-y, 0px); }
+.blk-art-canvas .art-canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.canvas-world { position: absolute; inset: 0 auto auto 0; transform-origin: 0 0; }
+.canvas-shield { position: absolute; inset: 0; cursor: grab; touch-action: none; }
+.canvas-dragging .canvas-shield { cursor: grabbing; }
+.canvas-controls { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 2px; padding: 4px;
+  border: 1px solid var(--line); border-radius: var(--rc); background: var(--surface); box-shadow: var(--sh); }
+.canvas-controls .icon-btn[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
+.canvas-percent { min-width: 44px; text-align: center; color: var(--text); font-size: 13px; font-variant-numeric: tabular-nums; }
+.canvas-text-btn { min-height: var(--hit); padding: 0 8px; border-radius: var(--r); color: var(--muted); font-size: 13px; }
+.canvas-text-btn:hover { color: var(--text); background: var(--surface-2); }
 
 /* prototype round: page mode — the clickable page fills the canvas edge to edge under the bar */
 .dz-prototype { padding: 0; }
@@ -768,8 +804,13 @@ body.page-mode #pins-proto { position: absolute; left: 12px; bottom: 12px; z-ind
 .tbtn.has-unread .badge { background: var(--err); }
 .tbtn.has-unread::after { content: ""; position: absolute; top: 5px; right: 5px; width: 7px; height: 7px;
   border-radius: 50%; background: var(--err); border: 2px solid var(--surface); }
-.mpin.un::after, .tpin.un::after { content: ""; position: absolute; top: -3px; right: -3px; width: 9px; height: 9px;
+.tpin.un::after { content: ""; position: absolute; top: -3px; right: -3px; width: 9px; height: 9px;
   border-radius: 50%; background: var(--err); border: 2px solid var(--bg); }
+/* On a map pin the unread dot sits exactly where the working dot does (the marker is turned -45deg, so its local right
+   edge is the upper right on screen), in the same size and ring, so the dot never jumps when Hermes starts or stops. */
+.mpin.un::after { content: ""; position: absolute; right: -5px; top: 50%; margin-top: -5px; width: 10px; height: 10px;
+  box-sizing: border-box; border-radius: 50%; background: var(--err); border: 2px solid var(--surface); }
+.mpin[data-hermes-state="working"].un::after { display: none; }
 .tpin { background: var(--pin); color: #fff; }
 .tpin-row { list-style: none; }
 .live-chip { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 90; padding: 6px 12px;

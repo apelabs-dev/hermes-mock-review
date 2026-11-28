@@ -137,6 +137,9 @@ import {paintAvatar} from './avatar.js';
     "link": "<path d=\"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71\" /> <path d=\"M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71\" />",
     "users": "<path d=\"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2\" /> <path d=\"M16 3.128a4 4 0 0 1 0 7.744\" /> <path d=\"M22 21v-2a4 4 0 0 0-3-3.87\" /> <circle cx=\"9\" cy=\"7\" r=\"4\" />",
     "plus": "<path d=\"M5 12h14\" /> <path d=\"M12 5v14\" />",
+    "minus": "<path d=\"M5 12h14\" />",
+    "scan": "<path d=\"M4 7V5a1 1 0 0 1 1-1h2m10 0h2a1 1 0 0 1 1 1v2m0 10v2a1 1 0 0 1-1 1h-2M7 20H5a1 1 0 0 1-1-1v-2\" />",
+    "grab": "<path d=\"M18 11V7a2 2 0 0 0-4 0v3-6a2 2 0 0 0-4 0v6-4a2 2 0 0 0-4 0v10l-1.6-1.6a2 2 0 0 0-2.8 2.8L5 21a4 4 0 0 0 3 1h8a6 6 0 0 0 6-6v-5a2 2 0 0 0-4 0v2\" />",
     "clock": "<circle cx=\"12\" cy=\"12\" r=\"10\" /> <path d=\"M12 6v6l4 2\" />",
     "chevron-down": "<path d=\"m6 9 6 6 6-6\" />",
     "chevron-right": "<path d=\"m9 18 6-6-6-6\" />",
@@ -885,7 +888,7 @@ import {paintAvatar} from './avatar.js';
     pins.forEach(function (p, i) {
       list.appendChild(h('li', { class: 'pin-item' },
         h('button', { class: 'pin-row', onclick: function () { if (p.thread) T.open(p.thread, {detached: p.detached}); else focusPin(vid, i); } },
-          h('span', { class: 'pin-num', text: String(i + 1) }),
+          h('span', { class: 'pin-num', text: String(pinNo(p, i)) }),
           h('span', { class: 'pin-body' },
             h('span', { class: 'pin-where', text: DEVICES[p.frame].label + ' · ' + pct(p.x) + ', ' + pct(p.y) }),
             h('span', { class: 'pin-text', text: p.text })))));
@@ -1013,7 +1016,7 @@ import {paintAvatar} from './avatar.js';
   function framePins(f) {
     var out = [];
     S.draft.variants[f.vid].pins.forEach(function (p, i) {
-      if (p.frame === f.device && pinVisible(p)) out.push({ i: i, n: i + 1, x: p.x, y: p.y });
+      if (p.frame === f.device && pinVisible(p)) out.push({ i: i, n: pinNo(p, i), x: p.x, y: p.y });
     });
     if (f.ghost) out.push({ i: -1, n: S.draft.variants[f.vid].pins.length + 1, x: f.ghost.x, y: f.ghost.y, ghost: true });
     if (S.commentMode) T.frameEntries(f.vid, f.device).forEach(function (t, j) {
@@ -1042,14 +1045,14 @@ import {paintAvatar} from './avatar.js';
   // any message it likes at any moment.
   function frameThreadEntries(f, block) {
     if (f.ctx === 'proto') return T.protoEntries();
-    if (f.ctx === 'artifact') return T.mockEntries(block, null);
+    if (f.ctx === 'artifact' && !f.canvas) return T.mockEntries(block, null);
     return T.frameEntries(block, f.device);
   }
-  function openFrameThread(f, block, id, detached) {
+  function openFrameThread(f, block, id, detached, box) {
     if (typeof id !== 'string' || !id || id.indexOf('tmp:') === 0) return;
     var own = frameThreadEntries(f, block).filter(function (t) { return t.id === id; })[0];
     if (!own) return;
-    T.open(id, {detached: !!detached, read: false});
+    T.open(id, {detached: !!detached, read: false, box: box});
   }
   function anchorOf(f, cx, cy) {
     var r = f.iframe.getBoundingClientRect();
@@ -1212,6 +1215,7 @@ import {paintAvatar} from './avatar.js';
   function commentAvailable() { return canComment(); }
   function setCommentMode(on) {
     var want = !!on && commentAvailable();
+    if (want) S.frames.forEach(function (f) { if (f.canvas && f.hand && f.setHand) f.setHand(false); });
     if (want === S.commentMode && document.querySelector('[data-comment-toggle]')) { syncComment(); return; }
     S.commentMode = want;
     closePopover();
@@ -1521,7 +1525,7 @@ import {paintAvatar} from './avatar.js';
   // Sticky heights: one live observer per surface. A rerender builds a new bar/footer, so the previous observer is
   // disconnected before the new one starts and render() releases both when it tears the page down; otherwise every
   // rerender keeps the detached node observed.
-  var barRO = null, footRO = null, roundsRO = null;
+  var barRO = null, footRO = null, roundsRO = null, bannersRO = null;
   function watchSticky(el, prop, prev) {
     if (prev) prev.disconnect();
     if (!window.ResizeObserver) return null;
@@ -1533,6 +1537,7 @@ import {paintAvatar} from './avatar.js';
     if (barRO) { barRO.disconnect(); barRO = null; }
     if (footRO) { footRO.disconnect(); footRO = null; }
     if (roundsRO) { roundsRO.disconnect(); roundsRO = null; }
+    if (bannersRO) { bannersRO.disconnect(); bannersRO = null; }
   }
   // A page-mode artifact's full bleed must break out against the layout viewport, not `vw`: `100vw` includes a classic
   // scrollbar that the document column does not, so the frame overhangs the page by the scrollbar's width. One observer
@@ -1668,13 +1673,18 @@ import {paintAvatar} from './avatar.js';
     var seq = ++renderSeq;
     MOCKS = [];
     var main = h('main', { class: 'dz dz-' + r.kind }, h('div', { class: 'boot' }, h('div', { class: 'boot-dot' }), h('p', { text: 'Loading round ' + r.n + '…' })));
-    append(app, [renderBar(r), renderStatusBanner(), renderPinnedBanner(), main, renderFoot(r)]);
+    // A canvas keeps the footer on screen, so whatever a banner adds to the top is measured and taken off the surface.
+    var banners = h('div', { class: 'dz-banners' }, renderStatusBanner(), renderPinnedBanner());
+    append(app, [renderBar(r), banners.childNodes.length ? banners : null, main, renderFoot(r)]);
+    bannersRO = watchSticky(banners, '--bannerh', bannersRO);
+    if (!banners.childNodes.length) document.documentElement.style.setProperty('--bannerh', '0px');
     watchRoundStrip();
     requestAnimationFrame(syncRoundStrip);
     loadAssets(r).then(function (a) {
       if (seq !== renderSeq) return;
       main.textContent = '';
       append(main, r.kind === 'prototype' ? renderProto(r) : renderDoc(r, a));
+
       paintHermesBlocks();
       lastNarrow = narrow(); lastCompact = window.innerWidth <= 600;
     }).catch(function (e) {
@@ -1744,19 +1754,28 @@ import {paintAvatar} from './avatar.js';
       canComment() ? commentHint('hint-line') : null);
     head.setAttribute('data-mr-ref', 'page');
     head.setAttribute('data-mr-title', 'Board');
-    append(doc, head);
+    var showIntro = dec.show_intro !== false, showOutro = dec.show_outro !== false;   // old rounds have neither key
+    // When the artifact is the entire body, put it directly under the sticky bar. Keep the title and review rows below it.
+    var loneCanvas = dec.blocks.length === 1 && dec.blocks[0].type === 'artifact' && dec.blocks[0].display === 'canvas';
+    if (loneCanvas) {
+      doc.classList.add('art-canvas-doc');
+      append(doc, renderBlock(r, a, dec.blocks[0]));
+    }
+    if (showIntro) append(doc, head);
     var body = dec.blocks.filter(function (b) { return b.type !== 'settled' && b.type !== 'defaults'; });
     var grouped = plan ? groupBlocks(dec.blocks) : null;
     append(doc, renderDocNav(r, grouped));
     append(doc, renderNotesAnswered(dec));
     dec.blocks.forEach(function (b) { if (b.type === 'settled') append(doc, renderBlock(r, a, b)); });
     dec.blocks.forEach(function (b) { if (b.type === 'defaults') append(doc, renderBlock(r, a, b)); });
-    if (grouped) {
+    if (!loneCanvas && grouped) {
       grouped.lead.forEach(function (b) { append(doc, renderBlock(r, a, b)); });
       grouped.groups.forEach(function (g, i) { append(doc, renderGroup(r, a, g, i)); });
-    } else body.forEach(function (b) { append(doc, renderBlock(r, a, b)); });
-    append(doc, renderElse());
-    append(doc, h('div', { class: 'doc-end', id: 'dz-end' }));
+    } else if (!loneCanvas) body.forEach(function (b) { append(doc, renderBlock(r, a, b)); });
+    if (showOutro) {
+      append(doc, renderElse());
+      append(doc, h('div', { class: 'doc-end', id: 'dz-end' }));
+    }
     if (dec.gate && footerButton() === 'build') append(doc, renderGate(r, dec));
     requestAnimationFrame(updateTally);
     DOC = { r: r, dec: dec, el: doc };
@@ -1776,12 +1795,14 @@ import {paintAvatar} from './avatar.js';
   // status.label, the milestones and the live progress line ("3/5 plan · 1/2 questions · 0/1 picks")
   function renderStatusLine(dec) {
     var s = dec.status || {}, ms = s.milestones || [];
+    var progress = progressLine(viewed().decisions, S.draft.marks);
+    if (!s.label && !ms.length && !progress) return null;
     return h('div', { class: 'statusline' },
       s.label ? h('p', { class: 'st-label', text: s.label }) : null,
       ms.length ? h('ul', { class: 'st-miles', 'aria-label': 'Milestones' }, ms.map(function (m) {
         return h('li', null, h('span', { text: m.label }), m.date ? h('span', { class: 'st-date', text: m.date }) : null);
       })) : null,
-      h('p', { class: 'st-progress', id: 'dz-progress', text: progressLine(viewed().decisions, S.draft.marks) }));
+      h('p', { class: 'st-progress', id: 'dz-progress', text: progress }));
   }
   var NOTE_CHIP = { done: 'Done', 'second-look': 'Needs a second look', 'needs-pick': 'Needs a pick' };
   function jumpTo(id) {
@@ -1942,7 +1963,8 @@ import {paintAvatar} from './avatar.js';
     else if (b.type === 'recap' && b.markable === false) el = renderRecapNote(b);
     else if (!isMarkableBlock(b)) el = null;
     else {
-      el = h('section', { class: 'blk item', id: 'dz-' + b.id, 'data-id': b.id, 'data-kind': b.type });
+      var cls = 'blk item' + artifactDisplayClass(b);
+      el = h('section', { class: cls, id: 'dz-' + b.id, 'data-id': b.id, 'data-kind': b.type });
       var head = h('div', { class: 'ihead' }, b.tag ? h('span', { class: 'tag', text: b.tag }) : b.type === 'question' ? h('span', { class: 'tag', text: 'Question' }) : null,
         h('h3', { text: b.title || (b.type === 'recap' ? 'Is this record right?' : b.type === 'defaults' ? 'How I read the rest' : b.id.toUpperCase()) }),
         b.revised ? h('span', { class: 'rev', text: b.revised }) : null, h('span', { class: 'status' }));
@@ -1961,6 +1983,7 @@ import {paintAvatar} from './avatar.js';
         append(el, renderPiece(r, a, b));
       } else if (b.type === 'artifact') {
         append(el, [artifactBody(r, b), decideRow(b, false)]);
+        leadWithCanvas(el, b);
       } else {
         if (b.today) append(el, h('p', { class: 'today' }, h('b', { text: 'Today: ' }), b.today));
         if (b.text) append(el, paras(b.text, 'itext'));
@@ -2117,22 +2140,179 @@ import {paintAvatar} from './avatar.js';
   // showing, within the caps. A tap can open a pin draft, never send anything. Text and
   // captions are text (textContent), not markup. A page that navigates its own frame away from the block file is reset
   // to it (only the block file answers the probe's ping), a few times, then the frame is dropped.
-  var ART = { min: 80, max: 4000, perSecond: 40, growths: 40, helloWait: 1000, resets: 3, file: /^blocks\/[a-z0-9-]+\.html$/ };
+  var ART = { min: 80, max: 4000, longMax: 30000, perSecond: 40, growths: 40, helloWait: 1000, resets: 3, file: /^blocks\/[a-z0-9-]+\.html$/ };
+  var ART_CANVAS = { minZoom: .15, maxZoom: 2.5, fitMax: 1.1, margin: 24, step: 1.25, delta: 1200, perSecond: 144, slack: 240 };
+  var artCanvasViews = new Map();   // preserve the view if the board rerenders for a device or a breakpoint
+  function artifactDisplayClass(b) {
+    return b && b.type === 'artifact' && ['page', 'long', 'canvas'].indexOf(b.display) >= 0 ? ' blk-art-' + b.display : '';
+  }
+  function leadWithCanvas(el, b) {
+    if (b.display !== 'canvas') return;
+    var fig = el.querySelector('.art-fig');
+    if (fig && fig.querySelector('.art-canvas')) el.prepend(fig);
+  }
+  function paintArtifactCanvas(f) {
+    var v = f.view;
+    f.world.style.transform = 'translate(' + v.x + 'px, ' + v.y + 'px) scale(' + v.zoom + ')';
+    f.percent.textContent = Math.round(v.zoom * 100) + '%';
+    f.el.style.setProperty('--cv-x', v.x + 'px');   // the dotted ground moves and scales with the camera
+    f.el.style.setProperty('--cv-y', v.y + 'px');
+    f.el.style.setProperty('--cv-z', String(v.zoom));
+    f.el.style.setProperty('--cv-a', v.zoom < .3 ? '0%' : '11%');
+  }
+  function setArtifactView(f, x, y, zoom) {
+    // Clamp the camera, not only each frame's deltas, so a frame cannot park its own page out of reach.
+    var w = f.el.clientWidth, h = f.el.clientHeight, sw = f.W * zoom, sh = (f.pageH || f.iframe.offsetHeight) * zoom;
+    var keepX = Math.min(ART_CANVAS.slack, sw), keepY = Math.min(ART_CANVAS.slack, sh);
+    x = num(x, keepX - sw, w - keepX);
+    y = num(y, keepY - sh, h - keepY);
+    var changedZoom = f.view.zoom !== zoom;
+    f.view = { x: x, y: y, zoom: zoom };
+    artCanvasViews.set(f.viewKey, f.view);
+    paintArtifactCanvas(f);
+    if (changedZoom) {
+      clearTimeout(f.zoomTimer);
+      f.zoomTimer = setTimeout(function () { if (f.el.isConnected && f.alive) pushArtifact(f); }, 120);
+    }
+  }
+  function fitArtifactCanvas(f) {
+    var w = f.el.clientWidth, hgt = f.el.clientHeight, pad = 2 * ART_CANVAS.margin;
+    var height = f.pageH || f.iframe.offsetHeight;
+    if (!w || !hgt || !f.W || !height) return;   // nothing measured yet: a fit now would divide by zero and clamp to max zoom
+    var z = num(Math.min(ART_CANVAS.fitMax, (w - pad) / f.W, (hgt - pad) / height), ART_CANVAS.minZoom, ART_CANVAS.maxZoom);
+    setArtifactView(f, (w - f.W * z) / 2, (hgt - height * z) / 2, z);
+  }
+  function zoomArtifactCanvas(f, zoom, x, y) {
+    var v = f.view, z = num(zoom, ART_CANVAS.minZoom, ART_CANVAS.maxZoom);
+    if (v.zoom === z) return;
+    if (x === undefined) { x = f.el.clientWidth / 2; y = f.el.clientHeight / 2; }
+    var ratio = z / v.zoom;
+    setArtifactView(f, x - (x - v.x) * ratio, y - (y - v.y) * ratio, z);
+  }
+  function canvasSpace(f, down) {
+    f.space = down;
+    f.shield.hidden = !(f.hand || f.space || f.drag);
+  }
+  function artifactCanvasKey(f, key, down) {
+    if (key === ' ') { canvasSpace(f, down); return true; }
+    if (key !== '+' && key !== '-' && key !== '0' && key !== '1') return false;
+    if (!down) return true;
+    if (key === '0') fitArtifactCanvas(f);
+    else zoomArtifactCanvas(f, key === '1' ? 1 : f.view.zoom * (key === '+' ? ART_CANVAS.step : 1 / ART_CANVAS.step));
+    return true;
+  }
+  function artifactCanvasWheel(f, dx, dy, zoom, x, y) {
+    dx = num(dx, -ART_CANVAS.delta, ART_CANVAS.delta);
+    dy = num(dy, -ART_CANVAS.delta, ART_CANVAS.delta);
+    if (zoom) zoomArtifactCanvas(f, f.view.zoom * Math.exp(-dy * .0105), x, y);
+    else if (dx || dy) setArtifactView(f, f.view.x - dx, f.view.y - dy, f.view.zoom);
+  }
+  function canvasWheelPixels(mode, page) { return mode === 1 ? 16 : mode === 2 ? page : 1; }
+  function artifactCanvas(f) {
+    f.W = f.b.desktop_width || 1440;
+    f.pinPositions = new Map();
+    f.viewKey = f.r.n + ':' + f.b.id;
+    f.view = artCanvasViews.get(f.viewKey) || { x: 0, y: 0, zoom: 1 };
+    f.iframe.style.width = f.W + 'px';
+    f.world = h('div', { class: 'canvas-world' }, f.iframe);
+    f.shield = h('div', { class: 'canvas-shield', 'aria-hidden': 'true' });
+    f.percent = h('output', { class: 'canvas-percent', 'aria-label': 'Zoom level', 'aria-live': 'off' });
+    function control(label, image, run) {
+      return h('button', { type: 'button', class: image ? 'icon-btn' : 'canvas-text-btn', title: label,
+        'aria-label': label, onclick: run }, image ? icon(image) : label);
+    }
+    function setHand(on) {
+      f.hand = !!on;
+      hand.setAttribute('aria-pressed', String(f.hand));
+      canvasSpace(f, f.space);
+    }
+    var hand = control('Hand tool', 'grab', function () {
+      if (!f.hand && S.commentMode) setCommentMode(false);   // moving the canvas and pinning on it are one choice
+      setHand(!f.hand);
+    });
+    f.setHand = setHand;
+    hand.setAttribute('aria-pressed', 'false');
+    var controls = h('div', { class: 'canvas-controls', role: 'group', 'aria-label': 'Canvas controls' },
+      hand, control('Zoom out', 'minus', function () { artifactCanvasKey(f, '-', true); }), f.percent,
+      control('Zoom in', 'plus', function () { artifactCanvasKey(f, '+', true); }),
+      control('Fit', 'scan', function () { fitArtifactCanvas(f); }),
+      control('100%', null, function () { zoomArtifactCanvas(f, 1); }));
+    var el = h('div', { class: 'art art-canvas', role: 'region', 'aria-label': (f.b.title || 'Artifact') + ' canvas',
+      tabindex: '0', 'data-mr-no-pin': '' }, f.world, f.shield, controls);
+    f.el = el;   // the first paint sets the ground's camera variables on it
+    canvasSpace(f, false);
+    paintArtifactCanvas(f);
+    el.addEventListener('wheel', function (e) {
+      e.preventDefault();
+      var r = el.getBoundingClientRect(), unit = canvasWheelPixels(e.deltaMode, el.clientHeight);
+      artifactCanvasWheel(f, e.deltaX * unit, e.deltaY * unit, e.ctrlKey || e.metaKey, e.clientX - r.left, e.clientY - r.top);
+    }, { passive: false });
+    el.addEventListener('keydown', function (e) {
+      if (e.ctrlKey || e.metaKey || e.altKey || (e.key === ' ' && e.target !== el)) return;
+      if (artifactCanvasKey(f, e.key, true)) e.preventDefault();
+    });
+    el.addEventListener('keyup', function (e) { if (e.key === ' ') canvasSpace(f, false); });
+    el.addEventListener('focusout', function () { canvasSpace(f, false); });
+    el.addEventListener('pointerdown', function (e) {
+      if (controls.contains(e.target) || (e.button !== 1 && !(e.button === 0 && (f.space || f.hand)))) return;
+      e.preventDefault();
+      f.drag = { id: e.pointerId, x: e.clientX - f.view.x, y: e.clientY - f.view.y };
+      canvasSpace(f, f.space);
+      el.setPointerCapture(e.pointerId);
+      el.classList.add('canvas-dragging');
+    });
+    el.addEventListener('pointermove', function (e) {
+      if (f.drag && f.drag.id === e.pointerId) setArtifactView(f, e.clientX - f.drag.x, e.clientY - f.drag.y, f.view.zoom);
+    });
+    el.addEventListener('lostpointercapture', function (e) {
+      if (!f.drag || f.drag.id !== e.pointerId) return;
+      f.drag = null;
+      el.classList.remove('canvas-dragging');
+      canvasSpace(f, f.space);
+    });
+    el.addEventListener('click', function (e) { if (e.target === f.shield) e.stopPropagation(); });
+    el.addEventListener('auxclick', function (e) { if (e.button === 1) e.preventDefault(); });
+    return el;
+  }
+  function artifactCanvasInput(f, d) {
+    if (!f.canvas || !f.alive) return;
+    // Keep keyboard releases independent of the high-frequency wheel bucket.
+    var key = d.type === 'canvas-key', now = performance.now(), slot = key ? 'keysBudget' : 'wheelBudget';
+    var budget = f[slot];
+    if (!budget || now - budget.since >= 1000) budget = f[slot] = { since: now, count: 0 };
+    if (key && d.key === ' ' && d.down === false) {
+      if (f.pressed) { f.pressed = false; canvasSpace(f, false); }
+      return;
+    }
+    var limit = key ? ART_CANVAS.perSecond / 2 : ART_CANVAS.perSecond;
+    if (budget.count >= limit) return;
+    budget.count++;
+    if (key) {
+      if (d.key === ' ' && d.down === true) { if (f.pressed) return; f.pressed = true; }
+      if (typeof d.down === 'boolean') artifactCanvasKey(f, d.key, d.down);
+      return;
+    }
+    if (![d.deltaX, d.deltaY, d.clientX, d.clientY].every(Number.isFinite) ||
+        typeof d.ctrlKey !== 'boolean' || typeof d.metaKey !== 'boolean') return;
+    var v = f.view;
+    var drag = d.drag === true;
+    artifactCanvasWheel(f, d.deltaX * (drag ? v.zoom : 1), d.deltaY * (drag ? v.zoom : 1), !drag && (d.ctrlKey || d.metaKey),
+      v.x + num(d.clientX, 0, f.W) * v.zoom, v.y + num(d.clientY, 0, f.pageH) * v.zoom);
+  }
   function artifactBody(r, b) {
     var f = null;
-    var page = b.display === 'page';
+    var page = b.display === 'page', long = b.display === 'long', canvas = b.display === 'canvas';
     var fig = h('figure', { class: 'opt ctx-fig art-fig' });
     if (typeof b.file === 'string' && ART.file.test(b.file)) {
-      f = { r: r, vid: b.id, b: b, device: S.width, ctx: 'artifact', alive: false, ghost: null, scale: 1, pageH: 0, count: 0, since: 0, grown: 0, resets: 0, watch: 0, page: page };
+      f = { r: r, vid: b.id, b: b, device: canvas ? 'desktop' : S.width, ctx: 'artifact', alive: false, ghost: null, scale: 1, pageH: 0, count: 0, since: 0, grown: 0, resets: 0, watch: 0, page: page, long: long, canvas: canvas };
       var fixed = typeof b.height === 'number';
-      f.iframe = h('iframe', { class: 'art-frame' + (page ? ' art-page-frame' : ''), src: frameUrl(r, b.file),
+      f.iframe = h('iframe', { class: 'art-frame' + (page ? ' art-page-frame' : '') + (long ? ' art-long-frame' : ''), src: frameUrl(r, b.file),
         title: b.title || 'Artifact ' + b.id, sandbox: 'allow-scripts', allow: 'clipboard-write', referrerpolicy: 'no-referrer', loading: 'lazy' });
-      // Page mode ignores `height` and `desktop_width`: it is the page-mode frame, full bleed and viewport height,
-      // with the page scrolling inside it (CSS keeps the height between the sticky header and footer).
+      // A page scrolls inside a viewport-height iframe. Long and canvas both follow the page's own height.
       f.iframe.style.height = page ? 'calc(100dvh - var(--barh, 52px) - var(--footh, 0px))'
-        : (fixed ? num(b.height, ART.min, ART.max) : 120) + 'px';
+        : (fixed && !long && !canvas ? num(b.height, ART.min, ART.max) : 120) + 'px';
       f.iframe.addEventListener('load', function () { artifactLoaded(f); });
-      f.el = page ? h('div', { class: 'art art-page' }, f.iframe)
+      f.el = canvas ? artifactCanvas(f) : page || long ? h('div', { class: 'art ' + (page ? 'art-page' : 'art-long') }, f.iframe)
         : h('div', { class: 'art', style: b.desktop_width ? { maxWidth: b.desktop_width + 'px' } : null }, f.iframe);
       S.frames.push(f);
       fig.appendChild(f.el);
@@ -2141,20 +2321,23 @@ import {paintAvatar} from './avatar.js';
     }
     if (b.caption) fig.appendChild(h('figcaption', { class: 'ctx-cap', text: b.caption }));
     return [
-      b.text ? paras(b.text, 'itext') : null,
+      b.text && b.header !== false ? paras(b.text, 'itext') : null,
       fig,
-      canComment() && S.commentMode && f
+      canComment() && S.commentMode && f && b.header !== false
         ? h('p', { class: 'art-hint', text: 'Comment mode: tap the artifact to comment on that spot. Press Exit comment in the header to use it.' }) : null,
       h('ol', { class: 'ipins', id: 'pins-' + b.id })];
   }
   function renderArtifact(r, b) {   // not a decision: a neutral block, no "mock" framing
-    var el = h('section', { class: 'blk blk-art' + (b.display === 'page' ? ' blk-art-page' : ''), id: 'dz-' + b.id, 'data-id': b.id },
-      b.title ? h('h2', { text: b.title }) : null, artifactBody(r, b));
+    var bare = b.header === false;   // the page speaks for itself: no title, no text above it, no hint
+    var el = h('section', { class: 'blk blk-art' + artifactDisplayClass(b) + (bare ? ' blk-art-bare' : ''), id: 'dz-' + b.id, 'data-id': b.id },
+      b.title && !bare ? h('h2', { text: b.title }) : null, artifactBody(r, b));
+    leadWithCanvas(el, b);
     setTimeout(function () { redrawPins(b.id); }, 0);
     return el;
   }
   function artifactLoaded(f) {   // every load of the frame, the block file's or whatever the page navigated itself to
     f.alive = false;
+    if (f.canvas) { f.loaded = true; f.pinPositions.clear(); canvasSpace(f, false); }
     try { f.iframe.contentWindow.postMessage({ __mockreview: 1, cmd: 'ping' }, '*'); } catch (e) {}
     pushArtifact(f);
     clearTimeout(f.watch);
@@ -2174,17 +2357,19 @@ import {paintAvatar} from './avatar.js';
   function pushArtifact(f) {
     var out = [];
     S.draft.pins.forEach(function (p, i) {
-      if (p.block !== f.b.id || p.w !== f.device || !pinVisible(p)) return;
-      out.push({i: i, n: i + 1, x: p.x, y: p.y, hermes: T.activityState(T.activityFor(p.thread, p))});
+      if (p.block !== f.b.id || (f.canvas ? p.on === 'board' : p.w !== f.device) || !pinVisible(p)) return;
+      out.push({i: i, n: pinNo(p, i), x: p.x, y: p.y, hermes: T.activityState(T.activityFor(p.thread, p)),
+        queued: T.queuedBehind(T.activityFor(p.thread, p)), ...(f.canvas && p.target ? {target: cleanTarget(p.target)} : {})});
     });
-    if (f.ghost) out.push({ i: -1, n: S.draft.pins.length + 1, x: f.ghost.x, y: f.ghost.y, ghost: true });
-    T.mockEntries(f.b.id, null).forEach(function (t, j) {
+    if (f.ghost) out.push({ i: -1, n: nextPinNo(), x: f.ghost.x, y: f.ghost.y, ghost: true });
+    frameThreadEntries(f, f.b.id).forEach(function (t, j) {
       var a = t.anchor || {};
       out.push({ i: 60 + j, n: t.n, x: a.x || 0, y: a.y || 0, thread: t.id, detached: !!t.detached,
-        hermes: T.activityState(T.activityFor(t.id)),
+        hermes: T.activityState(T.activityFor(t.id)), queued: T.queuedBehind(T.activityFor(t.id)),
         ...(a.target ? {target: cleanTarget(a.target)} : {}) });
     });
-    try { f.iframe.contentWindow.postMessage({ __mockreview: 1, cmd: 'state', comment: canComment() && S.commentMode, scale: 1, pins: pinsOn() ? out : [] }, '*'); } catch (e) {}
+    try { f.iframe.contentWindow.postMessage({ __mockreview: 1, cmd: 'state', comment: canComment() && S.commentMode,
+      canvas: f.canvas, scale: f.canvas ? f.view.zoom : 1, pins: pinsOn() ? out : [] }, '*'); } catch (e) {}
   }
   function utf8(s) { try { return new TextEncoder().encode(s).length; } catch (e) { return s.length; } }
   function jsonBytes(v) { try { var s = JSON.stringify(v); return typeof s === 'string' ? utf8(s) : -1; } catch (e) { return -1; } }
@@ -2254,55 +2439,79 @@ import {paintAvatar} from './avatar.js';
     pageAck(f, 'mark-ack', d.id, true, null, noteKept ? { note_kept: true } : null);
   }
   function artifactMessage(f, d) {
+    if (d.type === 'canvas-wheel' || d.type === 'canvas-key') return artifactCanvasInput(f, d);
     var now = Date.now();
     if (now - f.since >= 1000) { f.since = now; f.count = 0; }
     if (++f.count > ART.perSecond) return;   // a frame that floods us is ignored, not obeyed
-    var rc = f.iframe.getBoundingClientRect(), b = f.b;
+    var b = f.b;
     if (d.type === 'hello') {
       f.alive = true;
-      if (!f.page && typeof b.height !== 'number') {   // auto: follow the page's height, within the cap and a bounded number of changes
-        var hh = Math.round(num(d.h, ART.min, ART.max));
+      if (f.long) f.pageTrue = Math.round(num(d.h, ART.min, 1000000));
+      if (f.canvas) {
+        var height = Math.round(num(d.h, 1, ART.longMax));
+        if (height !== f.pageH) { f.pageH = height; f.iframe.style.height = height + 'px'; }
+      } else if (!f.page && (f.long || typeof b.height !== 'number')) {
+        var hh = Math.round(num(d.h, ART.min, f.long ? ART.longMax : ART.max));
         if (Math.abs(hh - f.pageH) >= 2 && f.grown < ART.growths) { f.grown++; f.pageH = hh; f.iframe.style.height = hh + 'px'; }
       }
+      if (f.canvas && f.loaded && !artCanvasViews.has(f.viewKey)) fitArtifactCanvas(f);
       pushArtifact(f); pushPageState(f);
     } else if (d.type === 'data') {
       pageData(f, d);
     } else if (d.type === 'mark') {
       pageMark(f, d);
-    } else if (d.type === 'click') {
-      if (typeof d.thread === 'string' && d.thread) { openFrameThread(f, b.id, d.thread, d.detached); return; }
+    } else if (d.type === 'positions' && f.canvas) {
+      var entries = frameThreadEntries(f, b.id);
+      // Layout reports can locate a marker on this canvas, but must not change stored anchor fractions.
+      f.pinPositions.clear();
+      (Array.isArray(d.pins) ? d.pins.slice(0, 60) : []).forEach(function (q) {
+        if (!q || !Number.isInteger(q.i) || !Number.isFinite(q.x) || !Number.isFinite(q.y)) return;
+        var t = entries[q.i - 60], p = S.draft.pins[q.i];
+        if (t || (p && p.block === b.id && p.on !== 'board' && pinVisible(p))) {
+          f.pinPositions.set(t ? t.id : p, {x: num(q.x, 0, 1), y: num(q.y, 0, 1)});
+        }
+      });
+    } else if (d.type === 'click' || d.type === 'pin') {
+      if (f.canvas && (!Number.isFinite(d.cx) || !Number.isFinite(d.cy) ||
+          (d.type === 'pin' ? !Number.isInteger(d.i) : !Number.isFinite(d.x) || !Number.isFinite(d.y)))) return;
+      var rc = f.iframe.getBoundingClientRect(), zoom = f.canvas ? f.view.zoom : 1;
+      var anchor = { x: rc.left + num(d.cx, 0, f.canvas ? f.W : 4000) * zoom,
+        y: rc.top + num(d.cy, 0, f.canvas ? f.pageH : f.long ? ART.longMax : 4000) * zoom };
+      var box = {right: anchor.x, top: anchor.y};
+      if (typeof d.thread === 'string' && d.thread) {
+        if (f.canvas) openFrameThread(f, b.id, d.thread, d.detached, box);
+        else openFrameThread(f, b.id, d.thread, d.detached);
+        return;
+      }
+      if (d.type === 'pin') { editArtifactPin(f, num(d.i, -1, 99) | 0, anchor); return; }
       if (!canComment() || !S.commentMode) return;
       if (S.draft.pins.length >= LIMIT.pins) { toast('That’s ' + LIMIT.pins + ' pins — use the notes for the rest.', 'warn'); return; }
       var x = num(d.x, 0, 1), y = num(d.y, 0, 1);
       var target = cleanTarget(d.target);
       var mine = f.ghost = { x: x, y: y }; pushArtifact(f);
       notePop({ title: 'New pin · ' + pinWhat(b, null), where: target ? 'on ' + target.label : wlabel(f.device) + ' · ~' + pct(x) + ', ' + pct(y) + ' of the artifact', isNew: true, target: target,
-        anchor: { x: rc.left + num(d.cx, 0, 4000), y: rc.top + num(d.cy, 0, 4000) }, text: '',
+        anchor: anchor, text: '',
         onClose: function () { if (f.ghost === mine) { f.ghost = null; pushArtifact(f); } },
         onSave: function (text, ta) {
           saveNewThread({ id: newPinId(), block: b.id, option: null, w: f.device, x: x, y: y, ...(target ? {target: target} : {}) }, text, ta);
           redrawPins(b.id);
         } });
-    } else if (d.type === 'pin') {
-      if (typeof d.thread === 'string' && d.thread) { openFrameThread(f, b.id, d.thread, d.detached); return; }
-      var i = num(d.i, -1, 99) | 0;
-      if (i >= 60) {
-        var st = T.mockEntries(b.id, null)[i - 60];
-        if (st) openFrameThread(f, b.id, st.id, st.detached);
-        return;
-      }
-      var p = S.draft.pins[i];
-      if (!p || p.block !== b.id || p.w !== f.device) return;
-      var x = rc.left + num(d.cx, 0, 4000), y = rc.top + num(d.cy, 0, 4000);
-      if (p.thread && !p.thread.startsWith('tmp:')) {
-        T.open(p.thread, {read: false, box: {right: x, top: y}});
-        return;
-      }
-      notePop({ pin: p, title: 'Pin ' + (i + 1) + ' · ' + pinWhat(b, null), where: wlabel(p.w) + ' · ~' + pct(p.x) + ', ' + pct(p.y),
-        anchor: { x: rc.left + num(d.cx, 0, 4000), y: rc.top + num(d.cy, 0, 4000) }, text: p.text,
-        onSave: function (text) { p.text = text; if (p.thread) T.editThreadFirst(p.thread, text).catch(function () {}); saveDraft(); redrawPins(b.id); },
-        onDelete: function () { if (p.thread) T.deleteThreadFirst(p.thread).catch(function () {}); S.draft.pins.splice(i, 1); saveDraft(); MOCKS.forEach(drawPins); redrawPins(b.id); } });
     }
+  }
+  function editArtifactPin(f, i, anchor) {
+    var b = f.b, box = {right: anchor.x, top: anchor.y};
+    if (i >= 60) {
+      var st = frameThreadEntries(f, b.id)[i - 60];
+      if (st) openFrameThread(f, b.id, st.id, st.detached, f.canvas ? box : undefined);
+      return;
+    }
+    var p = S.draft.pins[i];
+    if (!p || p.block !== b.id || (f.canvas ? p.on === 'board' || !pinVisible(p) : p.w !== f.device)) return;
+    if (p.thread && !p.thread.startsWith('tmp:')) { T.open(p.thread, {read: false, box: box}); return; }
+    notePop({ pin: p, title: 'Pin ' + (i + 1) + ' · ' + pinWhat(b, null), where: wlabel(p.w) + ' · ~' + pct(p.x) + ', ' + pct(p.y),
+      anchor: anchor, text: p.text,
+      onSave: function (text) { p.text = text; if (p.thread) T.editThreadFirst(p.thread, text).catch(function () {}); saveDraft(); redrawPins(b.id); },
+      onDelete: function () { if (p.thread) T.deleteThreadFirst(p.thread).catch(function () {}); S.draft.pins.splice(i, 1); saveDraft(); MOCKS.forEach(drawPins); redrawPins(b.id); } });
   }
 
   function firstShown(b) {   // one-at-a-time: open on the Recommended option (the toggle keeps the A, B, C… order)
@@ -2407,6 +2616,15 @@ import {paintAvatar} from './avatar.js';
     m.pins.style.setProperty('--k', String(1 / s));
   }
   // A deleted thread always takes its marker away; a resolved one only with hide_resolved_pins on.
+  // A pin that is a thread wears the number the server gave that thread; a pin that is not one keeps its place in the
+  // list (the feedback text names those by place). Numbering every pin by place made a new pin and a carried thread both
+  // read "1".
+  // A pin still saving (`tmp:` id) is about to become the next thread, so it shows that number, not a wrong one.
+  function pinNo(p, i) { return p && p.thread ? (T.number(p.thread) || nextPinNo()) : i + 1; }
+  function nextPinNo() {
+    var placed = S.draft.pins.filter(function (q) { return String(q.thread || '').indexOf('tmp:') !== 0; }).length;
+    return Math.max(placed, T.threads().length) + 1;
+  }
   function pinVisible(p) { return !p.thread || !(T.gone(p.thread) || (CFG.hide_resolved_pins && T.resolved(p.thread))); }
   function draftThreadIds() {
     var out = {};
@@ -2425,8 +2643,8 @@ import {paintAvatar} from './avatar.js';
       if (p.block !== m.b.id || p.option !== m.o.id || p.w !== S.width || !pinVisible(p)) return;
       var box = m.inner.getBoundingClientRect();
       var spot = p.detached && p.target ? {left: ((p.target.doc.x - scrollX - box.left) / m.scale) + 'px', top: ((p.target.doc.y - scrollY - box.top) / m.scale) + 'px'} : {left: (p.x * 100) + '%', top: (p.y * 100) + '%'};
-      var button = h('button', { class: 'mpin' + (p.detached ? ' det' : '') + (p.thread && T.unread(p.thread) ? ' un' : ''), style: spot, title: p.detached ? 'Element removed' : p.text, 'aria-label': 'Pin ' + (i + 1) + ': ' + (p.detached ? 'Element removed · ' : '') + p.text, 'data-pin-id': p.id, ...(p.thread && String(p.thread).indexOf('tmp:') !== 0 ? {'data-thread': p.thread} : {}),
-        onclick: function (e) { e.stopPropagation(); if (p.thread && String(p.thread).indexOf('tmp:') !== 0) { T.open(p.thread, {detached: p.detached}); } else editPin(m, i, e); } }, h('span', { text: String(i + 1) }));
+      var button = h('button', { class: 'mpin' + (p.detached ? ' det' : '') + (p.thread && T.unread(p.thread) ? ' un' : ''), style: spot, title: p.detached ? 'Element removed' : p.text, 'aria-label': 'Pin ' + pinNo(p, i) + ': ' + (p.detached ? 'Element removed · ' : '') + p.text, 'data-pin-id': p.id, ...(p.thread && String(p.thread).indexOf('tmp:') !== 0 ? {'data-thread': p.thread} : {}),
+        onclick: function (e) { e.stopPropagation(); if (p.thread && String(p.thread).indexOf('tmp:') !== 0) { T.open(p.thread, {detached: p.detached}); } else editPin(m, i, e); } }, h('span', { text: String(pinNo(p, i)) }));
       m.pins.appendChild(T.paintPin(button, T.activityFor(p.thread, p)));
     });
     T.mockEntries(m.b.id, m.o.id).forEach(function (t) {
@@ -2440,17 +2658,29 @@ import {paintAvatar} from './avatar.js';
   }
   function redrawPins(id) {
     MOCKS.forEach(function (m) { if (m.b.id === id) { drawPins(m); m.anchorSurface.schedule(); } });
+    var canvas = S.frames.find(function (f) { return f.canvas && f.b.id === id; });
     S.frames.forEach(function (f) { if (f.ctx === 'artifact' && f.b.id === id) pushArtifact(f); });
     var list = document.getElementById('pins-' + id);
     if (list) {
       list.textContent = '';
       S.draft.pins.forEach(function (p, i) {
         if (p.block !== id || !pinVisible(p)) return;
-        list.appendChild(h('li', null, h('button', { class: 'pin-row', onclick: function () { if (p.thread) T.open(p.thread, {detached: p.detached}); else focusDzPin(i); } },
-          h('span', { class: 'pin-num', text: String(i + 1) }),
+        list.appendChild(h('li', null, h('button', { class: 'pin-row', onclick: function () {
+          if (!p.thread) return focusDzPin(i);
+          var box = canvas ? focusArtifactCanvas(p) : null;
+          if (!box) focusLongPin(p);
+          T.open(p.thread, {detached: p.detached, box: box || undefined});
+        } },
+          h('span', { class: 'pin-num', text: String(pinNo(p, i)) }),
           h('span', { class: 'pin-body' }, h('span', { class: 'pin-where', text: (p.option ? p.option.toUpperCase() + ' · ' : '') + wlabel(p.w) }), h('span', { class: 'pin-text', text: p.text })))));
       });
-      if (S.commentMode) (id === 'proto' ? T.protoEntries() : T.mockEntries(id, null)).forEach(function (t) { list.appendChild(T.row(t)); });
+      if (S.commentMode) (canvas ? frameThreadEntries(canvas, id) : id === 'proto' ? T.protoEntries() : T.mockEntries(id, null)).forEach(function (t) {
+        var row = T.row(t);
+        if (canvas) row.firstElementChild.onclick = function () {
+          T.open(t, {box: focusArtifactCanvas(t.anchor, t.id)});
+        };
+        list.appendChild(row);
+      });
     }
     updateSendbar();
     if (S.draft.pins.some(function (p) { return p.on === 'board' && p.block === id; })) scheduleCanvasPins();
@@ -2613,11 +2843,17 @@ import {paintAvatar} from './avatar.js';
       var heading = sec.querySelector(':scope > .ihead');
       var chipHost = heading || sec;
       var chip = chipHost.querySelector(':scope > .hermes-block-status');
-      if (!requests.some(T.working)) {
+      var live = requests.filter(T.working);
+      if (!live.length) {
         if (chip) chip.remove();
-      } else if (!chip) {
-        chip = h('span', {class: 'hermes-block-status', role: 'status', text: 'Hermes is working…'});
-        if (heading) heading.appendChild(chip); else sec.prepend(chip);
+      } else {
+        // When every working request here waits behind an older one elsewhere, say so with the shortest wait.
+        var ahead = Math.min.apply(null, live.map(T.queuedBehind));
+        var chipText = ahead ? T.queuedText(ahead) : 'Hermes is working…';
+        if (!chip) {
+          chip = h('span', {class: 'hermes-block-status', role: 'status', text: chipText});
+          if (heading) heading.appendChild(chip); else sec.prepend(chip);
+        } else if (chip.textContent !== chipText) chip.textContent = chipText;
       }
       var fixes = requests.filter(function (q) {
         return pinsOn() && !q.thread_id && (T.activityState(q) || q.status === 'done') && !S.draft.pins.some(function (p) {
@@ -2892,18 +3128,18 @@ import {paintAvatar} from './avatar.js';
       var button = h('button', {
         class: 'mpin' + (it.detached ? ' det' : '') + (p.thread && T.unread(p.thread) ? ' un' : ''), style: style,
         title: it.detached ? 'Element removed' : p.text,
-        'aria-label': 'Pin ' + (it.i + 1) + ': ' + (it.detached ? 'Element removed · ' : '') + p.text,
+        'aria-label': 'Pin ' + pinNo(p, it.i) + ': ' + (it.detached ? 'Element removed · ' : '') + p.text,
         'data-mr-pin': String(it.i),
         'data-pin-id': p.id,
         ...(p.thread && String(p.thread).indexOf('tmp:') !== 0 ? {'data-thread': p.thread} : {}),
         onclick: function (e) { e.stopPropagation(); if (p.thread && String(p.thread).indexOf('tmp:') !== 0) T.open(p.thread, {detached: it.detached}); else editCanvasPin(it.i, e); }
-      }, h('span', { text: String(it.i + 1) }));
+      }, h('span', { text: String(pinNo(p, it.i)) }));
       c.layer.appendChild(T.paintPin(button, T.activityFor(p.thread, p)));
     });
     items.forEach(function (it) {
       var p = it.p;
       canvasLayer(it.sec).list.appendChild(h('li', null, h('button', { class: 'pin-row', onclick: function () { focusDzPin(it.i); } },
-        h('span', { class: 'pin-num', text: String(it.i + 1) }),
+        h('span', { class: 'pin-num', text: String(pinNo(p, it.i)) }),
         h('span', { class: 'pin-body' }, h('span', { class: 'pin-where', text: (p.option ? p.option.toUpperCase() + ' · ' : '') + wlabel(p.w) }),
           h('span', { class: 'pin-text', text: p.text })))));
     });
@@ -3022,7 +3258,7 @@ import {paintAvatar} from './avatar.js';
     var target = anchorFor(deep, sec, e.clientX, e.clientY, range);
     var scroll = scrollPoint();
     var doc = { x: num(e.clientX + scroll.x, 0, 1000000), y: num(e.clientY + scroll.y, 0, 1000000) };
-    var ghost = h('div', { class: 'mpin ghost', style: { left: (x * 100) + '%', top: (y * 100) + '%' } }, h('span', { text: String(S.draft.pins.length + 1) }));
+    var ghost = h('div', { class: 'mpin ghost', style: { left: (x * 100) + '%', top: (y * 100) + '%' } }, h('span', { text: String(nextPinNo()) }));
     var c = canvasLayer(sec);
     c.ghost = ghost;
     c.layer.appendChild(ghost);
@@ -3034,8 +3270,47 @@ import {paintAvatar} from './avatar.js';
         redrawCanvasPins();
       } });
   }
+  // A long page has no inner scroll, so a pin-list row must bring the pin itself into view by scrolling the board. The
+  // pin's y is a fraction of the artifact page (the probe measured it against the page's full height) and, for a
+  // long page, the iframe is that page at scale 1: page position = iframe top in document coordinates + y × page height.
+  function artifactFrameFor(p) {
+    return S.frames.find(function (x) { return x.ctx === 'artifact' && x.b.id === p.block && (x.canvas || x.device === p.w); }) || null;
+  }
+  function focusArtifactCanvas(p, thread) {
+    if (!p || p.on === 'board') return null;
+    var f = artifactFrameFor(p);
+    if (!f || !f.canvas) return null;
+    var z = f.view.zoom, x = f.el.clientWidth / 2, y = f.el.clientHeight / 2;
+    var position = f.pinPositions.get(thread || p) || p;
+    setArtifactView(f, x - num(position.x, 0, 1) * f.W * z, y - num(position.y, 0, 1) * f.pageH * z, z);
+    var r = f.el.getBoundingClientRect(), bar = document.getElementById('dzbar');
+    window.scrollBy({top: r.top - bar.getBoundingClientRect().bottom, behavior: 'instant'});
+    r = f.el.getBoundingClientRect();
+    return {right: r.left + x, top: r.top + y};
+  }
+  function longPinDocY(p) {
+    var f = artifactFrameFor(p);
+    if (!f || !f.long) return null;
+    var r = rectOf(f.iframe);
+    if (!r || !f.pageH) return null;
+    return r.top + scrollPoint().y + num(p.y, 0, 1) * num(f.pageTrue || f.pageH, 0, 1000000);
+  }
+  function focusLongPin(p) {   // true when p is on a long page and the board was scrolled toward it
+    var y = longPinDocY(p);
+    if (y === null) return false;
+    window.scrollTo({ top: Math.max(0, Math.round(y - window.innerHeight / 2)), behavior: 'smooth' });
+    return true;
+  }
   function focusDzPin(i) {
     var p = S.draft.pins[i]; if (!p) return;
+    if (p.on !== 'board') {
+      var box = focusArtifactCanvas(p);
+      if (box) {
+        if (p.thread) T.open(p.thread, {detached: p.detached, box: box});
+        else editArtifactPin(artifactFrameFor(p), i, {x: box.right, y: box.top});
+        return;
+      }
+    }
     if (p.w !== S.width && widths().indexOf(p.w) >= 0) { S.width = p.w; render(); setTimeout(function () { focusDzPin(i); }, 300); return; }
     if (p.on === 'board') {
       var sec = canvasSectionFor(p); if (!sec) return;
@@ -3048,7 +3323,7 @@ import {paintAvatar} from './avatar.js';
     if (p.block === 'proto') { var fr = S.frames[0]; if (fr && fr.ctx === 'proto') try { fr.iframe.contentWindow.postMessage({ __mockreview: 1, cmd: 'focus', i: i }, '*'); } catch (e) {} return; }
     var af = S.frames.filter(function (x) { return x.ctx === 'artifact' && x.b.id === p.block; })[0];
     if (af) {
-      af.iframe.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (!focusLongPin(p)) af.iframe.scrollIntoView({ behavior: 'smooth', block: 'center' });
       try { af.iframe.contentWindow.postMessage({ __mockreview: 1, cmd: 'focus', i: i }, '*'); } catch (e) {}
       return;
     }
@@ -3084,7 +3359,7 @@ import {paintAvatar} from './avatar.js';
     var hit = e.composedPath ? e.composedPath()[0] : e.target;
     if (closestOf(hit, CONTROL)) range = null;
     var target = e.mrTarget || anchorFor(controlOf(hit, m.root), m.root, e.clientX, e.clientY, range);
-    var ghost = h('div', { class: 'mpin ghost', style: { left: (x * 100) + '%', top: (y * 100) + '%' } }, h('span', { text: String(S.draft.pins.length + 1) }));
+    var ghost = h('div', { class: 'mpin ghost', style: { left: (x * 100) + '%', top: (y * 100) + '%' } }, h('span', { text: String(nextPinNo()) }));
     m.ghost = ghost;
     m.pins.appendChild(ghost);
     notePop({ title: 'New pin · ' + pinWhat(m.b, m.o.id), where: target ? 'on ' + target.label : wlabel(S.width) + ' · ~' + pct(x) + ', ' + pct(y) + ' of the mock',
@@ -3275,11 +3550,12 @@ import {paintAvatar} from './avatar.js';
   }
   function pushProto(f) {
     var out = [];
-    S.draft.pins.forEach(function (p, i) { if (p.block === 'proto' && p.w === f.device && pinVisible(p)) out.push({ i: i, n: i + 1, x: p.x, y: p.y, ...(p.target ? {target: cleanTarget(p.target)} : {}) }); });
-    if (f.ghost) out.push({ i: -1, n: S.draft.pins.length + 1, x: f.ghost.x, y: f.ghost.y, ghost: true });
+    S.draft.pins.forEach(function (p, i) { if (p.block === 'proto' && p.w === f.device && pinVisible(p)) out.push({ i: i, n: pinNo(p, i), x: p.x, y: p.y, hermes: T.activityState(T.activityFor(p.thread, p)), queued: T.queuedBehind(T.activityFor(p.thread, p)), ...(p.target ? {target: cleanTarget(p.target)} : {}) }); });
+    if (f.ghost) out.push({ i: -1, n: nextPinNo(), x: f.ghost.x, y: f.ghost.y, ghost: true });
     T.protoEntries().forEach(function (t, j) {
       var a = t.anchor || {};
       out.push({ i: 60 + j, n: t.n, x: a.x || 0, y: a.y || 0, thread: t.id, detached: !!t.detached,
+        hermes: T.activityState(T.activityFor(t.id)), queued: T.queuedBehind(T.activityFor(t.id)),
         ...(a.target ? {target: cleanTarget(a.target)} : {}) });
     });
     try { f.iframe.contentWindow.postMessage({ __mockreview: 1, cmd: 'state', comment: canComment() && S.commentMode, scale: 1, pins: pinsOn() ? out : [] }, '*'); } catch (e) {}
